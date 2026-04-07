@@ -1,506 +1,593 @@
 import { Link } from "wouter";
-import { useState, useEffect } from "react";
-import { ArrowRight, Zap, Shield, Code2, ChevronRight } from "lucide-react";
+import { useState } from "react";
+import { ArrowRight, Star, Download, Zap, Shield, Code2, ChevronRight } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import DeployModal from "@/components/DeployModal";
 
-const HERO_BG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663324630024/6kTbiFcTmophGkVmfgPX9K/hero-bg-ZyirAztKSiCrab98axLPJW.png";
-const CLAW_IMG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663324630024/6kTbiFcTmophGkVmfgPX9K/claw-abstract-45v3rDKqZGUXwbDmWkRejA.png";
+// ─── Data ────────────────────────────────────────────────────────────────────
 
-const TYPEWRITER_TEXTS = [
-  "Deploy Autonomous AI Agents.",
-  "Build Production-Ready Claws.",
-  "Scale Without Integration Tax.",
-];
-
-const FEATURED_CLAWS = [
+const ALL_CLAWS = [
   {
     id: "defi-arb",
     name: "DeFi Arbitrage Scout",
     category: "DeFi",
-    description: "Monitors cross-chain price differentials and executes arbitrage strategies autonomously.",
+    badge: "Featured",
+    description:
+      "Monitors cross-chain price differentials and executes arbitrage strategies autonomously across 12 DEXs.",
+    author: "gmi-labs",
+    stars: 284,
+    deployments: "48.2k",
     model: "Llama 3.1 70B",
-    deployments: "2,847",
-    rating: "4.9",
-    tags: ["DeFi", "Arbitrage", "Multi-chain"],
+    tags: ["DeFi", "Arbitrage"],
+    latency: "~120ms",
+    price: "Pay-per-exec",
+    rating: 4.9,
   },
   {
     id: "code-reviewer",
     name: "Code Review Agent",
     category: "Developer Tools",
-    description: "Performs deep static analysis, security audits, and suggests refactors with explanations.",
+    badge: "Official",
+    description:
+      "Performs deep static analysis, security audits, and suggests refactors with line-by-line explanations.",
+    author: "gmi-labs",
+    stars: 512,
+    deployments: "36.9k",
     model: "DeepSeek-Coder V2",
-    deployments: "5,120",
-    rating: "4.8",
-    tags: ["Code", "Security", "CI/CD"],
+    tags: ["Code", "Security"],
+    latency: "~800ms",
+    price: "$49/mo",
+    rating: 4.8,
   },
   {
     id: "enterprise-rag",
     name: "Enterprise RAG Pipeline",
     category: "Enterprise",
-    description: "Ingests, indexes, and queries internal knowledge bases with citation-backed responses.",
+    badge: "Featured",
+    description:
+      "Ingests, indexes, and queries internal knowledge bases with citation-backed, hallucination-resistant responses.",
+    author: "gmi-labs",
+    stars: 193,
+    deployments: "24.4k",
     model: "Qwen2.5 72B",
-    deployments: "1,203",
-    rating: "4.9",
-    tags: ["RAG", "Enterprise", "Knowledge"],
+    tags: ["RAG", "Enterprise"],
+    latency: "~350ms",
+    price: "Custom",
+    rating: 4.9,
+  },
+  {
+    id: "smart-contract-auditor",
+    name: "Smart Contract Auditor",
+    category: "DeFi",
+    badge: "",
+    description:
+      "Audits Solidity and Rust smart contracts for reentrancy, overflow, and access control vulnerabilities.",
+    author: "0xsecurity",
+    stars: 1567,
+    deployments: "92k",
+    model: "DeepSeek-Coder V2",
+    tags: ["DeFi", "Security"],
+    latency: "~2.1s",
+    price: "$199/mo",
+    rating: 4.9,
+  },
+  {
+    id: "support-agent",
+    name: "Customer Support Agent",
+    category: "Enterprise",
+    badge: "",
+    description:
+      "Handles Tier-1 support tickets autonomously, escalating complex issues with full context summaries.",
+    author: "enterprise-ai",
+    stars: 907,
+    deployments: "80.7k",
+    model: "Llama 3.1 8B",
+    tags: ["Support", "Enterprise"],
+    latency: "~200ms",
+    price: "$99/mo",
+    rating: 4.7,
+  },
+  {
+    id: "nft-monitor",
+    name: "NFT Floor Monitor",
+    category: "DeFi",
+    badge: "",
+    description:
+      "Tracks floor prices, whale movements, and rarity shifts across major NFT collections in real time.",
+    author: "nft-tools",
+    stars: 321,
+    deployments: "79.6k",
+    model: "Mistral 7B",
+    tags: ["NFT", "DeFi"],
+    latency: "~60ms",
+    price: "Pay-per-exec",
+    rating: 4.6,
+  },
+  {
+    id: "data-pipeline",
+    name: "Data Pipeline Orchestrator",
+    category: "Developer Tools",
+    badge: "",
+    description:
+      "Designs, schedules, and monitors ETL pipelines. Detects anomalies and auto-heals broken jobs.",
+    author: "dataops-ai",
+    stars: 305,
+    deployments: "76k",
+    model: "DeepSeek-R1 32B",
+    tags: ["ETL", "Data"],
+    latency: "~500ms",
+    price: "$149/mo",
+    rating: 4.8,
+  },
+  {
+    id: "gaming-npc",
+    name: "Adaptive NPC Brain",
+    category: "Gaming",
+    badge: "",
+    description:
+      "Generates contextually aware NPC dialogue, behavior trees, and quest logic for game environments.",
+    author: "gameai-dev",
+    stars: 274,
+    deployments: "74.3k",
+    model: "Qwen2.5 7B",
+    tags: ["Gaming", "NPC"],
+    latency: "~90ms",
+    price: "Pay-per-exec",
+    rating: 4.5,
+  },
+  {
+    id: "doc-generator",
+    name: "API Doc Generator",
+    category: "Developer Tools",
+    badge: "",
+    description:
+      "Parses codebases and auto-generates OpenAPI specs, README files, and inline documentation.",
+    author: "devtools-ai",
+    stars: 215,
+    deployments: "67.9k",
+    model: "Llama 3.1 70B",
+    tags: ["Docs", "API"],
+    latency: "~1.2s",
+    price: "$29/mo",
+    rating: 4.7,
   },
 ];
 
-function TypewriterText() {
-  const [textIndex, setTextIndex] = useState(0);
-  const [charIndex, setCharIndex] = useState(0);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [displayed, setDisplayed] = useState("");
+const CATEGORIES = ["All", "DeFi", "Developer Tools", "Enterprise", "Gaming"];
 
-  useEffect(() => {
-    const current = TYPEWRITER_TEXTS[textIndex];
-    const speed = isDeleting ? 40 : 70;
+type Claw = (typeof ALL_CLAWS)[0];
 
-    const timer = setTimeout(() => {
-      if (!isDeleting && charIndex < current.length) {
-        setDisplayed(current.slice(0, charIndex + 1));
-        setCharIndex((c) => c + 1);
-      } else if (!isDeleting && charIndex === current.length) {
-        setTimeout(() => setIsDeleting(true), 1800);
-      } else if (isDeleting && charIndex > 0) {
-        setDisplayed(current.slice(0, charIndex - 1));
-        setCharIndex((c) => c - 1);
-      } else if (isDeleting && charIndex === 0) {
-        setIsDeleting(false);
-        setTextIndex((i) => (i + 1) % TYPEWRITER_TEXTS.length);
-      }
-    }, speed);
+// ─── Claw Card — clawhub-style compact card ───────────────────────────────────
 
-    return () => clearTimeout(timer);
-  }, [charIndex, isDeleting, textIndex]);
-
+function ClawCard({ claw, onDeploy }: { claw: Claw; onDeploy: () => void }) {
   return (
-    <span className="text-lime">
-      {displayed}
-      <span className="animate-pulse">|</span>
-    </span>
+    <div
+      className="group flex flex-col cursor-pointer"
+      style={{
+        background: "#000",
+        border: "1px solid #1e1e1e",
+        padding: "1.25rem",
+        transition: "border-color 0.15s ease",
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
+      onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#1e1e1e")}
+    >
+      {/* Badge */}
+      {claw.badge && (
+        <div className="mb-2.5">
+          <span
+            className="text-xs font-mono-gmi px-2 py-0.5"
+            style={{
+              background:
+                claw.badge === "Official"
+                  ? "rgba(221,234,77,0.12)"
+                  : "rgba(100,180,255,0.1)",
+              color: claw.badge === "Official" ? "#DDEA4D" : "#7ec8ff",
+              border: `1px solid ${
+                claw.badge === "Official"
+                  ? "rgba(221,234,77,0.25)"
+                  : "rgba(126,200,255,0.2)"
+              }`,
+            }}
+          >
+            {claw.badge}
+          </span>
+        </div>
+      )}
+
+      {/* Title */}
+      <h3
+        className="font-display text-base text-white mb-2 leading-snug group-hover:text-[#DDEA4D] transition-colors"
+        style={{ letterSpacing: "-0.01em" }}
+      >
+        {claw.name}
+      </h3>
+
+      {/* Description */}
+      <p className="text-gray-500 text-sm leading-relaxed mb-4 flex-1 line-clamp-3">
+        {claw.description}
+      </p>
+
+      {/* Footer row */}
+      <div
+        className="flex items-center justify-between pt-3"
+        style={{ borderTop: "1px solid #1a1a1a" }}
+      >
+        <div className="font-mono-gmi text-xs" style={{ color: "#555" }}>
+          @{claw.author}
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1 font-mono-gmi text-xs">
+            <Star size={10} fill="#DDEA4D" stroke="none" />
+            <span style={{ color: "#DDEA4D" }}>
+              {claw.stars >= 1000
+                ? `${(claw.stars / 1000).toFixed(1)}k`
+                : claw.stars}
+            </span>
+          </div>
+          <div className="flex items-center gap-1 font-mono-gmi text-xs text-gray-600">
+            <Download size={10} />
+            {claw.deployments}
+          </div>
+        </div>
+      </div>
+
+      {/* Deploy button — on hover */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onDeploy();
+        }}
+        className="mt-3 w-full text-xs font-bold py-2 flex items-center justify-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity"
+        style={{ background: "#DDEA4D", color: "#000" }}
+      >
+        Deploy <ArrowRight size={12} />
+      </button>
+    </div>
   );
 }
 
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
 export default function Home() {
+  const [deployTarget, setDeployTarget] = useState<Claw | null>(null);
+  const [activeTab, setActiveTab] = useState<"npx" | "pip" | "curl">("npx");
+  const [activeCategory, setActiveCategory] = useState("All");
+
+  const installCmd = {
+    npx: "npx gmi-claw@latest deploy defi-arb-scout",
+    pip: "pip install gmi-sdk && gmi deploy defi-arb-scout",
+    curl: `curl -X POST https://api.gmi.ai/v1/deploy \\
+  -H "Authorization: Bearer $GMI_KEY" \\
+  -d '{"claw":"defi-arb-scout"}'`,
+  };
+
+  const filtered =
+    activeCategory === "All"
+      ? ALL_CLAWS
+      : ALL_CLAWS.filter((c) => c.category === activeCategory);
+
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="min-h-screen" style={{ background: "#000", color: "#fff" }}>
       <Navbar />
 
-      {/* ── Hero ── */}
-      <section className="relative min-h-screen flex items-center overflow-hidden">
-        {/* Background image */}
-        <div
-          className="absolute inset-0 bg-cover bg-center opacity-30"
-          style={{ backgroundImage: `url(${HERO_BG})` }}
-        />
-        {/* Gradient overlay */}
-        <div className="absolute inset-0 bg-gradient-to-r from-black via-black/80 to-transparent" />
-
-        <div className="container relative z-10 py-32">
-          <div className="max-w-3xl">
-            <div className="gmi-label mb-6">GMI Claw Marketplace — Pre-Release</div>
-            <h1 className="font-display text-5xl md:text-7xl leading-[1.05] mb-6 text-white">
-              The Autonomous
-              <br />
-              AI Agent Platform.
-            </h1>
-            <p className="text-xl md:text-2xl font-display text-lime mb-4 min-h-[2.5rem]">
-              <TypewriterText />
-            </p>
-            <p className="text-base text-gray-400 mb-10 max-w-xl leading-relaxed">
-              Discover, deploy, and monetize autonomous AI agents (Claws) on the world's first purpose-built agent marketplace — powered by GMI Cloud infrastructure.
-            </p>
-            <div className="flex flex-wrap gap-4">
-              <Link href="/marketplace">
-                <button className="btn-primary-lime flex items-center gap-2 text-sm font-bold px-6 py-3">
-                  Explore Marketplace <ArrowRight size={16} />
-                </button>
-              </Link>
-              <button className="btn-outline-dashed flex items-center gap-2 text-sm">
-                Build a Claw <Code2 size={16} />
-              </button>
-            </div>
-
-            {/* Stats row */}
-            <div className="mt-16 flex flex-wrap gap-8 border-t border-gray-800 pt-8">
-              {[
-                { label: "Claws Available", value: "200+" },
-                { label: "Active Deployments", value: "12,400+" },
-                { label: "Avg Deploy Time", value: "< 30s" },
-              ].map((s) => (
-                <div key={s.label}>
-                  <div className="font-mono-gmi text-2xl font-medium text-lime">{s.value}</div>
-                  <div className="text-xs text-gray-500 mt-1 uppercase tracking-widest">{s.label}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Claw image — right side */}
-        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[45%] opacity-60 pointer-events-none hidden lg:block">
-          <img src={CLAW_IMG} alt="GMI Claw" className="w-full h-auto" />
-        </div>
-      </section>
-
-      {/* ── What is a Claw ── */}
-      <section className="section-light py-24">
+      {/* ── Hero ─────────────────────────────────────────────────────────────── */}
+      <section
+        className="pt-24 pb-14"
+        style={{ borderBottom: "1px solid #1a1a1a" }}
+      >
         <div className="container">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 items-start">
+            {/* Left: text */}
             <div>
-              <div className="gmi-label mb-4" style={{ color: "#000", opacity: 0.5 }}>The Foundation</div>
-              <h2 className="font-display text-4xl md:text-5xl text-black leading-tight mb-6">
-                What is a Claw?
-              </h2>
-              <p className="text-gray-600 text-lg leading-relaxed mb-6">
-                A <strong>Claw</strong> is a self-contained autonomous AI entity: a combination of a <strong>Framework</strong> (the agent's reasoning architecture) and a <strong>Skill</strong> (a specialized capability or tool). Together, they form a deployable, production-ready agent.
+              <div
+                className="inline-flex items-center gap-2 text-xs font-mono-gmi px-3 py-1 mb-6"
+                style={{
+                  background: "rgba(221,234,77,0.08)",
+                  color: "#DDEA4D",
+                  border: "1px solid rgba(221,234,77,0.2)",
+                }}
+              >
+                <span
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{ background: "#DDEA4D" }}
+                />
+                Pre-Release · April 2026
+              </div>
+
+              <h1
+                className="font-display text-5xl md:text-6xl text-white mb-5"
+                style={{ lineHeight: 1.05, letterSpacing: "-0.025em" }}
+              >
+                The autonomous<br />
+                <span style={{ color: "#DDEA4D" }}>AI agent</span> platform.
+              </h1>
+
+              <p
+                className="text-lg leading-relaxed mb-8 max-w-md"
+                style={{ color: "#666" }}
+              >
+                Browse, deploy, and monetize autonomous AI agents (Claws).
+                Versioned like npm, powered by GMI Cloud infrastructure.
               </p>
-              <p className="text-gray-600 leading-relaxed mb-8">
-                Unlike traditional AI integrations that require weeks of setup, Claws deploy in under 30 seconds with zero infrastructure overhead. Every Claw runs on GMI's purpose-built compute infrastructure — no API keys, no configuration, no integration tax.
-              </p>
-              <div className="flex items-center gap-2 text-black font-medium text-sm">
-                <Link href="/marketplace" className="flex items-center gap-1 hover:text-lime transition-colors" style={{ color: "inherit" }}>
-                  Browse the Marketplace <ChevronRight size={16} />
+
+              <div className="flex flex-wrap gap-3 mb-10">
+                <Link href="/marketplace">
+                  <button
+                    className="flex items-center gap-2 text-sm font-bold px-6 py-3"
+                    style={{ background: "#DDEA4D", color: "#000" }}
+                  >
+                    Browse Claws <ArrowRight size={15} />
+                  </button>
+                </Link>
+                <Link href="/dashboard">
+                  <button
+                    className="flex items-center gap-2 text-sm font-medium px-6 py-3"
+                    style={{ border: "1px solid #2a2a2a", color: "#666" }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.borderColor =
+                        "#DDEA4D";
+                      (e.currentTarget as HTMLButtonElement).style.color =
+                        "#DDEA4D";
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.borderColor =
+                        "#2a2a2a";
+                      (e.currentTarget as HTMLButtonElement).style.color =
+                        "#666";
+                    }}
+                  >
+                    Publish a Claw &lt;/&gt;
+                  </button>
                 </Link>
               </div>
+
+              {/* Stats row */}
+              <div className="flex gap-8">
+                {[
+                  { n: "200+", label: "Claws" },
+                  { n: "12k+", label: "Deployments" },
+                  { n: "< 30s", label: "Deploy time" },
+                ].map((s) => (
+                  <div key={s.label}>
+                    <div
+                      className="font-display text-2xl"
+                      style={{ color: "#DDEA4D", letterSpacing: "-0.02em" }}
+                    >
+                      {s.n}
+                    </div>
+                    <div className="text-xs font-mono-gmi" style={{ color: "#555" }}>
+                      {s.label}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
 
-            {/* Formula visual */}
-            <div className="bg-black p-8 dot-bg">
-              <div className="font-mono-gmi text-xs text-gray-500 mb-6 uppercase tracking-widest">// Claw = Framework + Skill</div>
-              <div className="flex items-center gap-4 flex-wrap">
-                <div className="claw-card p-6 flex-1 min-w-[140px]">
-                  <div className="text-lime text-xs font-mono-gmi mb-2">FRAMEWORK</div>
-                  <div className="text-white font-display text-lg">ReAct Loop</div>
-                  <div className="text-gray-500 text-xs mt-2">Reasoning architecture</div>
-                </div>
-                <div className="text-lime font-display text-3xl">+</div>
-                <div className="claw-card p-6 flex-1 min-w-[140px]">
-                  <div className="text-lime text-xs font-mono-gmi mb-2">SKILL</div>
-                  <div className="text-white font-display text-lg">DeFi Scout</div>
-                  <div className="text-gray-500 text-xs mt-2">Specialized capability</div>
-                </div>
-                <div className="text-lime font-display text-3xl">=</div>
-                <div className="border border-lime p-6 flex-1 min-w-[140px]" style={{ background: "rgba(200,255,0,0.05)" }}>
-                  <div className="text-lime text-xs font-mono-gmi mb-2">CLAW</div>
-                  <div className="text-white font-display text-lg">Autonomous Entity</div>
-                  <div className="text-gray-500 text-xs mt-2">Ready to deploy</div>
-                </div>
+            {/* Right: install card */}
+            <div
+              style={{
+                background: "#0a0a0a",
+                border: "1px solid #2a2a2a",
+                padding: "1.5rem",
+              }}
+            >
+              <div className="text-sm text-white font-medium mb-1">
+                Deploy any Claw in one shot
+              </div>
+              <div
+                className="text-xs font-mono-gmi mb-4"
+                style={{ color: "#555" }}
+              >
+                Versioned, rollback-ready.
+              </div>
+
+              {/* Tab switcher */}
+              <div className="flex gap-1 mb-4">
+                {(["npx", "pip", "curl"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveTab(tab)}
+                    className="text-xs font-mono-gmi px-3 py-1.5 transition-colors"
+                    style={
+                      activeTab === tab
+                        ? { background: "#DDEA4D", color: "#000", fontWeight: 700 }
+                        : { background: "#111", color: "#555", border: "1px solid #222" }
+                    }
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+
+              {/* Command block */}
+              <div
+                className="font-mono-gmi text-xs leading-relaxed p-4 whitespace-pre overflow-x-auto"
+                style={{
+                  background: "#000",
+                  border: "1px solid #1a1a1a",
+                  color: "#DDEA4D",
+                }}
+              >
+                {installCmd[activeTab]}
+              </div>
+
+              {/* Feature pills */}
+              <div className="grid grid-cols-3 gap-3 mt-5">
+                {[
+                  { icon: <Zap size={12} />, label: "< 30s deploy" },
+                  { icon: <Shield size={12} />, label: "Audited models" },
+                  { icon: <Code2 size={12} />, label: "SDK + REST API" },
+                ].map((f) => (
+                  <div
+                    key={f.label}
+                    className="flex items-center gap-1.5 font-mono-gmi text-xs"
+                    style={{ color: "#555" }}
+                  >
+                    <span style={{ color: "#DDEA4D" }}>{f.icon}</span>
+                    {f.label}
+                  </div>
+                ))}
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* ── Featured Claws ── */}
-      <section className="section-dark py-24" style={{ background: "#050505" }}>
+      {/* ── Category tabs + Claw grid ─────────────────────────────────────────── */}
+      <section className="py-12">
         <div className="container">
           {/* Section header */}
-          <div className="flex items-end justify-between mb-10">
-            <div>
-              <div className="gmi-label mb-3">The Marketplace</div>
-              <h2 className="font-display text-4xl md:text-5xl text-white">
-                Featured <span style={{ color: "#DDEA4D" }}>Claws</span>
-              </h2>
-            </div>
-            <Link href="/marketplace">
-              <button className="btn-outline-dashed hidden md:flex items-center gap-2">
-                View All <ArrowRight size={14} />
-              </button>
-            </Link>
-          </div>
-
-          {/* Large hero card (first) + two smaller cards */}
-          <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-            {/* Hero card — spans 3 cols */}
-            <div
-              className="lg:col-span-3 group cursor-pointer relative overflow-hidden"
-              style={{
-                background: "#0d0d0d",
-                border: "1px solid #2a2a2a",
-                transition: "border-color 0.2s ease",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-              onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+          <div className="flex items-center justify-between mb-6">
+            <h2
+              className="font-display text-2xl text-white"
+              style={{ letterSpacing: "-0.02em" }}
             >
-              {/* Accent bar */}
-              <div className="h-1 w-full" style={{ background: "#DDEA4D" }} />
-              <div className="p-8">
-                <div className="flex items-start justify-between mb-6">
-                  <div
-                    className="text-xs font-medium px-3 py-1 font-mono-gmi"
-                    style={{ background: "rgba(221,234,77,0.12)", color: "#DDEA4D", letterSpacing: "0.1em" }}
-                  >
-                    {FEATURED_CLAWS[0].category}
-                  </div>
-                  <div className="font-mono-gmi text-sm" style={{ color: "#DDEA4D" }}>
-                    ★ {FEATURED_CLAWS[0].rating}
-                  </div>
-                </div>
-
-                <h3
-                  className="font-display text-3xl md:text-4xl text-white mb-4"
-                  style={{ lineHeight: 1.1 }}
-                >
-                  {FEATURED_CLAWS[0].name}
-                </h3>
-                <p className="text-gray-400 leading-relaxed mb-8 max-w-lg">
-                  {FEATURED_CLAWS[0].description}
-                </p>
-
-                <div className="flex flex-wrap gap-2 mb-8">
-                  {FEATURED_CLAWS[0].tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="text-xs px-3 py-1 font-mono-gmi"
-                      style={{ border: "1px solid #333", color: "#888" }}
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-
-                <div className="flex items-center justify-between border-t pt-6" style={{ borderColor: "#1a1a1a" }}>
-                  <div className="grid grid-cols-2 gap-8">
-                    <div>
-                      <div className="font-mono-gmi text-xs mb-1" style={{ color: "#555" }}>MODEL</div>
-                      <div className="font-mono-gmi text-sm text-white">{FEATURED_CLAWS[0].model}</div>
-                    </div>
-                    <div>
-                      <div className="font-mono-gmi text-xs mb-1" style={{ color: "#555" }}>DEPLOYMENTS</div>
-                      <div className="font-mono-gmi text-sm" style={{ color: "#DDEA4D" }}>{FEATURED_CLAWS[0].deployments}</div>
-                    </div>
-                  </div>
-                  <Link href="/marketplace">
-                    <button
-                      className="flex items-center gap-2 text-sm font-bold px-5 py-2.5"
-                      style={{ background: "#DDEA4D", color: "#000" }}
-                    >
-                      Deploy <ArrowRight size={14} />
-                    </button>
-                  </Link>
-                </div>
-              </div>
-            </div>
-
-            {/* Two smaller cards — span 2 cols */}
-            <div className="lg:col-span-2 flex flex-col gap-4">
-              {FEATURED_CLAWS.slice(1).map((claw) => (
-                <div
-                  key={claw.id}
-                  className="group cursor-pointer flex-1"
-                  style={{
-                    background: "#0d0d0d",
-                    border: "1px solid #2a2a2a",
-                    transition: "border-color 0.2s ease",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-                  onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                >
-                  <div className="h-0.5 w-full" style={{ background: "#1f1f1f" }} />
-                  <div className="p-6">
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="text-xs font-mono-gmi" style={{ color: "#555", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                        {claw.category}
-                      </div>
-                      <div className="font-mono-gmi text-xs" style={{ color: "#DDEA4D" }}>★ {claw.rating}</div>
-                    </div>
-                    <h3 className="font-display text-xl text-white mb-2 group-hover:text-[#DDEA4D] transition-colors">
-                      {claw.name}
-                    </h3>
-                    <p className="text-gray-500 text-sm leading-relaxed mb-4 line-clamp-2">{claw.description}</p>
-                    <div className="flex flex-wrap gap-1 mb-4">
-                      {claw.tags.map((tag) => (
-                        <span key={tag} className="text-xs px-2 py-0.5 font-mono-gmi" style={{ border: "1px solid #222", color: "#666" }}>
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="flex items-center justify-between border-t pt-4" style={{ borderColor: "#1a1a1a" }}>
-                      <div>
-                        <div className="font-mono-gmi text-xs mb-0.5" style={{ color: "#555" }}>DEPLOYMENTS</div>
-                        <div className="font-mono-gmi text-sm" style={{ color: "#DDEA4D" }}>{claw.deployments}</div>
-                      </div>
-                      <Link href="/marketplace">
-                        <button
-                          className="text-xs font-bold px-4 py-2 flex items-center gap-1.5"
-                          style={{ background: "#DDEA4D", color: "#000" }}
-                        >
-                          Deploy <ArrowRight size={11} />
-                        </button>
-                      </Link>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ── Two Ways to Engage ── */}
-      <section className="section-light py-24">
-        <div className="container">
-          <div className="text-center mb-16">
-            <div className="gmi-label mb-4" style={{ color: "#000", opacity: 0.5 }}>Two Ways to Engage</div>
-            <h2 className="font-display text-4xl md:text-5xl text-black">How Will You Use Claw?</h2>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            {/* Track A: User */}
-            <div className="bg-black p-8 border border-gray-800 group hover:border-lime transition-colors">
-              <div className="gmi-label mb-4">Track A — Enterprise User</div>
-              <h3 className="font-display text-3xl text-white mb-4">Use a Claw</h3>
-              <p className="text-gray-400 leading-relaxed mb-6">
-                Browse the catalog, select a Claw that fits your use case, and deploy it to your workflow in seconds. No AI expertise required.
-              </p>
-              <ul className="space-y-3 mb-8">
-                {[
-                  "One-click deployment",
-                  "Pre-configured for production",
-                  "Pay per execution or flat monthly",
-                  "Monitor performance in real-time",
-                ].map((item) => (
-                  <li key={item} className="flex items-center gap-3 text-sm text-gray-300">
-                    <span className="text-lime font-mono-gmi">→</span> {item}
-                  </li>
-                ))}
-              </ul>
-              <Link href="/marketplace">
-                <button className="btn-primary-lime w-full text-center">
-                  Browse Marketplace
-                </button>
-              </Link>
-            </div>
-
-            {/* Track B: Developer */}
-            <div className="bg-black p-8 border border-gray-800 group hover:border-lime transition-colors">
-              <div className="gmi-label mb-4">Track B — Claw Builder</div>
-              <h3 className="font-display text-3xl text-white mb-4">Build a Claw</h3>
-              <p className="text-gray-400 leading-relaxed mb-6">
-                Use the GMI Developer Toolkit (MaaS) to build, test, and publish your own Claws. Earn revenue every time your Claw is deployed.
-              </p>
-              <ul className="space-y-3 mb-8">
-                {[
-                  "Full SDK & CLI access",
-                  "Serverless GPU compute included",
-                  "Revenue share on deployments",
-                  "Version control & rollback",
-                ].map((item) => (
-                  <li key={item} className="flex items-center gap-3 text-sm text-gray-300">
-                    <span className="text-lime font-mono-gmi">→</span> {item}
-                  </li>
-                ))}
-              </ul>
-              <button className="btn-outline-dashed w-full" onClick={() => {}}>
-                Start Building (Coming Soon)
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ── Infrastructure ── */}
-      <section className="section-dark py-24">
-        <div className="container">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
-            <div>
-              <div className="gmi-label mb-4">Purpose-Built Infrastructure</div>
-              <h2 className="font-display text-4xl md:text-5xl text-white mb-6">
-                Zero Integration Tax.
-                <br />
-                <span className="text-lime">Infinite Scale.</span>
-              </h2>
-              <p className="text-gray-400 leading-relaxed mb-8">
-                The GMI Claw Marketplace runs on two proprietary infrastructure layers that eliminate the traditional AI deployment bottleneck.
-              </p>
-              <div className="space-y-6">
-                {[
-                  {
-                    icon: <Code2 size={20} />,
-                    title: "Developer Toolkit (MaaS)",
-                    desc: "Model-as-a-Service layer. Access 200+ open-source models via a unified API. No model management, no versioning headaches.",
-                  },
-                  {
-                    icon: <Zap size={20} />,
-                    title: "Cluster Engine",
-                    desc: "Dedicated GPU cluster orchestration. Burst to 1,000+ H100s on demand. Predictable latency, transparent pricing.",
-                  },
-                  {
-                    icon: <Shield size={20} />,
-                    title: "Enterprise Security",
-                    desc: "SOC 2 Type II compliant. Private deployment options. Full audit logs and access controls.",
-                  },
-                ].map((item) => (
-                  <div key={item.title} className="flex gap-4">
-                    <div className="text-lime mt-0.5 shrink-0">{item.icon}</div>
-                    <div>
-                      <div className="font-display text-white font-semibold mb-1">{item.title}</div>
-                      <div className="text-gray-400 text-sm leading-relaxed">{item.desc}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Terminal preview */}
-            <div className="bg-black border border-gray-800 p-0 overflow-hidden">
-              <div className="bg-gray-900 px-4 py-3 flex items-center gap-2 border-b border-gray-800">
-                <div className="w-3 h-3 rounded-full bg-red-500 opacity-60" />
-                <div className="w-3 h-3 rounded-full bg-yellow-500 opacity-60" />
-                <div className="w-3 h-3 rounded-full bg-green-500 opacity-60" />
-                <span className="font-mono-gmi text-xs text-gray-500 ml-2">gmi-claw deploy</span>
-              </div>
-              <div className="p-6 space-y-1">
-                {[
-                  { text: "$ gmi claw deploy defi-arb-scout --env production", dim: false },
-                  { text: "", dim: true },
-                  { text: "✓ Resolving Claw manifest...", dim: true },
-                  { text: "✓ Allocating compute (H100 × 2)...", dim: true },
-                  { text: "✓ Injecting model weights (Llama 3.1 70B)...", dim: true },
-                  { text: "✓ Running health checks...", dim: true },
-                  { text: "", dim: true },
-                  { text: "◆ Deployment complete in 24.3s", dim: false },
-                  { text: "◆ Endpoint: https://api.gmi.ai/claws/defi-arb-scout", dim: false },
-                  { text: "◆ Status: RUNNING", dim: false },
-                ].map((line, i) => (
-                  <div key={i} className={`terminal-line ${line.dim ? "dim" : ""}`}>
-                    {line.text || "\u00A0"}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ── CTA ── */}
-      <section className="section-light py-24">
-        <div className="container text-center">
-          <div className="gmi-label mb-4" style={{ color: "#000", opacity: 0.5 }}>Get Started Today</div>
-          <h2 className="font-display text-4xl md:text-6xl text-black mb-6">
-            Ready to Deploy Your
-            <br />
-            First Claw?
-          </h2>
-          <p className="text-gray-600 max-w-xl mx-auto mb-10 leading-relaxed">
-            Join 500+ teams already running autonomous AI agents on GMI Cloud. Pre-release access is open now.
-          </p>
-          <div className="flex flex-wrap gap-4 justify-center">
+              Explore Claws
+            </h2>
             <Link href="/marketplace">
-              <button className="btn-primary-lime flex items-center gap-2 px-8 py-4 text-base font-bold">
-                Explore the Marketplace <ArrowRight size={18} />
+              <span
+                className="flex items-center gap-1 text-sm font-mono-gmi cursor-pointer transition-colors"
+                style={{ color: "#555" }}
+                onMouseEnter={(e) =>
+                  ((e.currentTarget as HTMLSpanElement).style.color = "#DDEA4D")
+                }
+                onMouseLeave={(e) =>
+                  ((e.currentTarget as HTMLSpanElement).style.color = "#555")
+                }
+              >
+                View all <ChevronRight size={14} />
+              </span>
+            </Link>
+          </div>
+
+          {/* Category tabs — clawhub-style pill row */}
+          <div
+            className="flex gap-1.5 flex-wrap mb-8 pb-6"
+            style={{ borderBottom: "1px solid #1a1a1a" }}
+          >
+            {CATEGORIES.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => setActiveCategory(cat)}
+                className="text-xs px-4 py-2 font-medium transition-colors"
+                style={
+                  activeCategory === cat
+                    ? { background: "#DDEA4D", color: "#000", fontWeight: 700 }
+                    : { color: "#666", border: "1px solid #2a2a2a" }
+                }
+                onMouseEnter={(e) => {
+                  if (activeCategory !== cat) {
+                    (e.currentTarget as HTMLButtonElement).style.color = "#fff";
+                    (e.currentTarget as HTMLButtonElement).style.borderColor =
+                      "#444";
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (activeCategory !== cat) {
+                    (e.currentTarget as HTMLButtonElement).style.color = "#666";
+                    (e.currentTarget as HTMLButtonElement).style.borderColor =
+                      "#2a2a2a";
+                  }
+                }}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
+
+          {/* Uniform 3-col grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filtered.map((claw) => (
+              <ClawCard
+                key={claw.id}
+                claw={claw}
+                onDeploy={() => setDeployTarget(claw)}
+              />
+            ))}
+          </div>
+
+          {/* "View all" link below grid */}
+          <div className="text-center mt-10">
+            <Link href="/marketplace">
+              <button
+                className="text-sm font-medium px-8 py-3 transition-colors"
+                style={{ border: "1px solid #2a2a2a", color: "#666" }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.borderColor =
+                    "#DDEA4D";
+                  (e.currentTarget as HTMLButtonElement).style.color = "#DDEA4D";
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.borderColor =
+                    "#2a2a2a";
+                  (e.currentTarget as HTMLButtonElement).style.color = "#666";
+                }}
+              >
+                View all {ALL_CLAWS.length} Claws →
               </button>
             </Link>
-            <button className="btn-outline-dashed px-8 py-4 text-base" style={{ borderColor: "#000", color: "#000" }}>
-              Contact Sales
-            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Bottom CTA ────────────────────────────────────────────────────────── */}
+      <section
+        className="py-16"
+        style={{ borderTop: "1px solid #1a1a1a" }}
+      >
+        <div className="container">
+          <div
+            className="grid grid-cols-1 md:grid-cols-2 gap-px"
+            style={{ background: "#1a1a1a" }}
+          >
+            {[
+              {
+                title: "For Enterprises",
+                desc: "Deploy pre-built Claws in under 30 seconds. No ML team required. Pay only for what you use.",
+                cta: "Explore Marketplace",
+                href: "/marketplace",
+              },
+              {
+                title: "For Builders",
+                desc: "Package your agent logic as a Claw, publish to the marketplace, and earn from every deployment.",
+                cta: "Start Building",
+                href: "/dashboard",
+              },
+            ].map((item) => (
+              <div key={item.title} className="p-10" style={{ background: "#000" }}>
+                <h3
+                  className="font-display text-2xl text-white mb-3"
+                  style={{ letterSpacing: "-0.02em" }}
+                >
+                  {item.title}
+                </h3>
+                <p
+                  className="text-sm leading-relaxed mb-6 max-w-sm"
+                  style={{ color: "#555" }}
+                >
+                  {item.desc}
+                </p>
+                <Link href={item.href}>
+                  <button
+                    className="flex items-center gap-2 text-sm font-bold px-5 py-2.5"
+                    style={{ background: "#DDEA4D", color: "#000" }}
+                  >
+                    {item.cta} <ArrowRight size={14} />
+                  </button>
+                </Link>
+              </div>
+            ))}
           </div>
         </div>
       </section>
 
       <Footer />
+
+      {deployTarget && (
+        <DeployModal claw={deployTarget} onClose={() => setDeployTarget(null)} />
+      )}
     </div>
   );
 }
