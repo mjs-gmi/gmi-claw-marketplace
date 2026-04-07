@@ -194,12 +194,15 @@ export default function Home() {
       </section>
 
       {/* ── Featured Claws ── */}
-      <section className="section-dark py-24">
+      <section className="section-dark py-24" style={{ background: "#050505" }}>
         <div className="container">
-          <div className="flex items-end justify-between mb-12">
+          {/* Section header */}
+          <div className="flex items-end justify-between mb-10">
             <div>
               <div className="gmi-label mb-3">The Marketplace</div>
-              <h2 className="font-display text-4xl md:text-5xl text-white">Featured Claws</h2>
+              <h2 className="font-display text-4xl md:text-5xl text-white">
+                Featured <span style={{ color: "#DDEA4D" }}>Claws</span>
+              </h2>
             </div>
             <Link href="/marketplace">
               <button className="btn-outline-dashed hidden md:flex items-center gap-2">
@@ -208,36 +211,130 @@ export default function Home() {
             </Link>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-gray-800">
-            {FEATURED_CLAWS.map((claw) => (
-              <div key={claw.id} className="claw-card p-6 group cursor-pointer" style={{ background: "#0a0a0a" }}>
-                <div className="flex items-start justify-between mb-4">
-                  <div className="gmi-label text-gray-500">{claw.category}</div>
-                  <div className="font-mono-gmi text-xs text-lime">★ {claw.rating}</div>
+          {/* Large hero card (first) + two smaller cards */}
+          <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+            {/* Hero card — spans 3 cols */}
+            <div
+              className="lg:col-span-3 group cursor-pointer relative overflow-hidden"
+              style={{
+                background: "#0d0d0d",
+                border: "1px solid #2a2a2a",
+                transition: "border-color 0.2s ease",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
+              onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+            >
+              {/* Accent bar */}
+              <div className="h-1 w-full" style={{ background: "#DDEA4D" }} />
+              <div className="p-8">
+                <div className="flex items-start justify-between mb-6">
+                  <div
+                    className="text-xs font-medium px-3 py-1 font-mono-gmi"
+                    style={{ background: "rgba(221,234,77,0.12)", color: "#DDEA4D", letterSpacing: "0.1em" }}
+                  >
+                    {FEATURED_CLAWS[0].category}
+                  </div>
+                  <div className="font-mono-gmi text-sm" style={{ color: "#DDEA4D" }}>
+                    ★ {FEATURED_CLAWS[0].rating}
+                  </div>
                 </div>
-                <h3 className="font-display text-xl text-white mb-3 group-hover:text-lime transition-colors">
-                  {claw.name}
+
+                <h3
+                  className="font-display text-3xl md:text-4xl text-white mb-4"
+                  style={{ lineHeight: 1.1 }}
+                >
+                  {FEATURED_CLAWS[0].name}
                 </h3>
-                <p className="text-gray-400 text-sm leading-relaxed mb-4">{claw.description}</p>
-                <div className="flex flex-wrap gap-1 mb-4">
-                  {claw.tags.map((tag) => (
-                    <span key={tag} className="text-xs px-2 py-0.5 border border-gray-700 text-gray-400 font-mono-gmi">
+                <p className="text-gray-400 leading-relaxed mb-8 max-w-lg">
+                  {FEATURED_CLAWS[0].description}
+                </p>
+
+                <div className="flex flex-wrap gap-2 mb-8">
+                  {FEATURED_CLAWS[0].tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="text-xs px-3 py-1 font-mono-gmi"
+                      style={{ border: "1px solid #333", color: "#888" }}
+                    >
                       {tag}
                     </span>
                   ))}
                 </div>
-                <div className="border-t border-gray-800 pt-4 flex items-center justify-between">
-                  <div>
-                    <div className="text-xs text-gray-600 font-mono-gmi">MODEL</div>
-                    <div className="text-xs text-gray-300 font-mono-gmi">{claw.model}</div>
+
+                <div className="flex items-center justify-between border-t pt-6" style={{ borderColor: "#1a1a1a" }}>
+                  <div className="grid grid-cols-2 gap-8">
+                    <div>
+                      <div className="font-mono-gmi text-xs mb-1" style={{ color: "#555" }}>MODEL</div>
+                      <div className="font-mono-gmi text-sm text-white">{FEATURED_CLAWS[0].model}</div>
+                    </div>
+                    <div>
+                      <div className="font-mono-gmi text-xs mb-1" style={{ color: "#555" }}>DEPLOYMENTS</div>
+                      <div className="font-mono-gmi text-sm" style={{ color: "#DDEA4D" }}>{FEATURED_CLAWS[0].deployments}</div>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-xs text-gray-600 font-mono-gmi">DEPLOYMENTS</div>
-                    <div className="text-xs text-lime font-mono-gmi">{claw.deployments}</div>
-                  </div>
+                  <Link href="/marketplace">
+                    <button
+                      className="flex items-center gap-2 text-sm font-bold px-5 py-2.5"
+                      style={{ background: "#DDEA4D", color: "#000" }}
+                    >
+                      Deploy <ArrowRight size={14} />
+                    </button>
+                  </Link>
                 </div>
               </div>
-            ))}
+            </div>
+
+            {/* Two smaller cards — span 2 cols */}
+            <div className="lg:col-span-2 flex flex-col gap-4">
+              {FEATURED_CLAWS.slice(1).map((claw) => (
+                <div
+                  key={claw.id}
+                  className="group cursor-pointer flex-1"
+                  style={{
+                    background: "#0d0d0d",
+                    border: "1px solid #2a2a2a",
+                    transition: "border-color 0.2s ease",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
+                  onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                >
+                  <div className="h-0.5 w-full" style={{ background: "#1f1f1f" }} />
+                  <div className="p-6">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="text-xs font-mono-gmi" style={{ color: "#555", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                        {claw.category}
+                      </div>
+                      <div className="font-mono-gmi text-xs" style={{ color: "#DDEA4D" }}>★ {claw.rating}</div>
+                    </div>
+                    <h3 className="font-display text-xl text-white mb-2 group-hover:text-[#DDEA4D] transition-colors">
+                      {claw.name}
+                    </h3>
+                    <p className="text-gray-500 text-sm leading-relaxed mb-4 line-clamp-2">{claw.description}</p>
+                    <div className="flex flex-wrap gap-1 mb-4">
+                      {claw.tags.map((tag) => (
+                        <span key={tag} className="text-xs px-2 py-0.5 font-mono-gmi" style={{ border: "1px solid #222", color: "#666" }}>
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex items-center justify-between border-t pt-4" style={{ borderColor: "#1a1a1a" }}>
+                      <div>
+                        <div className="font-mono-gmi text-xs mb-0.5" style={{ color: "#555" }}>DEPLOYMENTS</div>
+                        <div className="font-mono-gmi text-sm" style={{ color: "#DDEA4D" }}>{claw.deployments}</div>
+                      </div>
+                      <Link href="/marketplace">
+                        <button
+                          className="text-xs font-bold px-4 py-2 flex items-center gap-1.5"
+                          style={{ background: "#DDEA4D", color: "#000" }}
+                        >
+                          Deploy <ArrowRight size={11} />
+                        </button>
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </section>

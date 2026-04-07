@@ -49,7 +49,7 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --color-lime: #C8FF00;
+  --color-lime: #DDEA4D;
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'GeistMono', ui-monospace, 'SFMono-Regular', monospace;
   --font-display: 'Space Grotesk', 'Inter', sans-serif;
@@ -63,19 +63,19 @@
   --card-foreground: oklch(0.97 0 0);
   --popover: oklch(0.07 0 0);
   --popover-foreground: oklch(0.97 0 0);
-  --primary: oklch(0.93 0.22 120);       /* Neon Lime #C8FF00 */
+  --primary: oklch(0.92 0.19 108);       /* Lime #DDEA4D */
   --primary-foreground: oklch(0.04 0 0); /* Black text on lime */
   --secondary: oklch(0.12 0 0);
   --secondary-foreground: oklch(0.85 0 0);
   --muted: oklch(0.12 0 0);
   --muted-foreground: oklch(0.55 0 0);
-  --accent: oklch(0.93 0.22 120);
+  --accent: oklch(0.92 0.19 108);
   --accent-foreground: oklch(0.04 0 0);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.985 0 0);
   --border: oklch(0.22 0 0);
   --input: oklch(0.15 0 0);
-  --ring: oklch(0.93 0.22 120);
+  --ring: oklch(0.92 0.19 108);
 }
 
 @layer base {
@@ -136,13 +136,13 @@
     font-family: 'GeistMono', ui-monospace, monospace;
   }
   .text-lime {
-    color: #C8FF00;
+    color: #DDEA4D;
   }
   .bg-lime {
-    background-color: #C8FF00;
+    background-color: #DDEA4D;
   }
   .border-lime {
-    border-color: #C8FF00;
+    border-color: #DDEA4D;
   }
 
   /* Claw Card — dark bordered card with lime hover */
@@ -152,7 +152,7 @@
     transition: border-color 0.15s ease;
   }
   .claw-card:hover {
-    border-color: #C8FF00;
+    border-color: #DDEA4D;
   }
 
   /* Section alternation */
@@ -167,7 +167,7 @@
 
   /* Dot matrix background */
   .dot-bg {
-    background-image: radial-gradient(circle, rgba(200, 255, 0, 0.15) 1px, transparent 1px);
+    background-image: radial-gradient(circle, rgba(221, 234, 77, 0.15) 1px, transparent 1px);
     background-size: 28px 28px;
   }
 
@@ -176,10 +176,10 @@
     font-family: 'GeistMono', monospace;
     font-size: 0.75rem;
     line-height: 1.6;
-    color: #C8FF00;
+    color: #DDEA4D;
   }
   .terminal-line.dim {
-    color: rgba(200, 255, 0, 0.45);
+    color: rgba(221, 234, 77, 0.45);
   }
 
   /* Label tag */
@@ -189,7 +189,7 @@
     font-weight: 500;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: #C8FF00;
+    color: #DDEA4D;
   }
 
   /* Dashed outline button */
@@ -204,13 +204,13 @@
     transition: border-color 0.15s ease, color 0.15s ease;
   }
   .btn-outline-dashed:hover {
-    border-color: #C8FF00;
-    color: #C8FF00;
+    border-color: #DDEA4D;
+    color: #DDEA4D;
   }
 
   /* Primary CTA button */
   .btn-primary-lime {
-    background-color: #C8FF00;
+    background-color: #DDEA4D;
     color: #000000;
     font-family: 'Inter', sans-serif;
     font-size: 0.875rem;
@@ -220,7 +220,7 @@
     transition: background-color 0.15s ease, transform 0.1s ease;
   }
   .btn-primary-lime:hover {
-    background-color: #d4ff33;
+    background-color: #e8f060;
     transform: translateY(-1px);
   }
 }
