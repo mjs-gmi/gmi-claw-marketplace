@@ -1,6 +1,6 @@
 import { Link } from "wouter";
 import { useState } from "react";
-import { ArrowRight, Star, Download, Zap, Shield, Code2, ChevronRight } from "lucide-react";
+import { ArrowRight, Star, Download, Zap, Shield, Code2, ChevronRight, Copy, Check } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import DeployModal from "@/components/DeployModal";
@@ -252,15 +252,20 @@ function ClawCard({ claw, onDeploy }: { claw: Claw; onDeploy: () => void }) {
 
 export default function Home() {
   const [deployTarget, setDeployTarget] = useState<Claw | null>(null);
-  const [activeTab, setActiveTab] = useState<"npx" | "pip" | "curl">("npx");
+  const [activeTab, setActiveTab] = useState<"npx" | "curl" | "pip">("npx");
   const [activeCategory, setActiveCategory] = useState("All");
+  const [copied, setCopied] = useState(false);
 
   const installCmd = {
-    npx: "npx gmi-claw@latest deploy defi-arb-scout",
-    pip: "pip install gmi-sdk && gmi deploy defi-arb-scout",
-    curl: `curl -X POST https://api.gmi.ai/v1/deploy \\
-  -H "Authorization: Bearer $GMI_KEY" \\
-  -d '{"claw":"defi-arb-scout"}'`,
+    npx: "npx openclaw@latest --cloud gmi",
+    curl: "curl -fsSL https://gmi.ai/install.sh | bash",
+    pip: "pip install openclaw && openclaw run --cloud gmi",
+  };
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(installCmd[activeTab]);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const filtered =
@@ -365,7 +370,7 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Right: install card */}
+            {/* Right: Quick Start widget */}
             <div
               style={{
                 background: "#0a0a0a",
@@ -373,52 +378,91 @@ export default function Home() {
                 padding: "1.5rem",
               }}
             >
-              <div className="text-sm text-white font-medium mb-1">
-                Deploy any Claw in one shot
+              {/* Header */}
+              <div className="flex items-center gap-2 mb-1">
+                <span
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{ background: "#DDEA4D" }}
+                />
+                <div className="text-sm text-white font-semibold tracking-tight">
+                  Quick Start
+                </div>
               </div>
               <div
-                className="text-xs font-mono-gmi mb-4"
+                className="text-xs font-mono-gmi mb-5"
                 style={{ color: "#555" }}
               >
-                Versioned, rollback-ready.
+                Spin up OpenClaw on GMI Cloud — compute + models included.
               </div>
 
-              {/* Tab switcher */}
-              <div className="flex gap-1 mb-4">
-                {(["npx", "pip", "curl"] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    onClick={() => setActiveTab(tab)}
-                    className="text-xs font-mono-gmi px-3 py-1.5 transition-colors"
-                    style={
-                      activeTab === tab
-                        ? { background: "#DDEA4D", color: "#000", fontWeight: 700 }
-                        : { background: "#111", color: "#555", border: "1px solid #222" }
-                    }
-                  >
-                    {tab}
-                  </button>
-                ))}
-              </div>
-
-              {/* Command block */}
+              {/* macOS dots + tab switcher row */}
               <div
-                className="font-mono-gmi text-xs leading-relaxed p-4 whitespace-pre overflow-x-auto"
+                className="flex items-center justify-between px-3 py-2 mb-0"
+                style={{ background: "#111", borderBottom: "1px solid #1a1a1a" }}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#ff5f57" }} />
+                  <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#febc2e" }} />
+                  <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#28c840" }} />
+                </div>
+                <div className="flex gap-1">
+                  {(["npx", "curl", "pip"] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => setActiveTab(tab)}
+                      className="text-xs font-mono-gmi px-2.5 py-1 transition-colors"
+                      style={
+                        activeTab === tab
+                          ? { background: "#DDEA4D", color: "#000", fontWeight: 700 }
+                          : { color: "#555" }
+                      }
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Terminal command block */}
+              <div
+                className="relative font-mono-gmi text-sm p-4"
                 style={{
                   background: "#000",
                   border: "1px solid #1a1a1a",
-                  color: "#DDEA4D",
+                  borderTop: "none",
+                  minHeight: "72px",
                 }}
               >
-                {installCmd[activeTab]}
+                <span style={{ color: "#555" }}>$ </span>
+                <span style={{ color: "#DDEA4D" }}>{installCmd[activeTab]}</span>
+                <button
+                  onClick={handleCopy}
+                  className="absolute top-3 right-3 p-1.5 transition-colors"
+                  style={{
+                    background: "#111",
+                    border: "1px solid #222",
+                    color: copied ? "#DDEA4D" : "#555",
+                  }}
+                  title="Copy"
+                >
+                  {copied ? <Check size={12} /> : <Copy size={12} />}
+                </button>
+              </div>
+
+              {/* Subtext */}
+              <div
+                className="text-xs font-mono-gmi mt-3 mb-5"
+                style={{ color: "#444" }}
+              >
+                Works on macOS, Linux, and Windows. No API keys or config needed.
               </div>
 
               {/* Feature pills */}
-              <div className="grid grid-cols-3 gap-3 mt-5">
+              <div className="grid grid-cols-3 gap-3">
                 {[
-                  { icon: <Zap size={12} />, label: "< 30s deploy" },
-                  { icon: <Shield size={12} />, label: "Audited models" },
-                  { icon: <Code2 size={12} />, label: "SDK + REST API" },
+                  { icon: <Zap size={12} />, label: "GMI compute" },
+                  { icon: <Shield size={12} />, label: "200+ models" },
+                  { icon: <Code2 size={12} />, label: "OpenClaw runtime" },
                 ].map((f) => (
                   <div
                     key={f.label}
