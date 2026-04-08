@@ -7,10 +7,9 @@ export default function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const navLinks = [
-    { href: "/marketplace", label: "Claws" },
-    { href: "/marketplace?tab=plugins", label: "Plugins" },
-    { href: "/marketplace?tab=search", label: "Search" },
-    { href: "/dashboard", label: "Dashboard" },
+    { href: "/marketplace", label: "Marketplace" },
+    { href: "/dashboard", label: "Developer Console" },
+    { href: "/list-claw", label: "List a Claw" },
   ];
 
   return (
@@ -73,12 +72,12 @@ export default function Navbar() {
           >
             Sign in
           </button>
-          <Link href="/marketplace">
+          <Link href="/list-claw">
             <button
               className="text-sm font-bold px-4 py-1.5"
               style={{ background: "#DDEA4D", color: "#000" }}
             >
-              Publish Claw
+              List a Claw
             </button>
           </Link>
         </div>
@@ -117,12 +116,15 @@ export default function Navbar() {
             >
               Sign In
             </button>
-            <button
-              className="text-xs px-4 py-2 flex-1 font-bold"
-              style={{ background: "#DDEA4D", color: "#000" }}
-            >
-              Publish Claw
-            </button>
+            <Link href="/list-claw">
+              <button
+                className="text-xs px-4 py-2 flex-1 font-bold"
+                style={{ background: "#DDEA4D", color: "#000" }}
+                onClick={() => setMobileOpen(false)}
+              >
+                List a Claw
+              </button>
+            </Link>
           </div>
         </div>
       )}
