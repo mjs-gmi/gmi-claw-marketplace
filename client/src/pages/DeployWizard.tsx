@@ -25,6 +25,8 @@ const COMPUTE_TIERS = [
 ];
 
 const MAAS_MODELS = [
+  { id: "claude-opus-4", name: "Claude Opus 4", context: "200K", tokensPerDollar: "" },
+  { id: "claude-sonnet-4", name: "Claude Sonnet 4", context: "200K", tokensPerDollar: "" },
   { id: "llama-3-1-70b", name: "Llama 3.1 70B", context: "128K", tokensPerDollar: "1M" },
   { id: "llama-3-1-8b", name: "Llama 3.1 8B", context: "128K", tokensPerDollar: "5M" },
   { id: "deepseek-coder-v2", name: "DeepSeek-Coder V2", context: "128K", tokensPerDollar: "2M" },
@@ -519,9 +521,6 @@ export default function DeployWizard() {
                                   )}
                                 </div>
                                 <div className="flex items-center gap-3">
-                                  <span className="font-mono-gmi text-xs" style={{ color: computeTier === t.id ? "#DDEA4D" : "#555" }}>
-                                    ${t.priceHr.toFixed(2)}/hr
-                                  </span>
                                   <RadioDot selected={computeTier === t.id} />
                                 </div>
                               </div>
@@ -701,9 +700,11 @@ export default function DeployWizard() {
                                 {model.name}
                               </div>
                               {/* Tokens per dollar */}
-                              <div className="font-mono-gmi text-xs" style={{ color: "#555" }}>
-                                {model.tokensPerDollar} tok/$
-                              </div>
+                              {model.tokensPerDollar && (
+                                <div className="font-mono-gmi text-xs" style={{ color: "#555" }}>
+                                  {model.tokensPerDollar} tok/$
+                                </div>
+                              )}
                             </button>
                           );
                         })}
