@@ -567,7 +567,7 @@ export default function Home() {
                   publisher: "TinyHuman",
                   badge: "Verified",
                   description: "Open-source agentic desktop assistant. One subscription for AI models, search, webhooks, and 3rd-party APIs — no terminal required. Local knowledge base, local AI, deep desktop integrations.",
-                  pricing: "Free (Open Source)",
+                  pricing: "Early Access",
                   tags: ["Desktop", "Open Source", "Agentic"],
                   accent: "#7dd3fc",
                 },

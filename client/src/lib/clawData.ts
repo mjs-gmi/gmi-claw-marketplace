@@ -53,8 +53,8 @@ export const ALL_CLAWS: Claw[] = [
       "Open-source agentic desktop assistant that integrates into your daily life. One subscription for AI models, search, webhooks, and 3rd-party APIs — no terminal required.",
     fullDescription:
       "OpenHuman is an open-source agentic assistant by TinyHuman, designed to integrate deeply into your daily workflow. It features a clean desktop-first UI with short onboarding paths — from install to a working agent in a few clicks, no terminal needed. One subscription unlocks many agentic APIs: AI models, search, webhooks/tunnels, and 3rd-party integrations. Rich Skills connect Gmail, Slack, Notion, and the rest of your stack via one-click setup wizards. A local knowledge base is built from your data and activity across tools and sessions, stored on-device and compounding over time — not a cloud dossier. Sensitive workloads (vision, speech, summarization) can run on a local AI model via the Rust core. Deep desktop integrations include memory-aware keyboard autocomplete, voice (STT/TTS), and screen intelligence that feeds your local context. Powered by GMI Cloud infrastructure for cloud-side execution when needed.",
-    pricing: "Free (Open Source)",
-    pricingDetail: "Open-source core is free. Optional GMI Cloud compute billed per usage for cloud-side agent steps.",
+    pricing: "Early Access",
+    pricingDetail: "Early Access. Sign up to join the waitlist and get started with OpenHuman on GMI Cloud.",
     tags: ["Desktop", "Open Source", "Productivity", "Agentic"],
     model: "Llama 3.1 70B",
     deployed: true,
