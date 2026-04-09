@@ -96,6 +96,8 @@ export default function DeployWizard() {
   const [, setLocation] = useLocation();
   const [step, setStep] = useState(0);
   const [deployed, setDeployed] = useState(false);
+  const [deploying, setDeploying] = useState(false);
+  const [deployStep, setDeployStep] = useState(0);
 
   // Step 0 — Basic Info
   const [projectName, setProjectName] = useState("");
@@ -133,12 +135,138 @@ export default function DeployWizard() {
   const updateEnvVar = (i: number, field: "key" | "value" | "secret", val: string | boolean) =>
     setEnvVars((v) => v.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
 
+  const DEPLOY_STEPS = [
+    { label: "Allocating compute resources", duration: 1200 },
+    { label: "Pulling container image", duration: 1800 },
+    { label: "Configuring network & secrets", duration: 1400 },
+    { label: "Starting container runtime", duration: 1600 },
+    { label: "Running health checks", duration: 1200 },
+    { label: "Registering private endpoint", duration: 900 },
+  ];
+
   const handleDeploy = () => {
-    setDeployed(true);
-    toast.success("Private deployment initiated", {
-      description: "Your Claw is being provisioned. Billing has started.",
-    });
+    setDeploying(true);
+    setDeployStep(0);
+    let current = 0;
+    const advance = () => {
+      current += 1;
+      if (current < DEPLOY_STEPS.length) {
+        setDeployStep(current);
+        setTimeout(advance, DEPLOY_STEPS[current].duration);
+      } else {
+        // All steps done — show success
+        setTimeout(() => {
+          setDeploying(false);
+          setDeployed(true);
+          toast.success("Private deployment initiated", {
+            description: "Your Claw is being provisioned. Billing has started.",
+          });
+        }, 600);
+      }
+    };
+    setTimeout(advance, DEPLOY_STEPS[0].duration);
   };
+
+  // ── Deploying loading screen ──────────────────────────────────────────
+  if (deploying) {
+    const totalSteps = DEPLOY_STEPS.length;
+    const progress = Math.round(((deployStep + 1) / totalSteps) * 100);
+    return (
+      <div className="min-h-screen flex bg-black text-white">
+        <Navbar />
+        <div className="flex-1 flex items-center justify-center" style={{ marginLeft: "220px" }}>
+          <div className="w-full max-w-lg px-8">
+            {/* Animated GMI logo pulse */}
+            <div className="flex items-center gap-3 mb-10">
+              <div className="relative w-8 h-8">
+                <div
+                  className="absolute inset-0 rounded-full animate-ping"
+                  style={{ background: "rgba(221,234,77,0.25)" }}
+                />
+                <div
+                  className="relative w-8 h-8 rounded-full flex items-center justify-center"
+                  style={{ background: "rgba(221,234,77,0.15)", border: "1px solid rgba(221,234,77,0.4)" }}
+                >
+                  <Zap size={14} style={{ color: "#DDEA4D" }} />
+                </div>
+              </div>
+              <span className="font-mono-gmi text-xs uppercase tracking-widest" style={{ color: "#DDEA4D" }}>
+                Deploying Privately
+              </span>
+            </div>
+
+            <h2 className="font-display text-2xl text-white mb-1" style={{ letterSpacing: "-0.03em" }}>
+              {projectName || "Your Claw"}
+            </h2>
+            <p className="text-gray-600 text-xs font-mono-gmi mb-8">
+              GMI Cluster Engine is provisioning your infrastructure...
+            </p>
+
+            {/* Progress bar */}
+            <div className="mb-8">
+              <div className="flex justify-between font-mono-gmi text-xs text-gray-600 mb-2">
+                <span>Progress</span>
+                <span style={{ color: "#DDEA4D" }}>{progress}%</span>
+              </div>
+              <div className="w-full h-1" style={{ background: "#1a1a1a" }}>
+                <div
+                  className="h-1 transition-all duration-500"
+                  style={{ width: `${progress}%`, background: "#DDEA4D" }}
+                />
+              </div>
+            </div>
+
+            {/* Step list */}
+            <div className="space-y-3">
+              {DEPLOY_STEPS.map((s, i) => {
+                const done = i < deployStep;
+                const active = i === deployStep;
+                return (
+                  <div key={i} className="flex items-center gap-3">
+                    {/* Status icon */}
+                    <div className="w-5 h-5 flex items-center justify-center shrink-0">
+                      {done ? (
+                        <CheckCircle size={14} style={{ color: "#DDEA4D" }} />
+                      ) : active ? (
+                        <div
+                          className="w-3 h-3 rounded-full animate-pulse"
+                          style={{ background: "#DDEA4D" }}
+                        />
+                      ) : (
+                        <div
+                          className="w-3 h-3 rounded-full"
+                          style={{ background: "#2a2a2a" }}
+                        />
+                      )}
+                    </div>
+                    <span
+                      className="font-mono-gmi text-sm"
+                      style={{
+                        color: done ? "#888" : active ? "#fff" : "#333",
+                        textDecoration: done ? "line-through" : "none",
+                      }}
+                    >
+                      {s.label}
+                      {active && (
+                        <span style={{ color: "#DDEA4D" }}>
+                          {" "}...
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Footer note */}
+            <p className="font-mono-gmi text-xs text-gray-700 mt-10">
+              Do not close this window. You will be redirected automatically.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // ── Deployed success screen ────────────────────────────────────────────
   if (deployed) {
