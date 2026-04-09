@@ -43,6 +43,29 @@ export const ALL_CLAWS: Claw[] = [
     supportedModels: ["Llama 3.1 70B", "Qwen2.5 72B"],
   },
   {
+    id: "openhuman",
+    name: "OpenHuman",
+    publisher: "TinyHuman",
+    publisherContact: "hello@tinyhuman.ai",
+    trustTier: "Verified",
+    typeLabel: "Integration",
+    description:
+      "Open-source agentic desktop assistant that integrates into your daily life. One subscription for AI models, search, webhooks, and 3rd-party APIs — no terminal required.",
+    fullDescription:
+      "OpenHuman is an open-source agentic assistant by TinyHuman, designed to integrate deeply into your daily workflow. It features a clean desktop-first UI with short onboarding paths — from install to a working agent in a few clicks, no terminal needed. One subscription unlocks many agentic APIs: AI models, search, webhooks/tunnels, and 3rd-party integrations. Rich Skills connect Gmail, Slack, Notion, and the rest of your stack via one-click setup wizards. A local knowledge base is built from your data and activity across tools and sessions, stored on-device and compounding over time — not a cloud dossier. Sensitive workloads (vision, speech, summarization) can run on a local AI model via the Rust core. Deep desktop integrations include memory-aware keyboard autocomplete, voice (STT/TTS), and screen intelligence that feeds your local context. Powered by GMI Cloud infrastructure for cloud-side execution when needed.",
+    pricing: "Free (Open Source)",
+    pricingDetail: "Open-source core is free. Optional GMI Cloud compute billed per usage for cloud-side agent steps.",
+    tags: ["Desktop", "Open Source", "Productivity", "Agentic"],
+    model: "Llama 3.1 70B",
+    deployed: true,
+    sampleOutputs: [
+      "Drafting reply to 3 unread Slack threads based on your context — preview ready for review.",
+      "Screen context detected: you're reviewing a PR. Autocomplete suggestion: 'LGTM, but consider extracting the helper into a separate module.'",
+      "Voice command received: 'Schedule a call with Alex tomorrow at 2pm' — Calendar event created and Slack DM sent.",
+    ],
+    supportedModels: ["Llama 3.1 70B", "Qwen2.5 72B", "Mistral 7B", "Local (bundled runner)"],
+  },
+  {
     id: "topify-claw",
     name: "Topify Claw",
     publisher: "Topify",

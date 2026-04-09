@@ -524,6 +524,135 @@ export default function Home() {
           </div>
         </section>
 
+        {/* ── Featured Partners ──────────────────────────────────────────── */}
+        <section className="py-12" style={{ borderTop: "1px solid #1a1a1a" }}>
+          <div className="container">
+            <div className="flex items-center justify-between mb-8">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#DDEA4D" }} />
+                  <span className="text-xs font-mono-gmi" style={{ color: "#DDEA4D" }}>FEATURED PARTNERS</span>
+                </div>
+                <h2 className="font-display text-2xl text-white" style={{ letterSpacing: "-0.02em" }}>
+                  Verified Claws
+                </h2>
+              </div>
+              <Link href="/marketplace">
+                <span
+                  className="flex items-center gap-1 text-sm font-mono-gmi cursor-pointer transition-colors"
+                  style={{ color: "#555" }}
+                  onMouseEnter={(e) => ((e.currentTarget as HTMLSpanElement).style.color = "#DDEA4D")}
+                  onMouseLeave={(e) => ((e.currentTarget as HTMLSpanElement).style.color = "#555")}
+                >
+                  View all <ChevronRight size={14} />
+                </span>
+              </Link>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {[
+                {
+                  id: "neoclaw",
+                  name: "NeoClaw",
+                  publisher: "Gen Digital",
+                  badge: "Verified",
+                  description: "Agentic AI assistant built on the Norton Trust Layer. Executes real-world tasks — booking, ordering, research — with built-in spending controls and full observability.",
+                  pricing: "Early Access",
+                  tags: ["Productivity", "Consumer", "Agentic"],
+                  accent: "#DDEA4D",
+                },
+                {
+                  id: "openhuman",
+                  name: "OpenHuman",
+                  publisher: "TinyHuman",
+                  badge: "Verified",
+                  description: "Open-source agentic desktop assistant. One subscription for AI models, search, webhooks, and 3rd-party APIs — no terminal required. Local knowledge base, local AI, deep desktop integrations.",
+                  pricing: "Free (Open Source)",
+                  tags: ["Desktop", "Open Source", "Agentic"],
+                  accent: "#7dd3fc",
+                },
+                {
+                  id: "topify-claw",
+                  name: "Topify Claw",
+                  publisher: "Topify",
+                  badge: "Verified",
+                  description: "Automates music promotion workflows — playlist pitching, fan engagement campaigns, and streaming analytics — for independent artists and labels.",
+                  pricing: "$79 / month",
+                  tags: ["Music", "Marketing", "Automation"],
+                  accent: "#f9a8d4",
+                },
+              ].map((partner) => (
+                <Link key={partner.id} href={`/marketplace/${partner.id}`}>
+                  <div
+                    className="p-5 cursor-pointer transition-all h-full flex flex-col"
+                    style={{ background: "#080808", border: "1px solid #1e1e1e" }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLDivElement).style.borderColor = partner.accent;
+                      (e.currentTarget as HTMLDivElement).style.background = "#0d0d0d";
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLDivElement).style.borderColor = "#1e1e1e";
+                      (e.currentTarget as HTMLDivElement).style.background = "#080808";
+                    }}
+                  >
+                    {/* Header */}
+                    <div className="flex items-start justify-between mb-3">
+                      <div>
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span
+                            className="text-xs font-mono-gmi px-1.5 py-0.5"
+                            style={{ background: "rgba(221,234,77,0.1)", color: "#DDEA4D", border: "1px solid rgba(221,234,77,0.2)" }}
+                          >
+                            ✓ {partner.badge}
+                          </span>
+                        </div>
+                        <div className="font-display text-base text-white mt-2" style={{ letterSpacing: "-0.01em" }}>
+                          {partner.name}
+                        </div>
+                        <div className="text-xs font-mono-gmi" style={{ color: "#555" }}>
+                          by {partner.publisher}
+                        </div>
+                      </div>
+                      <div
+                        className="text-xs font-bold px-2 py-1"
+                        style={{ background: "rgba(255,255,255,0.04)", color: partner.accent, border: `1px solid ${partner.accent}33` }}
+                      >
+                        {partner.pricing}
+                      </div>
+                    </div>
+
+                    {/* Description */}
+                    <p className="text-xs leading-relaxed flex-1 mb-4" style={{ color: "#666" }}>
+                      {partner.description}
+                    </p>
+
+                    {/* Tags */}
+                    <div className="flex flex-wrap gap-1.5 mb-4">
+                      {partner.tags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="text-xs font-mono-gmi px-2 py-0.5"
+                          style={{ border: "1px solid #222", color: "#555" }}
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+
+                    {/* CTA */}
+                    <div
+                      className="flex items-center gap-1 text-xs font-medium"
+                      style={{ color: partner.accent }}
+                    >
+                      View Claw <ChevronRight size={12} />
+                    </div>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
+        </section>
+
         {/* ── Category tabs + Claw grid ──────────────────────────────────────── */}
         <section className="py-12">
           <div className="container">
