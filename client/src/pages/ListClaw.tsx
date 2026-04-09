@@ -58,10 +58,10 @@ export default function ListClaw() {
   };
 
   const TYPE_DESCRIPTIONS: Record<TypeLabel, string> = {
-    Workflow: "Multi-step task orchestration (e.g., code review, document processing)",
-    Integration: "Third-party service connector (e.g., Zendesk, Slack, Salesforce)",
-    Model: "Model wrapper or fine-tuned model endpoint",
-    Enterprise: "Enterprise-grade Claw with SLA backing",
+    Developer: "Tools for developers — code review, testing, data pipelines, benchmarks",
+    Productivity: "Personal & team productivity — daily tasks, scheduling, research, writing",
+    Business: "Business process automation — support, HR, legal, finance, enterprise workflows",
+    Creative: "Creative & media — music, content creation, design, marketing automation",
   };
 
   if (submitted) {

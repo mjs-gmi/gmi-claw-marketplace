@@ -11,7 +11,7 @@ const ALL_CLAWS = [
   {
     id: "defi-arb",
     name: "DeFi Arbitrage Scout",
-    category: "DeFi",
+    category: "Developer",
     badge: "Featured",
     description:
       "Monitors cross-chain price differentials and executes arbitrage strategies autonomously across 12 DEXs.",
@@ -27,7 +27,7 @@ const ALL_CLAWS = [
   {
     id: "code-reviewer",
     name: "Code Review Agent",
-    category: "Developer Tools",
+    category: "Developer",
     badge: "Official",
     description:
       "Performs deep static analysis, security audits, and suggests refactors with line-by-line explanations.",
@@ -43,7 +43,7 @@ const ALL_CLAWS = [
   {
     id: "enterprise-rag",
     name: "Enterprise RAG Pipeline",
-    category: "Enterprise",
+    category: "Business",
     badge: "Featured",
     description:
       "Ingests, indexes, and queries internal knowledge bases with citation-backed, hallucination-resistant responses.",
@@ -59,7 +59,7 @@ const ALL_CLAWS = [
   {
     id: "smart-contract-auditor",
     name: "Smart Contract Auditor",
-    category: "DeFi",
+    category: "Developer",
     badge: "",
     description:
       "Audits Solidity and Rust smart contracts for reentrancy, overflow, and access control vulnerabilities.",
@@ -75,7 +75,7 @@ const ALL_CLAWS = [
   {
     id: "support-agent",
     name: "Customer Support Agent",
-    category: "Enterprise",
+    category: "Business",
     badge: "",
     description:
       "Handles Tier-1 support tickets autonomously, escalating complex issues with full context summaries.",
@@ -91,7 +91,7 @@ const ALL_CLAWS = [
   {
     id: "nft-monitor",
     name: "NFT Floor Monitor",
-    category: "DeFi",
+    category: "Developer",
     badge: "",
     description:
       "Tracks floor prices, whale movements, and rarity shifts across major NFT collections in real time.",
@@ -107,7 +107,7 @@ const ALL_CLAWS = [
   {
     id: "data-pipeline",
     name: "Data Pipeline Orchestrator",
-    category: "Developer Tools",
+    category: "Developer",
     badge: "",
     description:
       "Designs, schedules, and monitors ETL pipelines. Detects anomalies and auto-heals broken jobs.",
@@ -123,7 +123,7 @@ const ALL_CLAWS = [
   {
     id: "gaming-npc",
     name: "Adaptive NPC Brain",
-    category: "Gaming",
+    category: "Creative",
     badge: "",
     description:
       "Generates contextually aware NPC dialogue, behavior trees, and quest logic for game environments.",
@@ -139,7 +139,7 @@ const ALL_CLAWS = [
   {
     id: "doc-generator",
     name: "API Doc Generator",
-    category: "Developer Tools",
+    category: "Developer",
     badge: "",
     description:
       "Parses codebases and auto-generates OpenAPI specs, README files, and inline documentation.",
@@ -154,7 +154,7 @@ const ALL_CLAWS = [
   },
 ];
 
-const CATEGORIES = ["All", "DeFi", "Developer Tools", "Enterprise", "Gaming"];
+const CATEGORIES = ["All", "Developer", "Productivity", "Business", "Creative"];
 
 type Claw = (typeof ALL_CLAWS)[0];
 

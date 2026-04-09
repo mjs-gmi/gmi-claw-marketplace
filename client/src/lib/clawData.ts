@@ -1,5 +1,5 @@
 export type TrustTier = "Verified" | "Community";
-export type TypeLabel = "Workflow" | "Integration" | "Model" | "Enterprise";
+export type TypeLabel = "Developer" | "Productivity" | "Business" | "Creative";
 
 export interface Claw {
   id: string;
@@ -26,7 +26,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "Gen Digital",
     publisherContact: "ai@gendigital.com",
     trustTier: "Verified",
-    typeLabel: "Workflow",
+    typeLabel: "Productivity",
     description:
       "Agentic AI assistant built on the Norton Trust Layer. Executes real-world tasks — booking, ordering, research, writing — with built-in spending controls and full observability.",
     fullDescription:
@@ -48,7 +48,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "TinyHuman",
     publisherContact: "hello@tinyhuman.ai",
     trustTier: "Verified",
-    typeLabel: "Integration",
+    typeLabel: "Productivity",
     description:
       "Open-source agentic desktop assistant that integrates into your daily life. One subscription for AI models, search, webhooks, and 3rd-party APIs — no terminal required.",
     fullDescription:
@@ -71,13 +71,13 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "Topify",
     publisherContact: "dev@topify.ai",
     trustTier: "Verified",
-    typeLabel: "Integration",
+    typeLabel: "Creative",
     description:
       "Automates music promotion workflows — playlist pitching, fan engagement campaigns, and streaming analytics — for independent artists and labels.",
     fullDescription:
       "Topify Claw is a music-industry automation agent that handles the end-to-end promotion pipeline for independent artists and record labels. It identifies relevant Spotify playlist curators, drafts personalized pitch emails, tracks submission status, and follows up automatically. The analytics module aggregates streaming data across Spotify, Apple Music, and YouTube Music to surface actionable growth insights. Fan engagement features include automated social listening, comment moderation, and campaign performance reporting. Runs on GMI Cloud infrastructure with MaaS-powered natural language generation for all outreach copy.",
-    pricing: "$79 / month",
-    pricingDetail: "Monthly subscription. Includes up to 500 playlist pitches and 10,000 fan interactions per month.",
+    pricing: "Early Access",
+    pricingDetail: "Early Access. Contact dev@topify.ai to get started.",
     tags: ["Music", "Marketing", "Automation"],
     model: "Llama 3.1 70B",
     deployed: true,
@@ -93,7 +93,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "GMI Labs",
     publisherContact: "labs@gmi.ai",
     trustTier: "Verified",
-    typeLabel: "Workflow",
+    typeLabel: "Developer",
     description:
       "Performs deep static analysis, security audits, and suggests refactors with line-by-line explanations.",
     fullDescription:
@@ -114,7 +114,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "GMI Labs",
     publisherContact: "labs@gmi.ai",
     trustTier: "Verified",
-    typeLabel: "Enterprise",
+    typeLabel: "Business",
     description:
       "Ingests, indexes, and queries internal knowledge bases with citation-backed, hallucination-resistant responses.",
     fullDescription:
@@ -132,7 +132,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "GMI Labs",
     publisherContact: "labs@gmi.ai",
     trustTier: "Verified",
-    typeLabel: "Model",
+    typeLabel: "Developer",
     description:
       "Runs standardized benchmarks across GMI MaaS models to help you choose the right model for your use case.",
     fullDescription:
@@ -150,7 +150,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "0xSecurity",
     publisherContact: "hello@0xsecurity.io",
     trustTier: "Community",
-    typeLabel: "Workflow",
+    typeLabel: "Developer",
     description:
       "Audits Solidity and Rust smart contracts for reentrancy, overflow, and access control vulnerabilities.",
     fullDescription:
@@ -170,7 +170,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "EnterpriseAI",
     publisherContact: "support@enterprise-ai.com",
     trustTier: "Community",
-    typeLabel: "Integration",
+    typeLabel: "Business",
     description:
       "Handles Tier-1 support tickets autonomously, escalating complex issues with full context summaries.",
     fullDescription:
@@ -187,7 +187,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "DataOps AI",
     publisherContact: "team@dataops-ai.io",
     trustTier: "Community",
-    typeLabel: "Workflow",
+    typeLabel: "Developer",
     description:
       "Designs, schedules, and monitors ETL pipelines. Detects anomalies and auto-heals broken jobs.",
     fullDescription:
@@ -204,7 +204,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "DevTools AI",
     publisherContact: "hello@devtools-ai.dev",
     trustTier: "Community",
-    typeLabel: "Workflow",
+    typeLabel: "Developer",
     description:
       "Parses codebases and auto-generates OpenAPI specs, README files, and inline documentation.",
     fullDescription:
@@ -221,7 +221,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "LexAI",
     publisherContact: "contact@lexai.legal",
     trustTier: "Community",
-    typeLabel: "Enterprise",
+    typeLabel: "Business",
     description:
       "Extracts key clauses, flags risk terms, and summarizes obligations from legal contracts.",
     fullDescription:
@@ -238,7 +238,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "PeopleOps AI",
     publisherContact: "hello@peopleops-ai.com",
     trustTier: "Community",
-    typeLabel: "Integration",
+    typeLabel: "Business",
     description:
       "Guides new hires through onboarding workflows, answers policy questions, and collects required documents.",
     fullDescription:
@@ -251,4 +251,4 @@ export const ALL_CLAWS: Claw[] = [
   },
 ];
 
-export const TYPE_LABELS: TypeLabel[] = ["Workflow", "Integration", "Model", "Enterprise"];
+export const TYPE_LABELS: TypeLabel[] = ["Developer", "Productivity", "Business", "Creative"];

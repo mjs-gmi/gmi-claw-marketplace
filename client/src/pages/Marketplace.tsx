@@ -38,10 +38,10 @@ function TrustBadge({ tier }: { tier: Claw["trustTier"] }) {
 
 function TypeTag({ type }: { type: TypeLabel }) {
   const colors: Record<TypeLabel, string> = {
-    Workflow: "#7ec8ff",
-    Integration: "#c084fc",
-    Model: "#fb923c",
-    Enterprise: "#34d399",
+    Developer: "#7ec8ff",
+    Productivity: "#DDEA4D",
+    Business: "#34d399",
+    Creative: "#f9a8d4",
   };
   return (
     <span
