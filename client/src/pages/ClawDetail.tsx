@@ -8,8 +8,8 @@ import { toast } from "sonner";
 const TIER_CONFIG = {
   Verified: {
     color: "#DDEA4D",
-    bg: "rgba(221,234,77,0.08)",
-    border: "rgba(221,234,77,0.25)",
+    bg: "rgba(221,234,77,0.06)",
+    border: "rgba(221,234,77,0.2)",
     label: "Verified",
     tooltip: "Published by GMI or an official partner. Passed full security and functional review.",
   },
@@ -53,6 +53,10 @@ export default function ClawDetail() {
 
   const handleAccess = () => {
     if (!claw.deployed) return;
+    if (claw.id === "neoclaw") {
+      window.open("https://ai.gendigital.com/", "_blank", "noopener,noreferrer");
+      return;
+    }
     toast.success(`Connecting to ${claw.name}...`, {
       description: "You will be redirected to the Claw interface.",
     });
@@ -234,7 +238,7 @@ export default function ClawDetail() {
                   <button
                     onClick={handleAccess}
                     className="w-full py-3 font-bold text-sm flex items-center justify-center gap-2 transition-all"
-                    style={{ background: "#DDEA4D", color: "#000" }}
+                    style={{ background: "#DDEA4D", color: "#000000" }}
                     onMouseEnter={(e) => (e.currentTarget.style.background = "#e8f060")}
                     onMouseLeave={(e) => (e.currentTarget.style.background = "#DDEA4D")}
                   >

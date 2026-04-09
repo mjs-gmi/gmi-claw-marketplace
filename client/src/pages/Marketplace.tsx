@@ -1,5 +1,12 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   GMI CLAW MARKETPLACE — Marketplace Page
+   Design: Cyber Industrial Terminal
+   - Pure Black canvas, Cyber Lime (#DDEA4D) accent
+   - Geist Mono throughout, 1px solid borders, zero border-radius
+   - Left filter sidebar with explicit grid lines
+   ───────────────────────────────────────────────────────────────────────── */
+
 import { useState } from "react";
-import { Search, X, ArrowRight, CheckCircle, Plus } from "lucide-react";
 import { useLocation } from "wouter";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
@@ -7,35 +14,81 @@ import { ALL_CLAWS, TYPE_LABELS, type Claw, type TypeLabel } from "@/lib/clawDat
 
 const ALL_TYPES: (TypeLabel | "All")[] = ["All", ...TYPE_LABELS];
 
+// ─── Inline pixel icons ───────────────────────────────────────────────────────
+const IconSearch = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M10 2a8 8 0 1 0 4.906 14.32l4.387 4.387 1.414-1.414-4.387-4.387A8 8 0 0 0 10 2zm0 2a6 6 0 1 1 0 12A6 6 0 0 1 10 4z"/>
+  </svg>
+);
+const IconX = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/>
+  </svg>
+);
+const IconArrow = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8-8-8z"/>
+  </svg>
+);
+const IconCheck = () => (
+  <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+  </svg>
+);
+const IconPlus = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+  </svg>
+);
+const IconStar = () => (
+  <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+  </svg>
+);
+
+// ─── Trust Badge ──────────────────────────────────────────────────────────────
 function TrustBadge({ tier }: { tier: Claw["trustTier"] }) {
   if (tier === "Verified") {
     return (
       <span
-        className="inline-flex items-center gap-1 text-xs font-mono-gmi px-2 py-0.5"
         style={{
-          background: "rgba(221,234,77,0.12)",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "3px",
+          fontFamily: "'GeistMono', monospace",
+          fontSize: "0.5rem",
+          letterSpacing: "0.12em",
+          textTransform: "uppercase",
           color: "#DDEA4D",
-          border: "1px solid rgba(221,234,77,0.25)",
+          border: "1px solid rgba(212,255,0,0.25)",
+          padding: "1px 6px",
         }}
       >
-        <CheckCircle size={9} /> Verified
+        <IconCheck /> VERIFIED
       </span>
     );
   }
   return (
     <span
-      className="inline-flex items-center gap-1 text-xs font-mono-gmi px-2 py-0.5"
       style={{
-        background: "rgba(255,255,255,0.04)",
-        color: "#666",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "3px",
+        fontFamily: "'GeistMono', monospace",
+        fontSize: "0.5rem",
+        letterSpacing: "0.12em",
+        textTransform: "uppercase",
+        color: "#444444",
         border: "1px solid #2a2a2a",
+        padding: "1px 6px",
       }}
     >
-      Community
+      COMMUNITY
     </span>
   );
 }
 
+// ─── Type Tag ─────────────────────────────────────────────────────────────────
 function TypeTag({ type }: { type: TypeLabel }) {
   const colors: Record<TypeLabel, string> = {
     Developer: "#7ec8ff",
@@ -45,78 +98,155 @@ function TypeTag({ type }: { type: TypeLabel }) {
   };
   return (
     <span
-      className="text-xs font-mono-gmi px-2 py-0.5"
-      style={{ color: colors[type], border: `1px solid ${colors[type]}33`, background: `${colors[type]}0d` }}
+      style={{
+        fontFamily: "'GeistMono', monospace",
+        fontSize: "0.5rem",
+        letterSpacing: "0.12em",
+        textTransform: "uppercase",
+        color: colors[type],
+        border: `1px solid ${colors[type]}33`,
+        padding: "1px 6px",
+      }}
     >
       {type}
     </span>
   );
 }
 
+// ─── Claw Card ────────────────────────────────────────────────────────────────
 function ClawCard({ claw }: { claw: Claw }) {
   const [, setLocation] = useLocation();
+  const [hovered, setHovered] = useState(false);
+
   return (
     <div
-      className="group flex flex-col cursor-pointer"
       style={{
-        background: "#000",
-        border: "1px solid #1e1e1e",
-        padding: "1.25rem",
-        transition: "border-color 0.15s ease",
+        background: hovered ? "#0a0a0a" : "#000000",
+        border: `1px solid ${hovered ? "#DDEA4D" : "#222222"}`,
+        padding: "1.125rem",
+        cursor: "pointer",
+        transition: "border-color 0.1s ease, background 0.1s ease",
+        display: "flex",
+        flexDirection: "column",
       }}
       onClick={() => setLocation(`/marketplace/${claw.id}`)}
-      onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-      onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#1e1e1e")}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
-      {/* Trust + Type badges */}
-      <div className="flex items-center gap-2 mb-3 flex-wrap">
+      {/* Badges row */}
+      <div style={{ display: "flex", alignItems: "center", gap: "0.375rem", marginBottom: "0.625rem", flexWrap: "wrap" }}>
         <TrustBadge tier={claw.trustTier} />
         <TypeTag type={claw.typeLabel} />
       </div>
 
       {/* Title */}
       <h3
-        className="font-display text-base text-white mb-2 leading-snug group-hover:text-[#DDEA4D] transition-colors"
-        style={{ letterSpacing: "-0.01em" }}
+        style={{
+          fontFamily: "'GeistMono', monospace",
+          fontSize: "0.875rem",
+          fontWeight: 700,
+          color: hovered ? "#DDEA4D" : "#ffffff",
+          marginBottom: "0.5rem",
+          letterSpacing: "-0.01em",
+          lineHeight: 1.3,
+          transition: "color 0.1s ease",
+        }}
       >
         {claw.name}
       </h3>
 
       {/* Description */}
-      <p className="text-gray-500 text-sm leading-relaxed mb-4 flex-1 line-clamp-3">
+      <p
+        style={{
+          fontFamily: "'GeistMono', monospace",
+          fontSize: "0.6875rem",
+          color: "#555555",
+          lineHeight: 1.6,
+          marginBottom: "0.875rem",
+          flex: 1,
+          display: "-webkit-box",
+          WebkitLineClamp: 3,
+          WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+        }}
+      >
         {claw.description}
       </p>
 
       {/* Footer */}
       <div
-        className="flex items-center justify-between pt-3"
-        style={{ borderTop: "1px solid #1a1a1a" }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          paddingTop: "0.625rem",
+          borderTop: "1px solid #1a1a1a",
+        }}
       >
-        <div className="font-mono-gmi text-xs text-gray-600">
-          by <span style={{ color: "#888" }}>@{claw.publisher}</span>
-        </div>
-        <div className="flex items-center gap-2">
+        <span
+          style={{
+            fontFamily: "'GeistMono', monospace",
+            fontSize: "0.5625rem",
+            color: "#444444",
+            letterSpacing: "0.05em",
+          }}
+        >
+          @{claw.publisher}
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
           {claw.deployed ? (
-            <span className="font-mono-gmi text-xs" style={{ color: "#DDEA4D" }}>
+            <span
+              style={{
+                fontFamily: "'GeistMono', monospace",
+                fontSize: "0.5625rem",
+                color: "#DDEA4D",
+                letterSpacing: "0.08em",
+              }}
+            >
               {claw.pricing}
             </span>
           ) : (
-            <span className="font-mono-gmi text-xs text-gray-700">Unavailable</span>
+            <span
+              style={{
+                fontFamily: "'GeistMono', monospace",
+                fontSize: "0.5625rem",
+                color: "#333333",
+                letterSpacing: "0.08em",
+              }}
+            >
+              UNAVAILABLE
+            </span>
           )}
         </div>
       </div>
 
-      {/* View detail — appears on hover */}
-      <div
-        className="mt-3 w-full text-xs font-bold py-2 flex items-center justify-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity"
-        style={{ background: "#DDEA4D", color: "#000" }}
-      >
-        View Claw <ArrowRight size={12} />
-      </div>
+      {/* Hover CTA */}
+      {hovered && (
+        <div
+          style={{
+            marginTop: "0.625rem",
+            background: "#DDEA4D",
+            color: "#000000",
+            padding: "0.4375rem",
+            fontFamily: "'GeistMono', monospace",
+            fontSize: "0.5625rem",
+            fontWeight: 700,
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "0.375rem",
+          }}
+        >
+          VIEW CLAW <IconArrow />
+        </div>
+      )}
     </div>
   );
 }
 
+// ─── Page ─────────────────────────────────────────────────────────────────────
 export default function Marketplace() {
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
@@ -134,163 +264,376 @@ export default function Marketplace() {
   });
 
   return (
-    <div className="min-h-screen flex" style={{ background: "#000", color: "#fff" }}>
+    <div style={{ minHeight: "100vh", display: "flex", background: "#000000", color: "#ffffff" }}>
       <Navbar />
 
-      {/* Main content offset by sidebar */}
-      <div className="flex-1" style={{ marginLeft: "220px" }}>
+      <div style={{ flex: 1, marginLeft: "220px", display: "flex", flexDirection: "column" }}>
 
-      {/* Page header */}
-      <div className="pt-8 pb-8" style={{ borderBottom: "1px solid #1a1a1a" }}>
-        <div className="container">
+        {/* ── Page header bar ── */}
+        <div
+          style={{
+            borderBottom: "1px solid #222222",
+            background: "#000000",
+          }}
+        >
+          {/* Breadcrumb/label row */}
           <div
-            className="inline-block text-xs font-mono-gmi px-3 py-1 mb-4"
             style={{
-              background: "rgba(221,234,77,0.08)",
-              color: "#DDEA4D",
-              border: "1px solid rgba(221,234,77,0.2)",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.75rem",
+              padding: "0.625rem 2rem",
+              borderBottom: "1px solid #1a1a1a",
             }}
           >
-            The Marketplace
+            <span style={{ display: "inline-block", width: "5px", height: "5px", background: "#DDEA4D" }} />
+            <span
+              style={{
+                fontFamily: "'GeistMono', monospace",
+                fontSize: "0.5rem",
+                letterSpacing: "0.2em",
+                textTransform: "uppercase",
+                color: "#DDEA4D",
+              }}
+            >
+              CLAW MARKETPLACE
+            </span>
+            <span
+              style={{
+                fontFamily: "'GeistMono', monospace",
+                fontSize: "0.5rem",
+                letterSpacing: "0.1em",
+                color: "#333333",
+              }}
+            >
+              — {ALL_CLAWS.length} CLAWS AVAILABLE · GMI CLUSTER ENGINE
+            </span>
           </div>
-          <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
-            <div>
-              <h1 className="font-display text-4xl text-white mb-2" style={{ letterSpacing: "-0.03em" }}>
-                Claw Marketplace
-              </h1>
-              <p className="text-gray-500 text-sm font-mono-gmi">
-                {ALL_CLAWS.length} Claws available · Powered by GMI Cluster Engine
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
+
+          {/* Title + search row */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "1.25rem 2rem",
+            }}
+          >
+            <h1
+              style={{
+                fontFamily: "'Press Start 2P', monospace",
+                fontSize: "1rem",
+                fontWeight: 400,
+                color: "#ffffff",
+                letterSpacing: "0.02em",
+                lineHeight: 1.6,
+              }}
+            >
+              CLAW CATALOG
+            </h1>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
               {/* Search */}
-              <div className="relative">
-                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600" />
+              <div style={{ position: "relative" }}>
+                <span
+                  style={{
+                    position: "absolute",
+                    left: "0.625rem",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    color: "#444444",
+                    pointerEvents: "none",
+                  }}
+                >
+                  <IconSearch />
+                </span>
                 <input
                   type="text"
-                  placeholder="Search Claws..."
+                  placeholder="SEARCH CLAWS..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="w-64 text-white text-sm pl-9 pr-9 py-2.5 focus:outline-none font-mono-gmi placeholder-gray-700"
-                  style={{ background: "#0d0d0d", border: "1px solid #2a2a2a" }}
+                  style={{
+                    width: "220px",
+                    background: "#0a0a0a",
+                    border: "1px solid #2a2a2a",
+                    color: "#ffffff",
+                    fontFamily: "'GeistMono', monospace",
+                    fontSize: "0.6875rem",
+                    letterSpacing: "0.05em",
+                    padding: "0.5rem 2rem 0.5rem 2rem",
+                    outline: "none",
+                  }}
                   onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
                   onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
                 />
                 {search && (
-                  <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-600 hover:text-white">
-                    <X size={12} />
+                  <button
+                    onClick={() => setSearch("")}
+                    style={{
+                      position: "absolute",
+                      right: "0.5rem",
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      color: "#444444",
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                    }}
+                  >
+                    <IconX />
                   </button>
                 )}
               </div>
+
+              {/* Deploy CTA */}
               <button
                 onClick={() => setLocation("/deploy")}
-                className="btn-primary-lime px-4 py-2.5 text-xs font-bold flex items-center gap-1.5"
+                style={{
+                  background: "#DDEA4D",
+                  color: "#000000",
+                  border: "1px solid #DDEA4D",
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.6875rem",
+                  fontWeight: 700,
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  padding: "0.5rem 1rem",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.375rem",
+                }}
               >
-                <Plus size={12} /> Deploy a Claw
+                <IconPlus /> DEPLOY CLAW
               </button>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Main layout: left sidebar + grid */}
-      <div className="container py-10">
-        <div className="flex gap-10">
+        {/* ── Main layout: filter sidebar + grid ── */}
+        <div style={{ display: "flex", flex: 1 }}>
 
-          {/* Left sidebar */}
-          <aside className="w-48 shrink-0">
+          {/* Left filter sidebar */}
+          <aside
+            style={{
+              width: "180px",
+              flexShrink: 0,
+              borderRight: "1px solid #222222",
+              padding: "1.5rem 0",
+            }}
+          >
             {/* Type filter */}
-            <div className="mb-8">
-              <div className="gmi-label mb-3">Type</div>
-              <div className="space-y-0.5">
-                {ALL_TYPES.map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => setActiveType(type)}
-                    className="w-full text-left px-3 py-2 text-sm font-mono-gmi transition-colors"
-                    style={{
-                      background: activeType === type ? "rgba(221,234,77,0.08)" : "transparent",
-                      color: activeType === type ? "#DDEA4D" : "#666",
-                      borderLeft: `2px solid ${activeType === type ? "#DDEA4D" : "transparent"}`,
-                    }}
-                    onMouseEnter={(e) => { if (activeType !== type) (e.currentTarget as HTMLButtonElement).style.color = "#aaa"; }}
-                    onMouseLeave={(e) => { if (activeType !== type) (e.currentTarget as HTMLButtonElement).style.color = "#666"; }}
-                  >
-                    {type}
-                  </button>
-                ))}
+            <div style={{ marginBottom: "1.5rem" }}>
+              <div
+                style={{
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.5rem",
+                  letterSpacing: "0.2em",
+                  textTransform: "uppercase",
+                  color: "#DDEA4D",
+                  padding: "0 1rem 0.5rem",
+                  borderBottom: "1px solid #1a1a1a",
+                  marginBottom: "0.25rem",
+                }}
+              >
+                TYPE
               </div>
+              {ALL_TYPES.map((type) => (
+                <button
+                  key={type}
+                  onClick={() => setActiveType(type)}
+                  style={{
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "0.5rem 1rem",
+                    fontFamily: "'GeistMono', monospace",
+                    fontSize: "0.6875rem",
+                    letterSpacing: "0.05em",
+                    background: activeType === type ? "rgba(212,255,0,0.05)" : "transparent",
+                    color: activeType === type ? "#DDEA4D" : "#555555",
+                    borderTop: "none",
+                    borderRight: "none",
+                    borderBottom: "1px solid #111111",
+                    borderLeft: `2px solid ${activeType === type ? "#DDEA4D" : "transparent"}`,
+                    cursor: "pointer",
+                    transition: "color 0.1s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (activeType !== type) (e.currentTarget as HTMLButtonElement).style.color = "#aaaaaa";
+                  }}
+                  onMouseLeave={(e) => {
+                    if (activeType !== type) (e.currentTarget as HTMLButtonElement).style.color = "#555555";
+                  }}
+                >
+                  {type}
+                </button>
+              ))}
             </div>
 
             {/* Trust filter */}
-            <div className="mb-8">
-              <div className="gmi-label mb-3">Trust</div>
-              <div className="space-y-0.5">
-                {[
-                  { label: "All Claws", value: false },
-                  { label: "Verified Only", value: true },
-                ].map((opt) => (
-                  <button
-                    key={String(opt.value)}
-                    onClick={() => setVerifiedOnly(opt.value)}
-                    className="w-full text-left px-3 py-2 text-sm font-mono-gmi transition-colors"
-                    style={{
-                      background: verifiedOnly === opt.value ? "rgba(221,234,77,0.08)" : "transparent",
-                      color: verifiedOnly === opt.value ? "#DDEA4D" : "#666",
-                      borderLeft: `2px solid ${verifiedOnly === opt.value ? "#DDEA4D" : "transparent"}`,
-                    }}
-                    onMouseEnter={(e) => { if (verifiedOnly !== opt.value) (e.currentTarget as HTMLButtonElement).style.color = "#aaa"; }}
-                    onMouseLeave={(e) => { if (verifiedOnly !== opt.value) (e.currentTarget as HTMLButtonElement).style.color = "#666"; }}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
+            <div style={{ marginBottom: "1.5rem" }}>
+              <div
+                style={{
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.5rem",
+                  letterSpacing: "0.2em",
+                  textTransform: "uppercase",
+                  color: "#DDEA4D",
+                  padding: "0 1rem 0.5rem",
+                  borderBottom: "1px solid #1a1a1a",
+                  marginBottom: "0.25rem",
+                }}
+              >
+                TRUST
               </div>
+              {[
+                { label: "All Claws", value: false },
+                { label: "Verified Only", value: true },
+              ].map((opt) => (
+                <button
+                  key={String(opt.value)}
+                  onClick={() => setVerifiedOnly(opt.value)}
+                  style={{
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "0.5rem 1rem",
+                    fontFamily: "'GeistMono', monospace",
+                    fontSize: "0.6875rem",
+                    letterSpacing: "0.05em",
+                    background: verifiedOnly === opt.value ? "rgba(212,255,0,0.05)" : "transparent",
+                    color: verifiedOnly === opt.value ? "#DDEA4D" : "#555555",
+                    borderTop: "none",
+                    borderRight: "none",
+                    borderBottom: "1px solid #111111",
+                    borderLeft: `2px solid ${verifiedOnly === opt.value ? "#DDEA4D" : "transparent"}`,
+                    cursor: "pointer",
+                    transition: "color 0.1s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (verifiedOnly !== opt.value) (e.currentTarget as HTMLButtonElement).style.color = "#aaaaaa";
+                  }}
+                  onMouseLeave={(e) => {
+                    if (verifiedOnly !== opt.value) (e.currentTarget as HTMLButtonElement).style.color = "#555555";
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
 
             {/* Builder CTA */}
             <div
-              className="p-4 space-y-3"
-              style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}
+              style={{
+                margin: "0 0.75rem",
+                padding: "1rem",
+                background: "#0a0a0a",
+                border: "1px solid #1e1e1e",
+              }}
             >
-              <div className="font-display text-sm text-white">Build on GMI</div>
-              <p className="text-xs text-gray-600 font-mono-gmi leading-relaxed">
-                Deploy your Claw privately, then publish to the Marketplace.
+              <div
+                style={{
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.625rem",
+                  fontWeight: 700,
+                  color: "#ffffff",
+                  marginBottom: "0.5rem",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                BUILD ON GMI
+              </div>
+              <p
+                style={{
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.5625rem",
+                  color: "#444444",
+                  lineHeight: 1.6,
+                  marginBottom: "0.75rem",
+                  letterSpacing: "0.03em",
+                }}
+              >
+                Deploy privately, then publish to the Marketplace.
               </p>
               <button
                 onClick={() => setLocation("/deploy")}
-                className="w-full text-xs font-bold py-2 flex items-center justify-center gap-1"
-                style={{ background: "#DDEA4D", color: "#000" }}
+                style={{
+                  width: "100%",
+                  background: "#DDEA4D",
+                  color: "#000000",
+                  border: "none",
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.5625rem",
+                  fontWeight: 700,
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  padding: "0.4375rem",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "0.375rem",
+                }}
               >
-                Deploy a Claw <ArrowRight size={11} />
+                DEPLOY <IconArrow />
               </button>
             </div>
           </aside>
 
-          {/* Grid */}
-          <div className="flex-1">
+          {/* Claw grid */}
+          <div style={{ flex: 1, padding: "1.5rem 2rem" }}>
             {filtered.length === 0 ? (
-              <div className="text-center py-24">
-                <div className="font-mono-gmi text-sm text-gray-600 mb-2">// No Claws found</div>
-                <div className="text-xs text-gray-700">Try adjusting your search or filter</div>
+              <div
+                style={{
+                  textAlign: "center",
+                  padding: "5rem 0",
+                  fontFamily: "'GeistMono', monospace",
+                }}
+              >
+                <div style={{ fontSize: "0.75rem", color: "#444444", marginBottom: "0.5rem" }}>
+                  // NO CLAWS FOUND
+                </div>
+                <div style={{ fontSize: "0.625rem", color: "#333333", letterSpacing: "0.05em" }}>
+                  Try adjusting your search or filter
+                </div>
               </div>
             ) : (
               <>
-                <div className="font-mono-gmi text-xs text-gray-600 mb-6">
-                  {filtered.length} result{filtered.length !== 1 ? "s" : ""}
+                <div
+                  style={{
+                    fontFamily: "'GeistMono', monospace",
+                    fontSize: "0.5625rem",
+                    color: "#444444",
+                    letterSpacing: "0.1em",
+                    textTransform: "uppercase",
+                    marginBottom: "1rem",
+                    paddingBottom: "0.625rem",
+                    borderBottom: "1px solid #1a1a1a",
+                  }}
+                >
+                  {filtered.length} RESULT{filtered.length !== 1 ? "S" : ""} · SORTED BY RELEVANCE
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+                    gap: "1px",
+                    background: "#1a1a1a",
+                  }}
+                >
                   {filtered.map((claw) => (
-                    <ClawCard key={claw.id} claw={claw} />
+                    <div key={claw.id} style={{ background: "#000000" }}>
+                      <ClawCard claw={claw} />
+                    </div>
                   ))}
                 </div>
               </>
             )}
           </div>
         </div>
-      </div>
 
-      <Footer />
+        <Footer />
       </div>
     </div>
   );

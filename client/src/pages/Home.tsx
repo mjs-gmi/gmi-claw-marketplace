@@ -1,9 +1,64 @@
-import { Link } from "wouter";
+/* ─────────────────────────────────────────────────────────────────────────
+   GMI CLAW MARKETPLACE — Home Page
+   Design: Cyber Industrial Terminal
+   - Pure Black (#000) canvas, Cyber Lime (#DDEA4D) accent
+   - Geist Mono everywhere, Press Start 2P for display headings
+   - 1px solid borders, zero border-radius, explicit grid lines
+   - Bayer dithering background texture, point-cloud hero
+   ───────────────────────────────────────────────────────────────────────── */
+
 import { useState, useEffect, useRef } from "react";
-import { ArrowRight, Star, Download, Zap, Shield, Code2, ChevronRight, Copy, Check } from "lucide-react";
+import { Link } from "wouter";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import DeployModal from "@/components/DeployModal";
+
+// ─── Inline pixel icons ───────────────────────────────────────────────────────
+const IconArrow = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+    <path d="M2 6h7M6 3l3 3-3 3" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="square"/>
+  </svg>
+);
+const IconStar = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+  </svg>
+);
+const IconDeploy = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M12 2L8 8h3v8h2V8h3L12 2zM5 18h14v2H5v-2z"/>
+  </svg>
+);
+const IconCopy = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M16 1H4C3 1 2 2 2 3v14h2V3h12V1zm3 4H8C7 5 6 6 6 7v14c0 1 1 2 2 2h11c1 0 2-1 2-2V7c0-1-1-2-2-2zm0 16H8V7h11v14z"/>
+  </svg>
+);
+const IconCheck = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+  </svg>
+);
+const IconZap = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+  </svg>
+);
+const IconShield = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/>
+  </svg>
+);
+const IconCode = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M8 3L2 9l6 6 1.5-1.5L4.5 9 9.5 4.5 8 3zm8 0l-1.5 1.5L19.5 9l-5 4.5L16 15l6-6-6-6z"/>
+  </svg>
+);
+const IconChevron = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M9 18l6-6-6-6"/>
+  </svg>
+);
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 
@@ -191,84 +246,174 @@ function useTypewriter(text: string, speed = 55, startDelay = 300) {
 // ─── Claw Card ───────────────────────────────────────────────────────────────
 
 function ClawCard({ claw, onDeploy }: { claw: Claw; onDeploy: () => void }) {
+  const [hovered, setHovered] = useState(false);
+
+  const categoryColor: Record<string, string> = {
+    Developer: "#DDEA4D",
+    Productivity: "#7dd3fc",
+    Business: "#f9a8d4",
+    Creative: "#c4b5fd",
+  };
+  const catColor = categoryColor[claw.category] || "#555555";
+
   return (
     <div
-      className="group flex flex-col cursor-pointer"
+      className="flex flex-col cursor-pointer"
       style={{
-        background: "#000",
-        border: "1px solid #1e1e1e",
-        padding: "1.25rem",
-        transition: "border-color 0.15s ease",
+        background: hovered ? "#0a0a0a" : "#000000",
+        border: `1px solid ${hovered ? "#DDEA4D" : "#222222"}`,
+        padding: "1.125rem",
+        transition: "border-color 0.1s ease, background 0.1s ease",
+        position: "relative",
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-      onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#1e1e1e")}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
-      {claw.badge && (
-        <div className="mb-2.5">
+      {/* Top row: category tag + badge */}
+      <div className="flex items-center justify-between mb-2.5">
+        <span
+          style={{
+            fontSize: "0.5625rem",
+            letterSpacing: "0.15em",
+            textTransform: "uppercase",
+            color: catColor,
+            fontFamily: "'GeistMono', monospace",
+            border: `1px solid ${catColor}33`,
+            padding: "1px 6px",
+          }}
+        >
+          {claw.category}
+        </span>
+        {claw.badge && (
           <span
-            className="text-xs font-mono-gmi px-2 py-0.5"
             style={{
-              background:
-                claw.badge === "Official"
-                  ? "rgba(221,234,77,0.12)"
-                  : "rgba(100,180,255,0.1)",
+              fontSize: "0.5625rem",
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
               color: claw.badge === "Official" ? "#DDEA4D" : "#7ec8ff",
-              border: `1px solid ${
-                claw.badge === "Official"
-                  ? "rgba(221,234,77,0.25)"
-                  : "rgba(126,200,255,0.2)"
-              }`,
+              fontFamily: "'GeistMono', monospace",
+              border: `1px solid ${claw.badge === "Official" ? "#DDEA4D" : "#7ec8ff"}33`,
+              padding: "1px 6px",
             }}
           >
             {claw.badge}
           </span>
-        </div>
-      )}
+        )}
+      </div>
 
+      {/* Title */}
       <h3
-        className="font-display text-base text-white mb-2 leading-snug group-hover:text-[#DDEA4D] transition-colors"
-        style={{ letterSpacing: "-0.01em" }}
+        style={{
+          fontFamily: "'GeistMono', monospace",
+          fontSize: "0.875rem",
+          fontWeight: 700,
+          color: hovered ? "#DDEA4D" : "#ffffff",
+          marginBottom: "0.5rem",
+          letterSpacing: "-0.01em",
+          lineHeight: 1.3,
+          transition: "color 0.1s ease",
+        }}
       >
         {claw.name}
       </h3>
 
-      <p className="text-gray-500 text-sm leading-relaxed mb-4 flex-1 line-clamp-3">
+      {/* Description */}
+      <p
+        style={{
+          fontFamily: "'GeistMono', monospace",
+          fontSize: "0.6875rem",
+          color: "#555555",
+          lineHeight: 1.6,
+          marginBottom: "0.875rem",
+          flex: 1,
+          display: "-webkit-box",
+          WebkitLineClamp: 3,
+          WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+        }}
+      >
         {claw.description}
       </p>
 
+      {/* Meta row */}
       <div
-        className="flex items-center justify-between pt-3"
-        style={{ borderTop: "1px solid #1a1a1a" }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          paddingTop: "0.625rem",
+          borderTop: "1px solid #1a1a1a",
+        }}
       >
-        <div className="font-mono-gmi text-xs" style={{ color: "#555" }}>
+        <span
+          style={{
+            fontFamily: "'GeistMono', monospace",
+            fontSize: "0.625rem",
+            color: "#444444",
+            letterSpacing: "0.05em",
+          }}
+        >
           @{claw.author}
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 font-mono-gmi text-xs">
-            <Star size={10} fill="#DDEA4D" stroke="none" />
-            <span style={{ color: "#DDEA4D" }}>
-              {claw.stars >= 1000
-                ? `${(claw.stars / 1000).toFixed(1)}k`
-                : claw.stars}
-            </span>
-          </div>
-          <div className="flex items-center gap-1 font-mono-gmi text-xs text-gray-600">
-            <Download size={10} />
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "3px",
+              fontFamily: "'GeistMono', monospace",
+              fontSize: "0.625rem",
+              color: "#DDEA4D",
+            }}
+          >
+            <IconStar />
+            {claw.stars >= 1000 ? `${(claw.stars / 1000).toFixed(1)}k` : claw.stars}
+          </span>
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "3px",
+              fontFamily: "'GeistMono', monospace",
+              fontSize: "0.625rem",
+              color: "#444444",
+            }}
+          >
+            <IconDeploy />
             {claw.deployments}
-          </div>
+          </span>
         </div>
       </div>
 
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onDeploy();
-        }}
-        className="mt-3 w-full text-xs font-bold py-2 flex items-center justify-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity"
-        style={{ background: "#DDEA4D", color: "#000" }}
-      >
-        Deploy <ArrowRight size={12} />
-      </button>
+      {/* Hover deploy button */}
+      {hovered && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDeploy();
+          }}
+          style={{
+            marginTop: "0.625rem",
+            width: "100%",
+            background: "#DDEA4D",
+            color: "#000000",
+            border: "none",
+            padding: "0.4375rem",
+            fontFamily: "'GeistMono', monospace",
+            fontSize: "0.6875rem",
+            fontWeight: 700,
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "0.375rem",
+            cursor: "pointer",
+          }}
+        >
+          DEPLOY <IconArrow />
+        </button>
+      )}
     </div>
   );
 }
@@ -282,7 +427,7 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
 
   const { displayed: typedTitle, done: typingDone } = useTypewriter(
-    "GMI Claw Marketplace",
+    "GMI CLAW MARKETPLACE",
     60,
     400
   );
@@ -305,334 +450,521 @@ export default function Home() {
       : ALL_CLAWS.filter((c) => c.category === activeCategory);
 
   return (
-    <div
-      className="min-h-screen flex"
-      style={{ background: "#000", color: "#fff" }}
-    >
-      {/* Left sidebar nav */}
+    <div style={{ minHeight: "100vh", display: "flex", background: "#000000", color: "#ffffff" }}>
       <Navbar />
 
-      {/* Main content — offset by sidebar width */}
-      <div className="flex-1" style={{ marginLeft: "220px" }}>
+      {/* Main content — offset by sidebar */}
+      <div style={{ flex: 1, marginLeft: "220px" }}>
 
         {/* ── Hero ──────────────────────────────────────────────────────────── */}
         <section
-          className="pt-16 pb-14"
-          style={{ borderBottom: "1px solid #1a1a1a" }}
+          style={{
+            borderBottom: "1px solid #222222",
+            background: "#000000",
+            backgroundImage:
+              "radial-gradient(circle, rgba(221,234,77,0.08) 1px, transparent 1px), radial-gradient(circle, rgba(221,234,77,0.04) 1px, transparent 1px), url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Cpath d='M48 0 L48 48 M0 48 L48 48' stroke='%23DDEA4D' stroke-width='0.5' stroke-opacity='0.05'/%3E%3C/svg%3E\")",
+            backgroundSize: "32px 32px, 8px 8px, 48px 48px",
+            backgroundPosition: "0 0, 4px 4px, 0 0",
+          }}
         >
-          <div className="container">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 items-start">
-              {/* Left: text */}
-              <div>
-                <div
-                  className="inline-flex items-center gap-2 text-xs font-mono-gmi px-3 py-1 mb-6"
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 0,
+              borderBottom: "1px solid #222222",
+            }}
+          >
+            {/* Left hero column */}
+            <div
+              style={{
+                padding: "3.5rem 3rem",
+                borderRight: "1px solid #222222",
+              }}
+            >
+              {/* System label */}
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.5625rem",
+                  letterSpacing: "0.2em",
+                  textTransform: "uppercase",
+                  color: "#DDEA4D",
+                  border: "1px solid rgba(212,255,0,0.2)",
+                  padding: "3px 10px",
+                  marginBottom: "2rem",
+                }}
+              >
+                <span style={{ width: "5px", height: "5px", background: "#DDEA4D", display: "inline-block" }} />
+                SYS:ONLINE · PRE-RELEASE · APR 2026
+              </div>
+
+              {/* Typewriter title */}
+              <h1
+                style={{
+                  fontFamily: "'Press Start 2P', monospace",
+                  fontSize: "1.5rem",
+                  fontWeight: 400,
+                  color: "#DDEA4D",
+                  lineHeight: 1.8,
+                  letterSpacing: "0.02em",
+                  marginBottom: "1.5rem",
+                  minHeight: "5rem",
+                }}
+              >
+                {typedTitle}
+                <span
+                  aria-hidden="true"
                   style={{
-                    background: "rgba(221,234,77,0.08)",
-                    color: "#DDEA4D",
-                    border: "1px solid rgba(221,234,77,0.2)",
+                    display: "inline-block",
+                    width: "3px",
+                    height: "0.85em",
+                    background: "#DDEA4D",
+                    marginLeft: "8px",
+                    verticalAlign: "middle",
+                    animation: typingDone ? "blink 1s step-end infinite" : "none",
+                  }}
+                />
+              </h1>
+
+              <p
+                style={{
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.8125rem",
+                  color: "#555555",
+                  lineHeight: 1.7,
+                  marginBottom: "2rem",
+                  maxWidth: "380px",
+                }}
+              >
+                Browse, deploy, and monetize autonomous AI agents (Claws).
+                Versioned like npm. Powered by GMI Cloud infrastructure.
+              </p>
+
+              {/* CTAs */}
+              <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginBottom: "2.5rem" }}>
+                <Link href="/marketplace">
+                  <button
+                    className="btn-primary-lime"
+                    style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+                  >
+                    BROWSE CLAWS <IconArrow />
+                  </button>
+                </Link>
+                <Link href="/deploy">
+                  <button className="btn-outline-dashed">
+                    DEPLOY A CLAW
+                  </button>
+                </Link>
+              </div>
+
+              {/* Stats row */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: 0,
+                  border: "1px solid #222222",
+                }}
+              >
+                {[
+                  { n: "200+", label: "CLAWS" },
+                  { n: "12K+", label: "DEPLOYMENTS" },
+                  { n: "<30S", label: "DEPLOY TIME" },
+                ].map((s, i) => (
+                  <div
+                    key={s.label}
+                    style={{
+                      padding: "0.875rem 1rem",
+                      borderRight: i < 2 ? "1px solid #222222" : "none",
+                      textAlign: "center",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontFamily: "'Press Start 2P', monospace",
+                        fontSize: "0.875rem",
+                        color: "#DDEA4D",
+                        marginBottom: "0.25rem",
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {s.n}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: "'GeistMono', monospace",
+                        fontSize: "0.5rem",
+                        letterSpacing: "0.2em",
+                        color: "#333333",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      {s.label}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Right: Quick Start terminal */}
+            <div
+              style={{
+                padding: "3.5rem 3rem",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "center",
+              }}
+            >
+              {/* Terminal header */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "0.5rem 0.875rem",
+                  background: "#0d0d0d",
+                  border: "1px solid #2a2a2a",
+                  borderBottom: "1px solid #1a1a1a",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "0.375rem" }}>
+                  <span style={{ width: "8px", height: "8px", background: "#ff5f57", display: "inline-block" }} />
+                  <span style={{ width: "8px", height: "8px", background: "#febc2e", display: "inline-block" }} />
+                  <span style={{ width: "8px", height: "8px", background: "#28c840", display: "inline-block" }} />
+                </div>
+                <div
+                  style={{
+                    fontFamily: "'GeistMono', monospace",
+                    fontSize: "0.5625rem",
+                    letterSpacing: "0.15em",
+                    color: "#333333",
+                    textTransform: "uppercase",
                   }}
                 >
-                  <span
-                    className="w-1.5 h-1.5 rounded-full"
-                    style={{ background: "#DDEA4D" }}
-                  />
-                  Pre-Release · April 2026
+                  QUICK START
                 </div>
-
-                {/* Typewriter title */}
-                <h1
-                  className="font-display text-5xl md:text-6xl text-white mb-5"
-                  style={{ lineHeight: 1.05, letterSpacing: "-0.025em", minHeight: "4.5rem" }}
-                >
-                  <span style={{ color: "#DDEA4D" }}>{typedTitle}</span>
-                  {/* Blinking cursor — thin vertical bar, sized relative to font */}
-                  <span
-                    aria-hidden="true"
-                    style={{
-                      display: "inline-block",
-                      width: "2px",
-                      height: "0.75em",
-                      background: "#DDEA4D",
-                      marginLeft: "6px",
-                      marginBottom: "0.1em",
-                      verticalAlign: "text-bottom",
-                      animation: typingDone ? "blink 1s step-end infinite" : "none",
-                    }}
-                  />
-                </h1>
-
-                <p
-                  className="text-lg leading-relaxed mb-8 max-w-md"
-                  style={{ color: "#666" }}
-                >
-                  Browse, deploy, and monetize autonomous AI agents (Claws).
-                  Versioned like npm, powered by GMI Cloud infrastructure.
-                </p>
-
-                <div className="flex flex-wrap gap-3 mb-10">
-                  <Link href="/marketplace">
+                <div style={{ display: "flex", gap: "2px" }}>
+                  {(["npx", "curl", "pip"] as const).map((tab) => (
                     <button
-                      className="flex items-center gap-2 text-sm font-bold px-6 py-3"
-                      style={{ background: "#DDEA4D", color: "#000" }}
-                    >
-                      Browse Claws <ArrowRight size={15} />
-                    </button>
-                  </Link>
-                  <Link href="/deploy">
-                    <button
-                      className="flex items-center gap-2 text-sm font-medium px-6 py-3"
-                      style={{ border: "1px solid #2a2a2a", color: "#666" }}
-                      onMouseEnter={(e) => {
-                        (e.currentTarget as HTMLButtonElement).style.borderColor = "#DDEA4D";
-                        (e.currentTarget as HTMLButtonElement).style.color = "#DDEA4D";
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLButtonElement).style.borderColor = "#2a2a2a";
-                        (e.currentTarget as HTMLButtonElement).style.color = "#666";
+                      key={tab}
+                      onClick={() => setActiveTab(tab)}
+                      style={{
+                        fontFamily: "'GeistMono', monospace",
+                        fontSize: "0.5625rem",
+                        letterSpacing: "0.1em",
+                        padding: "2px 8px",
+                        border: "none",
+                        cursor: "pointer",
+                        textTransform: "uppercase",
+                        ...(activeTab === tab
+                          ? { background: "#DDEA4D", color: "#000000", fontWeight: 700 }
+                          : { background: "transparent", color: "#444444" }),
                       }}
                     >
-                      Deploy a Claw &lt;/&gt;
+                      {tab}
                     </button>
-                  </Link>
-                </div>
-
-                {/* Stats row */}
-                <div className="flex gap-8">
-                  {[
-                    { n: "200+", label: "Claws" },
-                    { n: "12k+", label: "Deployments" },
-                    { n: "< 30s", label: "Deploy time" },
-                  ].map((s) => (
-                    <div key={s.label}>
-                      <div
-                        className="font-display text-2xl"
-                        style={{ color: "#DDEA4D", letterSpacing: "-0.02em" }}
-                      >
-                        {s.n}
-                      </div>
-                      <div className="text-xs font-mono-gmi" style={{ color: "#555" }}>
-                        {s.label}
-                      </div>
-                    </div>
                   ))}
                 </div>
               </div>
 
-              {/* Right: Quick Start widget */}
+              {/* Terminal body */}
+              <div
+                style={{
+                  background: "#000000",
+                  border: "1px solid #2a2a2a",
+                  borderTop: "none",
+                  padding: "1.25rem",
+                  minHeight: "80px",
+                  position: "relative",
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.8125rem",
+                }}
+              >
+                <span style={{ color: "#333333" }}>$ </span>
+                <span style={{ color: "#DDEA4D" }}>{installCmd[activeTab]}</span>
+                <button
+                  onClick={handleCopy}
+                  style={{
+                    position: "absolute",
+                    top: "0.75rem",
+                    right: "0.75rem",
+                    background: "#111111",
+                    border: "1px solid #2a2a2a",
+                    color: copied ? "#DDEA4D" : "#444444",
+                    padding: "4px 6px",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                  }}
+                  title="Copy"
+                >
+                  {copied ? <IconCheck /> : <IconCopy />}
+                </button>
+              </div>
+
+              {/* Terminal footer */}
               <div
                 style={{
                   background: "#0a0a0a",
                   border: "1px solid #2a2a2a",
-                  padding: "1.5rem",
+                  borderTop: "none",
+                  padding: "0.75rem 1.25rem",
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.5625rem",
+                  color: "#333333",
+                  letterSpacing: "0.05em",
+                  marginBottom: "1.25rem",
                 }}
               >
-                <div className="flex items-center gap-2 mb-1">
-                  <span
-                    className="w-1.5 h-1.5 rounded-full"
-                    style={{ background: "#DDEA4D" }}
-                  />
-                  <div className="text-sm text-white font-semibold tracking-tight">
-                    Quick Start
-                  </div>
-                </div>
-                <div
-                  className="text-xs font-mono-gmi mb-5"
-                  style={{ color: "#555" }}
-                >
-                  Spin up OpenClaw on GMI Cloud — compute + models included.
-                </div>
+                Works on macOS, Linux, and Windows. No API keys or config needed.
+              </div>
 
-                {/* macOS dots + tab switcher row */}
-                <div
-                  className="flex items-center justify-between px-3 py-2 mb-0"
-                  style={{ background: "#111", borderBottom: "1px solid #1a1a1a" }}
-                >
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#ff5f57" }} />
-                    <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#febc2e" }} />
-                    <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#28c840" }} />
-                  </div>
-                  <div className="flex gap-1">
-                    {(["npx", "curl", "pip"] as const).map((tab) => (
-                      <button
-                        key={tab}
-                        onClick={() => setActiveTab(tab)}
-                        className="text-xs font-mono-gmi px-2.5 py-1 transition-colors"
-                        style={
-                          activeTab === tab
-                            ? { background: "#DDEA4D", color: "#000", fontWeight: 700 }
-                            : { color: "#555" }
-                        }
-                      >
-                        {tab}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Terminal command block */}
-                <div
-                  className="relative font-mono-gmi text-sm p-4"
-                  style={{
-                    background: "#000",
-                    border: "1px solid #1a1a1a",
-                    borderTop: "none",
-                    minHeight: "72px",
-                  }}
-                >
-                  <span style={{ color: "#555" }}>$ </span>
-                  <span style={{ color: "#DDEA4D" }}>{installCmd[activeTab]}</span>
-                  <button
-                    onClick={handleCopy}
-                    className="absolute top-3 right-3 p-1.5 transition-colors"
+              {/* Feature chips */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: 0,
+                  border: "1px solid #1a1a1a",
+                }}
+              >
+                {[
+                  { icon: <IconZap />, label: "GMI COMPUTE" },
+                  { icon: <IconShield />, label: "200+ MODELS" },
+                  { icon: <IconCode />, label: "OPENCLAW RT" },
+                ].map((f, i) => (
+                  <div
+                    key={f.label}
                     style={{
-                      background: "#111",
-                      border: "1px solid #222",
-                      color: copied ? "#DDEA4D" : "#555",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.375rem",
+                      padding: "0.625rem 0.75rem",
+                      borderRight: i < 2 ? "1px solid #1a1a1a" : "none",
+                      fontFamily: "'GeistMono', monospace",
+                      fontSize: "0.5rem",
+                      letterSpacing: "0.12em",
+                      color: "#444444",
+                      textTransform: "uppercase",
                     }}
-                    title="Copy"
                   >
-                    {copied ? <Check size={12} /> : <Copy size={12} />}
-                  </button>
-                </div>
-
-                <div
-                  className="text-xs font-mono-gmi mt-3 mb-5"
-                  style={{ color: "#444" }}
-                >
-                  Works on macOS, Linux, and Windows. No API keys or config needed.
-                </div>
-
-                <div className="grid grid-cols-3 gap-3">
-                  {[
-                    { icon: <Zap size={12} />, label: "GMI compute" },
-                    { icon: <Shield size={12} />, label: "200+ models" },
-                    { icon: <Code2 size={12} />, label: "OpenClaw runtime" },
-                  ].map((f) => (
-                    <div
-                      key={f.label}
-                      className="flex items-center gap-1.5 font-mono-gmi text-xs"
-                      style={{ color: "#555" }}
-                    >
-                      <span style={{ color: "#DDEA4D" }}>{f.icon}</span>
-                      {f.label}
-                    </div>
-                  ))}
-                </div>
+                    <span style={{ color: "#DDEA4D" }}>{f.icon}</span>
+                    {f.label}
+                  </div>
+                ))}
               </div>
             </div>
           </div>
         </section>
 
-        {/* ── Featured Partners ──────────────────────────────────────────── */}
-        <section className="py-12" style={{ borderTop: "1px solid #1a1a1a" }}>
-          <div className="container">
-            <div className="flex items-center justify-between mb-8">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#DDEA4D" }} />
-                  <span className="text-xs font-mono-gmi" style={{ color: "#DDEA4D" }}>FEATURED PARTNERS</span>
-                </div>
-                <h2 className="font-display text-2xl text-white" style={{ letterSpacing: "-0.02em" }}>
-                  Verified Claws
-                </h2>
-              </div>
-              <Link href="/marketplace">
-                <span
-                  className="flex items-center gap-1 text-sm font-mono-gmi cursor-pointer transition-colors"
-                  style={{ color: "#555" }}
-                  onMouseEnter={(e) => ((e.currentTarget as HTMLSpanElement).style.color = "#DDEA4D")}
-                  onMouseLeave={(e) => ((e.currentTarget as HTMLSpanElement).style.color = "#555")}
-                >
-                  View all <ChevronRight size={14} />
-                </span>
-              </Link>
+        {/* ── Featured Partners ──────────────────────────────────────────────── */}
+        <section style={{ borderBottom: "1px solid #222222" }}>
+          {/* Section header bar */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "0.75rem 3rem",
+              borderBottom: "1px solid #222222",
+              background: "#000000",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+              <span
+                style={{
+                  display: "inline-block",
+                  width: "5px",
+                  height: "5px",
+                  background: "#DDEA4D",
+                }}
+              />
+              <span
+                style={{
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.5625rem",
+                  letterSpacing: "0.2em",
+                  textTransform: "uppercase",
+                  color: "#DDEA4D",
+                }}
+              >
+                FEATURED PARTNERS
+              </span>
+              <span
+                style={{
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.5625rem",
+                  letterSpacing: "0.1em",
+                  color: "#333333",
+                }}
+              >
+                — VERIFIED CLAWS
+              </span>
             </div>
+            <Link href="/marketplace">
+              <span
+                style={{
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.625rem",
+                  letterSpacing: "0.1em",
+                  color: "#444444",
+                  cursor: "pointer",
+                  textTransform: "uppercase",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                }}
+              >
+                VIEW ALL <IconChevron />
+              </span>
+            </Link>
+          </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {[
-                {
-                  id: "neoclaw",
-                  name: "NeoClaw",
-                  publisher: "Gen Digital",
-                  badge: "Verified",
-                  description: "Agentic AI assistant built on the Norton Trust Layer. Executes real-world tasks — booking, ordering, research — with built-in spending controls and full observability.",
-                  pricing: "Early Access",
-                  tags: ["Productivity", "Consumer", "Agentic"],
-                  accent: "#DDEA4D",
-                },
-                {
-                  id: "openhuman",
-                  name: "OpenHuman",
-                  publisher: "TinyHuman",
-                  badge: "Verified",
-                  description: "Open-source agentic desktop assistant. One subscription for AI models, search, webhooks, and 3rd-party APIs — no terminal required. Local knowledge base, local AI, deep desktop integrations.",
-                  pricing: "Early Access",
-                  tags: ["Desktop", "Open Source", "Agentic"],
-                  accent: "#7dd3fc",
-                },
-                {
-                  id: "topify-claw",
-                  name: "Topify Claw",
-                  publisher: "Topify",
-                  badge: "Verified",
-                  description: "Automates music promotion workflows — playlist pitching, fan engagement campaigns, and streaming analytics — for independent artists and labels.",
-                  pricing: "$79 / month",
-                  tags: ["Music", "Marketing", "Automation"],
-                  accent: "#f9a8d4",
-                },
-              ].map((partner) => (
+          {/* Partner cards — horizontal 3-column grid with dividers */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, 1fr)",
+              gap: 0,
+            }}
+          >
+            {[
+              {
+                id: "neoclaw",
+                name: "NeoClaw",
+                publisher: "Gen Digital",
+                description: "Agentic AI assistant built on the Norton Trust Layer. Executes real-world tasks — booking, ordering, research — with built-in spending controls and full observability.",
+                pricing: "Early Access",
+                tags: ["Productivity", "Consumer", "Agentic"],
+                accent: "#DDEA4D",
+              },
+              {
+                id: "openhuman",
+                name: "OpenHuman",
+                publisher: "TinyHuman",
+                description: "Open-source agentic desktop assistant. One subscription for AI models, search, webhooks, and 3rd-party APIs — no terminal required. Local knowledge base, deep desktop integrations.",
+                pricing: "Early Access",
+                tags: ["Desktop", "Open Source", "Agentic"],
+                accent: "#7dd3fc",
+              },
+              {
+                id: "topify-claw",
+                name: "Topify Claw",
+                publisher: "Topify",
+                description: "Automates music promotion workflows — playlist pitching, fan engagement campaigns, and streaming analytics — for independent artists and labels.",
+                 pricing: "Early Access",
+                tags: ["Music", "Marketing", "Automation"],
+                accent: "#f9a8d4",
+              },
+            ].map((partner, i) => {
+              const [hov, setHov] = useState(false);
+              return (
                 <Link key={partner.id} href={`/marketplace/${partner.id}`}>
                   <div
-                    className="p-5 cursor-pointer transition-all h-full flex flex-col"
-                    style={{ background: "#080808", border: "1px solid #1e1e1e" }}
-                    onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLDivElement).style.borderColor = partner.accent;
-                      (e.currentTarget as HTMLDivElement).style.background = "#0d0d0d";
+                    style={{
+                      padding: "1.75rem 2rem",
+                      borderRight: i < 2 ? "1px solid #222222" : "none",
+                      background: hov ? "#080808" : "#000000",
+                      borderBottom: hov ? `2px solid ${partner.accent}` : "2px solid transparent",
+                      cursor: "pointer",
+                      transition: "background 0.1s ease, border-bottom-color 0.1s ease",
+                      display: "flex",
+                      flexDirection: "column",
+                      minHeight: "220px",
                     }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLDivElement).style.borderColor = "#1e1e1e";
-                      (e.currentTarget as HTMLDivElement).style.background = "#080808";
-                    }}
+                    onMouseEnter={() => setHov(true)}
+                    onMouseLeave={() => setHov(false)}
                   >
                     {/* Header */}
-                    <div className="flex items-start justify-between mb-3">
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: "0.875rem" }}>
                       <div>
-                        <div className="flex items-center gap-2 mb-0.5">
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.375rem" }}>
                           <span
-                            className="text-xs font-mono-gmi px-1.5 py-0.5"
-                            style={{ background: "rgba(221,234,77,0.1)", color: "#DDEA4D", border: "1px solid rgba(221,234,77,0.2)" }}
+                            style={{
+                              fontFamily: "'GeistMono', monospace",
+                              fontSize: "0.5rem",
+                              letterSpacing: "0.15em",
+                              textTransform: "uppercase",
+                              color: "#DDEA4D",
+                              border: "1px solid rgba(221,234,77,0.2)",
+                              padding: "1px 6px",
+                            }}
                           >
-                            ✓ {partner.badge}
+                            ✓ VERIFIED
                           </span>
                         </div>
-                        <div className="font-display text-base text-white mt-2" style={{ letterSpacing: "-0.01em" }}>
+                        <div
+                          style={{
+                            fontFamily: "'GeistMono', monospace",
+                            fontSize: "0.9375rem",
+                            fontWeight: 700,
+                            color: hov ? partner.accent : "#ffffff",
+                            letterSpacing: "-0.01em",
+                            transition: "color 0.1s ease",
+                          }}
+                        >
                           {partner.name}
                         </div>
-                        <div className="text-xs font-mono-gmi" style={{ color: "#555" }}>
+                        <div
+                          style={{
+                            fontFamily: "'GeistMono', monospace",
+                            fontSize: "0.5625rem",
+                            color: "#444444",
+                            letterSpacing: "0.05em",
+                            marginTop: "2px",
+                          }}
+                        >
                           by {partner.publisher}
                         </div>
                       </div>
                       <div
-                        className="text-xs font-bold px-2 py-1"
-                        style={{ background: "rgba(255,255,255,0.04)", color: partner.accent, border: `1px solid ${partner.accent}33` }}
+                        style={{
+                          fontFamily: "'GeistMono', monospace",
+                          fontSize: "0.5625rem",
+                          letterSpacing: "0.1em",
+                          textTransform: "uppercase",
+                          color: partner.accent,
+                          border: `1px solid ${partner.accent}33`,
+                          padding: "3px 8px",
+                          whiteSpace: "nowrap",
+                        }}
                       >
                         {partner.pricing}
                       </div>
                     </div>
 
                     {/* Description */}
-                    <p className="text-xs leading-relaxed flex-1 mb-4" style={{ color: "#666" }}>
+                    <p
+                      style={{
+                        fontFamily: "'GeistMono', monospace",
+                        fontSize: "0.6875rem",
+                        color: "#555555",
+                        lineHeight: 1.65,
+                        flex: 1,
+                        marginBottom: "1rem",
+                      }}
+                    >
                       {partner.description}
                     </p>
 
                     {/* Tags */}
-                    <div className="flex flex-wrap gap-1.5 mb-4">
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem", marginBottom: "0.875rem" }}>
                       {partner.tags.map((tag) => (
                         <span
                           key={tag}
-                          className="text-xs font-mono-gmi px-2 py-0.5"
-                          style={{ border: "1px solid #222", color: "#555" }}
+                          style={{
+                            fontFamily: "'GeistMono', monospace",
+                            fontSize: "0.5rem",
+                            letterSpacing: "0.1em",
+                            textTransform: "uppercase",
+                            color: "#444444",
+                            border: "1px solid #1e1e1e",
+                            padding: "2px 7px",
+                          }}
                         >
                           {tag}
                         </span>
@@ -641,155 +973,230 @@ export default function Home() {
 
                     {/* CTA */}
                     <div
-                      className="flex items-center gap-1 text-xs font-medium"
-                      style={{ color: partner.accent }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        fontFamily: "'GeistMono', monospace",
+                        fontSize: "0.5625rem",
+                        letterSpacing: "0.12em",
+                        textTransform: "uppercase",
+                        color: partner.accent,
+                      }}
                     >
-                      View Claw <ChevronRight size={12} />
+                      VIEW CLAW <IconChevron />
                     </div>
                   </div>
                 </Link>
-              ))}
-            </div>
+              );
+            })}
           </div>
         </section>
 
-        {/* ── Category tabs + Claw grid ──────────────────────────────────────── */}
-        <section className="py-12">
-          <div className="container">
-            <div className="flex items-center justify-between mb-6">
-              <h2
-                className="font-display text-2xl text-white"
-                style={{ letterSpacing: "-0.02em" }}
+        {/* ── Explore Claws ──────────────────────────────────────────────────── */}
+        <section style={{ borderBottom: "1px solid #222222" }}>
+          {/* Section header */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "0.75rem 3rem",
+              borderBottom: "1px solid #222222",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+              <span style={{ display: "inline-block", width: "5px", height: "5px", background: "#DDEA4D" }} />
+              <span
+                style={{
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.5625rem",
+                  letterSpacing: "0.2em",
+                  textTransform: "uppercase",
+                  color: "#DDEA4D",
+                }}
               >
-                Explore Claws
-              </h2>
-              <Link href="/marketplace">
-                <span
-                  className="flex items-center gap-1 text-sm font-mono-gmi cursor-pointer transition-colors"
-                  style={{ color: "#555" }}
-                  onMouseEnter={(e) =>
-                    ((e.currentTarget as HTMLSpanElement).style.color = "#DDEA4D")
-                  }
-                  onMouseLeave={(e) =>
-                    ((e.currentTarget as HTMLSpanElement).style.color = "#555")
-                  }
-                >
-                  View all <ChevronRight size={14} />
-                </span>
-              </Link>
+                EXPLORE CLAWS
+              </span>
             </div>
+            <Link href="/marketplace">
+              <span
+                style={{
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.625rem",
+                  letterSpacing: "0.1em",
+                  color: "#444444",
+                  cursor: "pointer",
+                  textTransform: "uppercase",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                }}
+              >
+                VIEW ALL <IconChevron />
+              </span>
+            </Link>
+          </div>
 
-            <div
-              className="flex gap-1.5 flex-wrap mb-8 pb-6"
-              style={{ borderBottom: "1px solid #1a1a1a" }}
-            >
-              {CATEGORIES.map((cat) => (
-                <button
-                  key={cat}
-                  onClick={() => setActiveCategory(cat)}
-                  className="text-xs px-4 py-2 font-medium transition-colors"
-                  style={
-                    activeCategory === cat
-                      ? { background: "#DDEA4D", color: "#000", fontWeight: 700 }
-                      : { color: "#666", border: "1px solid #2a2a2a" }
-                  }
-                  onMouseEnter={(e) => {
-                    if (activeCategory !== cat) {
-                      (e.currentTarget as HTMLButtonElement).style.color = "#fff";
-                      (e.currentTarget as HTMLButtonElement).style.borderColor = "#444";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (activeCategory !== cat) {
-                      (e.currentTarget as HTMLButtonElement).style.color = "#666";
-                      (e.currentTarget as HTMLButtonElement).style.borderColor = "#2a2a2a";
-                    }
-                  }}
-                >
-                  {cat}
-                </button>
-              ))}
-            </div>
+          {/* Category filter tabs */}
+          <div
+            style={{
+              display: "flex",
+              gap: 0,
+              borderBottom: "1px solid #222222",
+              padding: "0 3rem",
+            }}
+          >
+            {CATEGORIES.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => setActiveCategory(cat)}
+                style={{
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.6875rem",
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  padding: "0.625rem 1.125rem",
+                  border: "none",
+                    borderBottom: activeCategory === cat ? "2px solid #DDEA4D" : "2px solid transparent",
+                    background: "transparent",
+                    color: activeCategory === cat ? "#DDEA4D" : "#444444",
+                  cursor: "pointer",
+                  marginBottom: "-1px",
+                  transition: "color 0.1s ease",
+                }}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filtered.map((claw) => (
-                <ClawCard
-                  key={claw.id}
-                  claw={claw}
-                  onDeploy={() => setDeployTarget(claw)}
-                />
-              ))}
-            </div>
+          {/* Claw grid */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, 1fr)",
+              gap: 0,
+              padding: "0 3rem",
+              paddingTop: "1.5rem",
+              paddingBottom: "1.5rem",
+            }}
+          >
+            {filtered.map((claw, i) => (
+              <div
+                key={claw.id}
+                style={{
+                  borderRight: (i + 1) % 3 !== 0 ? "1px solid #1a1a1a" : "none",
+                  borderBottom: "1px solid #1a1a1a",
+                  padding: "0.125rem",
+                }}
+              >
+                <ClawCard claw={claw} onDeploy={() => setDeployTarget(claw)} />
+              </div>
+            ))}
+          </div>
 
-            <div className="text-center mt-10">
-              <Link href="/marketplace">
-                <button
-                  className="text-sm font-medium px-8 py-3 transition-colors"
-                  style={{ border: "1px solid #2a2a2a", color: "#666" }}
-                  onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.borderColor = "#DDEA4D";
-                    (e.currentTarget as HTMLButtonElement).style.color = "#DDEA4D";
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.borderColor = "#2a2a2a";
-                    (e.currentTarget as HTMLButtonElement).style.color = "#666";
-                  }}
-                >
-                  View all {ALL_CLAWS.length} Claws →
-                </button>
-              </Link>
-            </div>
+          {/* View all button */}
+          <div
+            style={{
+              padding: "1.5rem 3rem",
+              borderTop: "1px solid #1a1a1a",
+              display: "flex",
+              justifyContent: "center",
+            }}
+          >
+            <Link href="/marketplace">
+              <button className="btn-outline-dashed">
+                VIEW ALL {ALL_CLAWS.length} CLAWS →
+              </button>
+            </Link>
           </div>
         </section>
 
-        {/* ── Bottom CTA ────────────────────────────────────────────────────── */}
-        <section
-          className="py-16"
-          style={{ borderTop: "1px solid #1a1a1a" }}
-        >
-          <div className="container">
-            <div
-              className="grid grid-cols-1 md:grid-cols-2 gap-px"
-              style={{ background: "#1a1a1a" }}
-            >
-              {[
-                {
-                  title: "For Enterprises",
-                  desc: "Deploy pre-built Claws in under 30 seconds. No ML team required. Pay only for what you use.",
-                  cta: "Explore Marketplace",
-                  href: "/marketplace",
-                },
-                {
-                  title: "For Builders",
-                  desc: "Package your agent logic as a Claw, publish to the marketplace, and earn from every deployment.",
-                  cta: "Start Building",
-                  href: "/dashboard",
-                },
-              ].map((item) => (
-                <div key={item.title} className="p-10" style={{ background: "#000" }}>
-                  <h3
-                    className="font-display text-2xl text-white mb-3"
-                    style={{ letterSpacing: "-0.02em" }}
-                  >
-                    {item.title}
-                  </h3>
-                  <p
-                    className="text-sm leading-relaxed mb-6 max-w-sm"
-                    style={{ color: "#555" }}
-                  >
-                    {item.desc}
-                  </p>
-                  <Link href={item.href}>
-                    <button
-                      className="flex items-center gap-2 text-sm font-bold px-5 py-2.5"
-                      style={{ background: "#DDEA4D", color: "#000" }}
-                    >
-                      {item.cta} <ArrowRight size={14} />
-                    </button>
-                  </Link>
+        {/* ── Bottom CTA split ──────────────────────────────────────────────── */}
+        <section style={{ borderBottom: "1px solid #222222" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 0,
+            }}
+          >
+            {[
+              {
+                label: "FOR ENTERPRISES",
+                title: "Deploy in\n30 Seconds",
+                desc: "Deploy pre-built Claws in under 30 seconds. No ML team required. Pay only for what you use.",
+                cta: "EXPLORE MARKETPLACE",
+                href: "/marketplace",
+              },
+              {
+                label: "FOR BUILDERS",
+                title: "Build &\nMonetize",
+                desc: "Package your agent logic as a Claw, publish to the marketplace, and earn from every deployment.",
+                cta: "START BUILDING",
+                href: "/dashboard",
+              },
+            ].map((item, i) => (
+              <div
+                key={item.label}
+                style={{
+                  padding: "3rem",
+                  borderRight: i === 0 ? "1px solid #222222" : "none",
+                  background: "#000000",
+                }}
+              >
+                <div
+                  style={{
+                  fontFamily: "'GeistMono', monospace",
+                  fontSize: "0.5rem",
+                  letterSpacing: "0.25em",
+                  textTransform: "uppercase",
+                  color: "#DDEA4D",
+                    marginBottom: "1rem",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.5rem",
+                  }}
+                >
+                  <span style={{ display: "inline-block", width: "4px", height: "4px", background: "#DDEA4D" }} />
+                  {item.label}
                 </div>
-              ))}
-            </div>
+                <h3
+                  style={{
+                    fontFamily: "'Press Start 2P', monospace",
+                    fontSize: "1rem",
+                    fontWeight: 400,
+                    color: "#ffffff",
+                    lineHeight: 1.8,
+                    marginBottom: "1rem",
+                    whiteSpace: "pre-line",
+                  }}
+                >
+                  {item.title}
+                </h3>
+                <p
+                  style={{
+                    fontFamily: "'GeistMono', monospace",
+                    fontSize: "0.75rem",
+                    color: "#555555",
+                    lineHeight: 1.7,
+                    marginBottom: "1.75rem",
+                    maxWidth: "340px",
+                  }}
+                >
+                  {item.desc}
+                </p>
+                <Link href={item.href}>
+                  <button
+                    className="btn-primary-lime"
+                    style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+                  >
+                    {item.cta} <IconArrow />
+                  </button>
+                </Link>
+              </div>
+            ))}
           </div>
         </section>
 
@@ -799,14 +1206,6 @@ export default function Home() {
       {deployTarget && (
         <DeployModal claw={deployTarget} onClose={() => setDeployTarget(null)} />
       )}
-
-      {/* Blinking cursor keyframe */}
-      <style>{`
-        @keyframes blink {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0; }
-        }
-      `}</style>
     </div>
   );
 }
