@@ -118,8 +118,6 @@ export default function Navbar() {
         </div>
       </aside>
 
-      {/* Spacer so page content doesn't hide behind sidebar */}
-      <div style={{ marginLeft: "220px" }} />
     </>
   );
 }
