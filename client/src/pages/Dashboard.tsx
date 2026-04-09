@@ -1,7 +1,8 @@
 import { useState } from "react";
 import {
   Activity, Zap, DollarSign, Clock, BarChart2, Terminal,
-  TrendingUp, Server, RefreshCw, Plus, ArrowRight, CheckCircle, AlertTriangle
+  TrendingUp, Server, RefreshCw, Plus, ArrowRight, CheckCircle, AlertTriangle,
+  Copy, Globe, Lock, FileText, Send, ExternalLink
 } from "lucide-react";
 import { useLocation } from "wouter";
 import Navbar from "@/components/Navbar";
@@ -10,11 +11,60 @@ import { toast } from "sonner";
 
 // ─── Mock data ────────────────────────────────────────────────────────────────
 
-const DEPLOYMENTS = [
-  { id: "dep-001", name: "Contract Review Claw", status: "running", tier: "Option C", calls: "12,847", latency: "340ms", cost: "$184", model: "Qwen2.5 72B" },
-  { id: "dep-002", name: "Code Review Agent", status: "running", tier: "Option B", calls: "7,832", latency: "812ms", cost: "$97", model: "DeepSeek-Coder V2" },
-  { id: "dep-003", name: "Enterprise RAG Pipeline", status: "idle", tier: "Option C", calls: "203", latency: "342ms", cost: "$12", model: "Llama 3.1 70B" },
+// Infrastructure state: Provisioning | Running (Private) | Stopped
+// Marketplace state: Unlisted | Draft | In Review | Approved | Published | Unpublished
+const PROJECTS = [
+  {
+    id: "dep-001",
+    name: "contract-review-v2",
+    infraState: "running" as const,
+    marketplaceState: "published" as const,
+    tier: "Tier C",
+    minContainers: 1,
+    maxContainers: 5,
+    calls: "12,847",
+    latency: "340ms",
+    dailyCost: "$4.32",
+    model: "Qwen2.5 72B",
+    privateUrl: "https://contract-review-v2.private.gmi.ai",
+    maasKey: "gmi_maas_sk_abc123",
+    listingName: "Contract Review Agent",
+  },
+  {
+    id: "dep-002",
+    name: "code-review-agent",
+    infraState: "running" as const,
+    marketplaceState: "in-review" as const,
+    tier: "Tier B",
+    minContainers: 2,
+    maxContainers: 10,
+    calls: "7,832",
+    latency: "812ms",
+    dailyCost: "$8.64",
+    model: "DeepSeek-Coder V2",
+    privateUrl: "https://code-review-agent.private.gmi.ai",
+    maasKey: "gmi_maas_sk_def456",
+    listingName: null,
+  },
+  {
+    id: "dep-003",
+    name: "rag-pipeline-v1",
+    infraState: "stopped" as const,
+    marketplaceState: "unlisted" as const,
+    tier: "Tier C",
+    minContainers: 1,
+    maxContainers: 3,
+    calls: "203",
+    latency: "342ms",
+    dailyCost: "$0.00",
+    model: "Llama 3.1 70B",
+    privateUrl: "https://rag-pipeline-v1.private.gmi.ai",
+    maasKey: "gmi_maas_sk_ghi789",
+    listingName: null,
+  },
 ];
+
+const DEPLOYMENTS = PROJECTS.map(p => ({ id: p.id, name: p.listingName || p.name, status: p.infraState === "running" ? "running" : "idle", tier: p.tier, calls: p.calls, latency: p.latency, cost: p.dailyCost, model: p.model }));
 
 const KPI = [
   { label: "Total Invocations", value: "20,882", icon: <Zap size={16} />, delta: "+18% vs last month" },
@@ -56,6 +106,46 @@ const MARKETPLACE_STATS = [
   { label: "Marketplace Rank", value: "#3 in Integration" },
 ];
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function InfraStateBadge({ state }: { state: "running" | "stopped" | "provisioning" }) {
+  const map = {
+    running: { color: "#DDEA4D", bg: "rgba(221,234,77,0.08)", dot: true, label: "Running (Private)" },
+    stopped: { color: "#555", bg: "#0d0d0d", dot: false, label: "Stopped" },
+    provisioning: { color: "#facc15", bg: "rgba(250,204,21,0.08)", dot: true, label: "Provisioning" },
+  };
+  const s = map[state];
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs font-mono-gmi px-2 py-0.5"
+      style={{ color: s.color, background: s.bg }}>
+      {s.dot && <span className="w-1.5 h-1.5 rounded-full" style={{ background: s.color, animation: "pulse 2s infinite" }} />}
+      {s.label}
+    </span>
+  );
+}
+
+function MarketplaceStateBadge({ state }: { state: string }) {
+  const map: Record<string, { color: string; bg: string }> = {
+    unlisted: { color: "#555", bg: "#0d0d0d" },
+    draft: { color: "#888", bg: "#111" },
+    "in-review": { color: "#facc15", bg: "rgba(250,204,21,0.08)" },
+    approved: { color: "#60a5fa", bg: "rgba(96,165,250,0.08)" },
+    published: { color: "#DDEA4D", bg: "rgba(221,234,77,0.08)" },
+    unpublished: { color: "#555", bg: "#0d0d0d" },
+  };
+  const s = map[state] || { color: "#555", bg: "#0d0d0d" };
+  const labels: Record<string, string> = {
+    unlisted: "Not Listed", draft: "Draft", "in-review": "In Review",
+    approved: "Approved", published: "Published", unpublished: "Unpublished",
+  };
+  return (
+    <span className="inline-flex items-center text-xs font-mono-gmi px-2 py-0.5"
+      style={{ color: s.color, background: s.bg }}>
+      {labels[state] || state}
+    </span>
+  );
+}
+
 // ─── Sidebar nav ──────────────────────────────────────────────────────────────
 
 type Tab = "overview" | "analytics" | "costs" | "logs" | "marketplace";
@@ -72,8 +162,161 @@ const NAV: { id: Tab; label: string; icon: React.ReactNode }[] = [
 
 function OverviewTab() {
   const [, setLocation] = useLocation();
+  const [selectedProject, setSelectedProject] = useState(PROJECTS[0].id);
+  const project = PROJECTS.find(p => p.id === selectedProject)!;
+
   return (
     <div className="space-y-8">
+
+      {/* Project selector */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-display text-base text-white">Claw Projects</h2>
+          <button onClick={() => setLocation("/deploy")}
+            className="btn-primary-lime px-3 py-1.5 text-xs font-bold flex items-center gap-1.5">
+            <Plus size={11} /> New Project
+          </button>
+        </div>
+        <div className="space-y-2">
+          {PROJECTS.map((p) => (
+            <button key={p.id} onClick={() => setSelectedProject(p.id)}
+              className="w-full text-left p-4 transition-all"
+              style={{ background: selectedProject === p.id ? "rgba(221,234,77,0.04)" : "#0a0a0a", border: `1px solid ${selectedProject === p.id ? "rgba(221,234,77,0.3)" : "#1e1e1e"}` }}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-mono-gmi text-sm text-white">{p.name}</div>
+                  <div className="font-mono-gmi text-xs text-gray-600 mt-0.5">{p.model} · {p.tier}</div>
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <InfraStateBadge state={p.infraState} />
+                  <MarketplaceStateBadge state={p.marketplaceState} />
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Selected project detail — F-06 Project Dashboard */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-display text-base text-white">{project.name}</h2>
+          <span className="gmi-label text-gray-600">Project Dashboard</span>
+        </div>
+
+        {/* Status cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-px mb-6" style={{ background: "#1a1a1a" }}>
+          {[
+            { label: "Infrastructure State", value: project.infraState === "running" ? "Running (Private)" : "Stopped", color: project.infraState === "running" ? "#DDEA4D" : "#555" },
+            { label: "Marketplace State", value: { unlisted: "Not Listed", draft: "Draft", "in-review": "In Review", approved: "Approved", published: "Published", unpublished: "Unpublished" }[project.marketplaceState] || project.marketplaceState, color: project.marketplaceState === "published" ? "#DDEA4D" : project.marketplaceState === "in-review" ? "#facc15" : "#888" },
+            { label: "Daily Cost", value: project.dailyCost, color: "#fff" },
+            { label: "Avg Latency", value: project.latency, color: "#fff" },
+          ].map((item) => (
+            <div key={item.label} className="p-4" style={{ background: "#000" }}>
+              <div className="gmi-label text-gray-700 mb-2">{item.label}</div>
+              <div className="font-mono-gmi text-lg font-bold" style={{ color: item.color }}>{item.value}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Endpoints */}
+        <div className="space-y-2 mb-6">
+          <div className="p-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
+            <div className="font-mono-gmi text-xs text-gray-600 uppercase tracking-widest mb-2">Private Endpoint</div>
+            <div className="flex items-center justify-between gap-4">
+              <code className="font-mono-gmi text-xs text-white break-all">{project.privateUrl}</code>
+              <button onClick={() => { navigator.clipboard.writeText(project.privateUrl); toast.success("Copied"); }}
+                className="shrink-0 flex items-center gap-1.5 font-mono-gmi text-xs px-3 py-1.5"
+                style={{ border: "1px solid #2a2a2a", color: "#888" }}>
+                <Copy size={11} /> Copy
+              </button>
+            </div>
+          </div>
+          <div className="p-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
+            <div className="font-mono-gmi text-xs text-gray-600 uppercase tracking-widest mb-2">GMI MaaS API Key</div>
+            <div className="flex items-center justify-between gap-4">
+              <code className="font-mono-gmi text-xs text-white">{project.maasKey.slice(0, 20)}••••••••</code>
+              <button onClick={() => { navigator.clipboard.writeText(project.maasKey); toast.success("Copied"); }}
+                className="shrink-0 flex items-center gap-1.5 font-mono-gmi text-xs px-3 py-1.5"
+                style={{ border: "1px solid #2a2a2a", color: "#888" }}>
+                <Copy size={11} /> Copy
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Marketplace listing action — F-07 / F-08 */}
+        {project.marketplaceState === "unlisted" && (
+          <div className="flex items-center justify-between p-5" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
+            <div>
+              <div className="font-display text-sm text-white mb-1">Ready to go public?</div>
+              <div className="text-xs text-gray-600 font-mono-gmi">Create a Marketplace Listing to submit for GMI review.</div>
+            </div>
+            <button onClick={() => setLocation("/list-claw")}
+              className="btn-primary-lime px-4 py-2.5 text-xs font-bold flex items-center gap-1.5">
+              <FileText size={12} /> Create Listing
+            </button>
+          </div>
+        )}
+        {project.marketplaceState === "draft" && (
+          <div className="flex items-center justify-between p-5" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
+            <div>
+              <div className="font-display text-sm text-white mb-1">Listing Draft Saved</div>
+              <div className="text-xs text-gray-600 font-mono-gmi">Complete your listing and submit for GMI review.</div>
+            </div>
+            <button onClick={() => setLocation("/list-claw")}
+              className="btn-primary-lime px-4 py-2.5 text-xs font-bold flex items-center gap-1.5">
+              <Send size={12} /> Submit for Review
+            </button>
+          </div>
+        )}
+        {project.marketplaceState === "in-review" && (
+          <div className="p-5" style={{ background: "rgba(250,204,21,0.04)", border: "1px solid rgba(250,204,21,0.2)" }}>
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-1.5 h-1.5 rounded-full" style={{ background: "#facc15", animation: "pulse 2s infinite" }} />
+              <div className="font-mono-gmi text-xs font-bold" style={{ color: "#facc15" }}>In Review — GMI team is reviewing your listing</div>
+            </div>
+            <p className="text-xs text-gray-600 font-mono-gmi">Target review time: 3 business days. You'll receive an email when approved.</p>
+          </div>
+        )}
+        {project.marketplaceState === "approved" && (
+          <div className="flex items-center justify-between p-5" style={{ background: "rgba(96,165,250,0.04)", border: "1px solid rgba(96,165,250,0.2)" }}>
+            <div>
+              <div className="font-display text-sm text-white mb-1">Listing Approved — Ready to Publish</div>
+              <div className="text-xs text-gray-600 font-mono-gmi">GMI has approved your listing. Click Publish to go live on the Marketplace.</div>
+            </div>
+            <button onClick={() => toast.success("Published!", { description: "Your Claw is now live on the Marketplace." })}
+              className="px-4 py-2.5 text-xs font-bold flex items-center gap-1.5"
+              style={{ background: "#DDEA4D", color: "#000" }}>
+              <Globe size={12} /> Publish Now
+            </button>
+          </div>
+        )}
+        {project.marketplaceState === "published" && (
+          <div className="flex items-center justify-between p-5" style={{ background: "rgba(221,234,77,0.04)", border: "1px solid rgba(221,234,77,0.2)" }}>
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <div className="w-1.5 h-1.5 rounded-full" style={{ background: "#DDEA4D", animation: "pulse 2s infinite" }} />
+                <div className="font-display text-sm text-white">{project.listingName} is live</div>
+              </div>
+              <div className="text-xs text-gray-600 font-mono-gmi">Your Claw is publicly available on the GMI Marketplace.</div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => toast.info("Opening Marketplace listing...")}
+                className="flex items-center gap-1.5 font-mono-gmi text-xs px-3 py-2"
+                style={{ border: "1px solid #2a2a2a", color: "#888" }}>
+                <ExternalLink size={11} /> View Listing
+              </button>
+              <button onClick={() => toast.success("Unpublished", { description: "Your Claw is no longer visible on the Marketplace." })}
+                className="flex items-center gap-1.5 font-mono-gmi text-xs px-3 py-2"
+                style={{ border: "1px solid #2a2a2a", color: "#888" }}>
+                <Lock size={11} /> Unpublish
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-px" style={{ background: "#1a1a1a" }}>
         {KPI.map((k) => (
@@ -91,7 +334,7 @@ function OverviewTab() {
       {/* Active Claws table */}
       <div>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="font-display text-lg text-white">Active Claws</h2>
+          <h2 className="font-display text-lg text-white">All Projects</h2>
           <div className="flex items-center gap-2">
             <span
               className="text-xs font-mono-gmi px-2 py-0.5"
@@ -112,43 +355,25 @@ function OverviewTab() {
             className="grid grid-cols-6 gap-4 px-5 py-3"
             style={{ background: "#0a0a0a", borderBottom: "1px solid #1a1a1a" }}
           >
-            {["Claw", "Status", "Tier", "Invocations", "Latency", "Cost/mo"].map((h) => (
+            {["Project", "Infra State", "Marketplace", "Tier", "Invocations", "Daily Cost"].map((h) => (
               <div key={h} className="gmi-label text-gray-600 text-xs">{h}</div>
             ))}
           </div>
-          {DEPLOYMENTS.map((dep) => (
+          {PROJECTS.map((p) => (
             <div
-              key={dep.id}
-              className="grid grid-cols-6 gap-4 px-5 py-4 items-center"
-              style={{ borderBottom: "1px solid #111" }}
+              key={p.id}
+              className="grid gap-4 px-5 py-4 items-center"
+              style={{ borderBottom: "1px solid #111", gridTemplateColumns: "1.5fr 1fr 1fr 0.8fr 0.8fr 0.8fr" }}
             >
               <div>
-                <div className="font-medium text-white text-sm">{dep.name}</div>
-                <div className="text-xs text-gray-600 font-mono-gmi mt-0.5">{dep.model}</div>
+                <div className="font-mono-gmi text-sm text-white">{p.name}</div>
+                <div className="text-xs text-gray-600 font-mono-gmi mt-0.5">{p.model}</div>
               </div>
-              <div>
-                <span
-                  className="inline-flex items-center gap-1.5 text-xs font-mono-gmi px-2 py-0.5"
-                  style={
-                    dep.status === "running"
-                      ? { color: "#DDEA4D", background: "rgba(221,234,77,0.08)" }
-                      : { color: "#555", background: "#0d0d0d" }
-                  }
-                >
-                  <span
-                    className="w-1.5 h-1.5 rounded-full"
-                    style={{
-                      background: dep.status === "running" ? "#DDEA4D" : "#444",
-                      animation: dep.status === "running" ? "pulse 2s infinite" : "none",
-                    }}
-                  />
-                  {dep.status}
-                </span>
-              </div>
-              <div className="font-mono-gmi text-xs text-gray-400">{dep.tier}</div>
-              <div className="font-mono-gmi text-xs text-gray-300">{dep.calls}</div>
-              <div className="font-mono-gmi text-xs text-gray-300">{dep.latency}</div>
-              <div className="font-mono-gmi text-xs" style={{ color: "#DDEA4D" }}>{dep.cost}</div>
+              <div><InfraStateBadge state={p.infraState} /></div>
+              <div><MarketplaceStateBadge state={p.marketplaceState} /></div>
+              <div className="font-mono-gmi text-xs text-gray-400">{p.tier}</div>
+              <div className="font-mono-gmi text-xs text-gray-300">{p.calls}</div>
+              <div className="font-mono-gmi text-xs" style={{ color: "#DDEA4D" }}>{p.dailyCost}/day</div>
             </div>
           ))}
         </div>
@@ -160,14 +385,14 @@ function OverviewTab() {
         style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}
       >
         <div>
-          <div className="font-display text-sm text-white mb-1">Deploy another Claw</div>
-          <div className="text-xs text-gray-600 font-mono-gmi">Configure compute, storage, and model in 4 steps.</div>
+          <div className="font-display text-sm text-white mb-1">Deploy a new Claw</div>
+          <div className="text-xs text-gray-600 font-mono-gmi">Configure infrastructure privately. Publish to Marketplace after testing.</div>
         </div>
         <button
           onClick={() => setLocation("/deploy")}
           className="btn-primary-lime px-4 py-2.5 text-xs font-bold flex items-center gap-1.5"
         >
-          <Plus size={12} /> New Deployment
+          <Plus size={12} /> New Project
         </button>
       </div>
     </div>
