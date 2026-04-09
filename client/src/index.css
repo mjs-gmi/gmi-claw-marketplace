@@ -102,7 +102,7 @@
 @layer components {
   .container {
     width: 100%;
-    margin-left: auto;
+    margin-left: 0;
     margin-right: auto;
     padding-left: 1.5rem;
     padding-right: 1.5rem;
