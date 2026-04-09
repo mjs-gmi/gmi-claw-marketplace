@@ -21,6 +21,50 @@ export interface Claw {
 
 export const ALL_CLAWS: Claw[] = [
   {
+    id: "neoclaw",
+    name: "NeoClaw by Gen",
+    publisher: "Gen Digital",
+    publisherContact: "ai@gendigital.com",
+    trustTier: "Verified",
+    typeLabel: "Workflow",
+    description:
+      "Agentic AI assistant built on the Norton Trust Layer. Executes real-world tasks — booking, ordering, research, writing — with built-in spending controls and full observability.",
+    fullDescription:
+      "NeoClaw is Gen Digital's (NASDAQ: GEN) consumer-grade agentic AI, built on the Norton Trust Layer. It executes complex multi-step tasks on your behalf: ordering food, booking appointments, sending emails, researching topics, and composing documents. Every agent action is protected by Norton-level security, fully hosted in the cloud with zero setup required. Features include Agentic Payments (reloadable prepaid card with spending controls), full observability and audit trail of every action, and data recovery insurance. Powered by GMI Cloud infrastructure for always-on 24x7 execution.",
+    pricing: "Early Access",
+    pricingDetail: "Free during Early Access. Sign up at ai.gendigital.com to join the waitlist.",
+    tags: ["Productivity", "Consumer", "Agentic"],
+    model: "Llama 3.1 70B",
+    deployed: true,
+    sampleOutputs: [
+      "Suit ordering for event: I've added three suits to choose from from your preferred retailer.",
+      "Book a haircut appointment: Appointment confirmed for Saturday 10am at your saved location.",
+    ],
+    supportedModels: ["Llama 3.1 70B", "Qwen2.5 72B"],
+  },
+  {
+    id: "topify-claw",
+    name: "Topify Claw",
+    publisher: "Topify",
+    publisherContact: "dev@topify.ai",
+    trustTier: "Verified",
+    typeLabel: "Integration",
+    description:
+      "Automates music promotion workflows — playlist pitching, fan engagement campaigns, and streaming analytics — for independent artists and labels.",
+    fullDescription:
+      "Topify Claw is a music-industry automation agent that handles the end-to-end promotion pipeline for independent artists and record labels. It identifies relevant Spotify playlist curators, drafts personalized pitch emails, tracks submission status, and follows up automatically. The analytics module aggregates streaming data across Spotify, Apple Music, and YouTube Music to surface actionable growth insights. Fan engagement features include automated social listening, comment moderation, and campaign performance reporting. Runs on GMI Cloud infrastructure with MaaS-powered natural language generation for all outreach copy.",
+    pricing: "$79 / month",
+    pricingDetail: "Monthly subscription. Includes up to 500 playlist pitches and 10,000 fan interactions per month.",
+    tags: ["Music", "Marketing", "Automation"],
+    model: "Llama 3.1 70B",
+    deployed: true,
+    sampleOutputs: [
+      "Pitched 47 curators for 'Summer Vibes EP' — 12 responses, 3 playlist adds, est. +18K streams.",
+      "Fan campaign report: 2,340 new followers across platforms, 89% positive sentiment score.",
+    ],
+    supportedModels: ["Llama 3.1 70B", "Mixtral 8x7B"],
+  },
+  {
     id: "code-reviewer",
     name: "Code Review Agent",
     publisher: "GMI Labs",
@@ -58,6 +102,24 @@ export const ALL_CLAWS: Claw[] = [
     model: "Qwen2.5 72B",
     deployed: true,
     supportedModels: ["Qwen2.5 72B", "Llama 3.1 70B"],
+  },
+  {
+    id: "model-benchmark",
+    name: "Model Benchmark Suite",
+    publisher: "GMI Labs",
+    publisherContact: "labs@gmi.ai",
+    trustTier: "Verified",
+    typeLabel: "Model",
+    description:
+      "Runs standardized benchmarks across GMI MaaS models to help you choose the right model for your use case.",
+    fullDescription:
+      "Model Benchmark Suite runs MMLU, HumanEval, GSM8K, and custom task-specific benchmarks across all models available in the GMI MaaS library. It generates a comparative report with accuracy, latency, cost-per-token, and context window analysis. Helps Claw Builders select the optimal model before deployment.",
+    pricing: "Pay per run",
+    pricingDetail: "Charged per benchmark run. Pricing depends on models selected and benchmark size.",
+    tags: ["Benchmarks", "Models", "Evaluation"],
+    model: "Multiple",
+    deployed: true,
+    supportedModels: ["All GMI MaaS models"],
   },
   {
     id: "smart-contract-auditor",
@@ -146,68 +208,6 @@ export const ALL_CLAWS: Claw[] = [
     tags: ["Legal", "Contracts", "Enterprise"],
     model: "Qwen2.5 72B",
     deployed: false,
-  },
-  {
-    id: "model-benchmark",
-    name: "Model Benchmark Suite",
-    publisher: "GMI Labs",
-    publisherContact: "labs@gmi.ai",
-    trustTier: "Verified",
-    typeLabel: "Model",
-    description:
-      "Runs standardized benchmarks across GMI MaaS models to help you choose the right model for your use case.",
-    fullDescription:
-      "Model Benchmark Suite runs MMLU, HumanEval, GSM8K, and custom task-specific benchmarks across all models available in the GMI MaaS library. It generates a comparative report with accuracy, latency, cost-per-token, and context window analysis. Helps Claw Builders select the optimal model before deployment.",
-    pricing: "Pay per run",
-    pricingDetail: "Charged per benchmark run. Pricing depends on models selected and benchmark size.",
-    tags: ["Benchmarks", "Models", "Evaluation"],
-    model: "Multiple",
-    deployed: true,
-    supportedModels: ["All GMI MaaS models"],
-  },
-  {
-    id: "neoclaw",
-    name: "NeoClaw by Gen",
-    publisher: "Gen Digital",
-    publisherContact: "ai@gendigital.com",
-    trustTier: "Verified",
-    typeLabel: "Workflow",
-    description:
-      "Agentic AI assistant built on the Norton Trust Layer. Executes real-world tasks — booking, ordering, research, writing — with built-in spending controls and full observability.",
-    fullDescription:
-      "NeoClaw is Gen Digital's (NASDAQ: GEN) consumer-grade agentic AI, built on the Norton Trust Layer. It executes complex multi-step tasks on your behalf: ordering food, booking appointments, sending emails, researching topics, and composing documents. Every agent action is protected by Norton-level security, fully hosted in the cloud with zero setup required. Features include Agentic Payments (reloadable prepaid card with spending controls), full observability and audit trail of every action, and data recovery insurance. Powered by GMI Cloud infrastructure for always-on 24x7 execution.",
-    pricing: "Early Access",
-    pricingDetail: "Free during Early Access. Sign up at ai.gendigital.com to join the waitlist.",
-    tags: ["Productivity", "Consumer", "Agentic"],
-    model: "Llama 3.1 70B",
-    deployed: true,
-    sampleOutputs: [
-      "Suit ordering for event: I've added three suits to choose from from your preferred retailer.",
-      "Book a haircut appointment: Appointment confirmed for Saturday 10am at your saved location.",
-    ],
-    supportedModels: ["Llama 3.1 70B", "Qwen2.5 72B"],
-  },
-  {
-    id: "topify-claw",
-    name: "Topify Claw",
-    publisher: "Topify",
-    publisherContact: "dev@topify.ai",
-    trustTier: "Verified",
-    typeLabel: "Integration",
-    description:
-      "Automates music promotion workflows — playlist pitching, fan engagement campaigns, and streaming analytics — for independent artists and labels.",
-    fullDescription:
-      "Topify Claw is a music-industry automation agent that handles the end-to-end promotion pipeline for independent artists and record labels. It identifies relevant Spotify playlist curators, drafts personalized pitch emails, tracks submission status, and follows up automatically. The analytics module aggregates streaming data across Spotify, Apple Music, and YouTube Music to surface actionable growth insights. Fan engagement features include automated social listening, comment moderation, and campaign performance reporting. Runs on GMI Cloud infrastructure with MaaS-powered natural language generation for all outreach copy.",
-    pricing: "$79 / month",
-    pricingDetail: "Monthly subscription. Includes up to 500 playlist pitches and 10,000 fan interactions per month.",
-    tags: ["Music", "Marketing", "Automation"],
-    model: "Llama 3.1 70B",
-    deployed: true,
-    sampleOutputs: [
-      "Pitched 47 curators for 'Summer Vibes EP' — 12 responses, 3 playlist adds, est. +18K streams.",
-      "Fan campaign report: 2,340 new followers across platforms, 89% positive sentiment score.",
-    ],
-    supportedModels: ["Llama 3.1 70B", "Mixtral 8x7B"],
   },
   {
     id: "hr-onboarding",
