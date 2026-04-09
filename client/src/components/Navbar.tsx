@@ -4,7 +4,7 @@ import { LayoutGrid, TerminalSquare, PlusSquare, Home, Search } from "lucide-rea
 const navLinks = [
   { href: "/", label: "Home", icon: Home },
   { href: "/marketplace", label: "Marketplace", icon: LayoutGrid },
-  { href: "/dashboard", label: "Dev Console", icon: TerminalSquare },
+  { href: "/dashboard", label: "Dashboard", icon: TerminalSquare },
   { href: "/list-claw", label: "List a Claw", icon: PlusSquare },
 ];
 

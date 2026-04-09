@@ -156,7 +156,7 @@ export default function Marketplace() {
           <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
             <div>
               <h1 className="font-display text-4xl text-white mb-2" style={{ letterSpacing: "-0.03em" }}>
-                Claw Catalog
+                Claw Marketplace
               </h1>
               <p className="text-gray-500 text-sm font-mono-gmi">
                 {ALL_CLAWS.length} Claws available · Powered by GMI Cluster Engine
