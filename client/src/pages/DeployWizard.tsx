@@ -135,7 +135,7 @@ export default function DeployWizard() {
 
       <div className="flex-1" style={{ marginLeft: "220px" }}>
       <div className="pt-8 pb-20">
-        <div className="container max-w-2xl mx-auto px-4">
+        <div className="px-8 max-w-3xl">
 
           {/* Back */}
           <button
