@@ -21,28 +21,6 @@ export interface Claw {
 
 export const ALL_CLAWS: Claw[] = [
   {
-    id: "neoclaw",
-    name: "NeoClaw by Gen",
-    publisher: "Gen Digital",
-    publisherContact: "ai@gendigital.com",
-    trustTier: "Verified",
-    typeLabel: "Productivity",
-    description:
-      "Agentic AI assistant built on the Norton Trust Layer. Executes real-world tasks — booking, ordering, research, writing — with built-in spending controls and full observability.",
-    fullDescription:
-      "NeoClaw is Gen Digital's (NASDAQ: GEN) consumer-grade agentic AI, built on the Norton Trust Layer. It executes complex multi-step tasks on your behalf: ordering food, booking appointments, sending emails, researching topics, and composing documents. Every agent action is protected by Norton-level security, fully hosted in the cloud with zero setup required. Features include Agentic Payments (reloadable prepaid card with spending controls), full observability and audit trail of every action, and data recovery insurance. Powered by GMI Cloud infrastructure for always-on 24x7 execution.",
-    pricing: "Early Access",
-    pricingDetail: "Free during Early Access. Sign up at ai.gendigital.com to join the waitlist.",
-    tags: ["Productivity", "Consumer", "Agentic"],
-    model: "Llama 3.1 70B",
-    deployed: true,
-    sampleOutputs: [
-      "Suit ordering for event: I've added three suits to choose from from your preferred retailer.",
-      "Book a haircut appointment: Appointment confirmed for Saturday 10am at your saved location.",
-    ],
-    supportedModels: ["Llama 3.1 70B", "Qwen2.5 72B"],
-  },
-  {
     id: "openhuman",
     name: "OpenHuman",
     publisher: "TinyHuman",
@@ -71,19 +49,20 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "Topify",
     publisherContact: "dev@topify.ai",
     trustTier: "Verified",
-    typeLabel: "Creative",
+    typeLabel: "Business",
     description:
-      "Automates music promotion workflows — playlist pitching, fan engagement campaigns, and streaming analytics — for independent artists and labels.",
+      "AI-powered GEO platform that tracks and optimizes your brand's visibility across ChatGPT, Gemini, Perplexity, and Google AI Overview — so AI recommends you first.",
     fullDescription:
-      "Topify Claw is a music-industry automation agent that handles the end-to-end promotion pipeline for independent artists and record labels. It identifies relevant Spotify playlist curators, drafts personalized pitch emails, tracks submission status, and follows up automatically. The analytics module aggregates streaming data across Spotify, Apple Music, and YouTube Music to surface actionable growth insights. Fan engagement features include automated social listening, comment moderation, and campaign performance reporting. Runs on GMI Cloud infrastructure with MaaS-powered natural language generation for all outreach copy.",
+      "Topify Claw brings Topify's Generative Engine Optimization (GEO) platform to the GMI Claw ecosystem. It continuously monitors how your brand is mentioned, ranked, and described across the four major AI search engines: ChatGPT, Gemini, Perplexity, and Google AI Overview. The agent tracks seven key GEO metrics — visibility, sentiment, position, volume, mentions, intent, and CVR — and surfaces high-value prompts where competitors outrank you. One-click execution lets you deploy AI-generated content recommendations and optimization actions without manual workflows. Competitor benchmarking shows exactly who AI engines recommend instead of you, and how to close the gap. Powered by GMI Cloud infrastructure for continuous, always-on monitoring and execution.",
     pricing: "Early Access",
-    pricingDetail: "Early Access. Contact dev@topify.ai to get started.",
-    tags: ["Music", "Marketing", "Automation"],
+    pricingDetail: "Early Access. Sign up at topify.ai to get started. 200+ brands already trust Topify.",
+    tags: ["GEO", "Marketing", "AI Visibility", "Brand"],
     model: "Llama 3.1 70B",
     deployed: true,
     sampleOutputs: [
-      "Pitched 47 curators for 'Summer Vibes EP' — 12 responses, 3 playlist adds, est. +18K streams.",
-      "Fan campaign report: 2,340 new followers across platforms, 89% positive sentiment score.",
+      "Brand visibility report: You appear in 34% of AI responses for 'best project management tool' — up 12% this week.",
+      "Competitor alert: Notion now ranks #1 in ChatGPT for 3 of your tracked prompts. Recommended action: update your /about page with structured data.",
+      "One-click optimization deployed: 2 content pieces published, estimated +8% visibility lift in 7 days.",
     ],
     supportedModels: ["Llama 3.1 70B", "Mixtral 8x7B"],
   },

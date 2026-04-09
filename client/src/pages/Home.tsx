@@ -828,20 +828,11 @@ export default function Home() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(3, 1fr)",
+              gridTemplateColumns: "repeat(2, 1fr)",
               gap: 0,
             }}
           >
             {[
-              {
-                id: "neoclaw",
-                name: "NeoClaw",
-                publisher: "Gen Digital",
-                description: "Agentic AI assistant built on the Norton Trust Layer. Executes real-world tasks — booking, ordering, research — with built-in spending controls and full observability.",
-                pricing: "Early Access",
-                tags: ["Productivity", "Consumer", "Agentic"],
-                accent: "#DDEA4D",
-              },
               {
                 id: "openhuman",
                 name: "OpenHuman",
@@ -855,10 +846,10 @@ export default function Home() {
                 id: "topify-claw",
                 name: "Topify Claw",
                 publisher: "Topify",
-                description: "Automates music promotion workflows — playlist pitching, fan engagement campaigns, and streaming analytics — for independent artists and labels.",
-                 pricing: "Early Access",
-                tags: ["Music", "Marketing", "Automation"],
-                accent: "#f9a8d4",
+                description: "AI-powered GEO platform that tracks and optimizes your brand's visibility across ChatGPT, Gemini, Perplexity, and Google AI Overview — so AI recommends you first.",
+                pricing: "Early Access",
+                tags: ["GEO", "Marketing", "AI Visibility"],
+                accent: "#DDEA4D",
               },
             ].map((partner, i) => {
               const [hov, setHov] = useState(false);
