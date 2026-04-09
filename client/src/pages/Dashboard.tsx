@@ -655,16 +655,6 @@ export default function Dashboard() {
           <div className="flex gap-10">
             {/* Left sidebar */}
             <aside className="w-52 shrink-0">
-              {/* Claw selector */}
-              <div
-                className="p-3 mb-6"
-                style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}
-              >
-                <div className="gmi-label mb-2">Active Claw</div>
-                <div className="font-mono-gmi text-xs text-white truncate">contract-review-claw</div>
-                <div className="font-mono-gmi text-xs text-gray-600 mt-0.5">v2.1.0 · running</div>
-              </div>
-
               {/* Nav tabs */}
               <nav className="space-y-0.5">
                 {NAV.map((item) => (
