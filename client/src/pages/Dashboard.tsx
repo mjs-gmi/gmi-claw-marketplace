@@ -406,10 +406,11 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="min-h-screen" style={{ background: "#000", color: "#fff" }}>
+    <div className="min-h-screen flex" style={{ background: "#000", color: "#fff" }}>
       <Navbar />
 
-      <div className="pt-20 pb-16">
+      <div className="flex-1" style={{ marginLeft: "220px" }}>
+      <div className="pt-8 pb-16">
         <div className="container">
           {/* Page header */}
           <div className="mb-8 pt-4">
@@ -493,6 +494,7 @@ export default function Dashboard() {
       </div>
 
       <Footer />
+      </div>
     </div>
   );
 }

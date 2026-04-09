@@ -59,10 +59,11 @@ export default function ClawDetail() {
   };
 
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="min-h-screen flex bg-black text-white">
       <Navbar />
 
-      <div className="pt-24 pb-20">
+      <div className="flex-1" style={{ marginLeft: "220px" }}>
+      <div className="pt-8 pb-20">
         <div className="container max-w-5xl mx-auto px-4">
 
           {/* Back */}
@@ -277,6 +278,7 @@ export default function ClawDetail() {
       </div>
 
       <Footer />
+      </div>
     </div>
   );
 }

@@ -57,9 +57,10 @@ export default function ListClaw() {
 
   if (submitted) {
     return (
-      <div className="min-h-screen bg-black text-white">
+      <div className="min-h-screen flex bg-black text-white">
         <Navbar />
-        <div className="pt-24 pb-20 flex items-center justify-center">
+        <div className="flex-1" style={{ marginLeft: "220px" }}>
+        <div className="pt-8 pb-20 flex items-center justify-center">
           <div className="text-center max-w-md px-4">
             <div
               className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6"
@@ -90,15 +91,17 @@ export default function ListClaw() {
           </div>
         </div>
         <Footer />
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="min-h-screen flex bg-black text-white">
       <Navbar />
 
-      <div className="pt-24 pb-20">
+      <div className="flex-1" style={{ marginLeft: "220px" }}>
+      <div className="pt-8 pb-20">
         <div className="container max-w-2xl mx-auto px-4">
 
           {/* Back */}
@@ -388,6 +391,7 @@ export default function ListClaw() {
       </div>
 
       <Footer />
+      </div>
     </div>
   );
 }

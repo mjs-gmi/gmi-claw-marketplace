@@ -134,11 +134,14 @@ export default function Marketplace() {
   });
 
   return (
-    <div className="min-h-screen" style={{ background: "#000", color: "#fff" }}>
+    <div className="min-h-screen flex" style={{ background: "#000", color: "#fff" }}>
       <Navbar />
 
+      {/* Main content offset by sidebar */}
+      <div className="flex-1" style={{ marginLeft: "220px" }}>
+
       {/* Page header */}
-      <div className="pt-20 pb-8" style={{ borderBottom: "1px solid #1a1a1a" }}>
+      <div className="pt-8 pb-8" style={{ borderBottom: "1px solid #1a1a1a" }}>
         <div className="container">
           <div
             className="inline-block text-xs font-mono-gmi px-3 py-1 mb-4"
@@ -288,6 +291,7 @@ export default function Marketplace() {
       </div>
 
       <Footer />
+      </div>
     </div>
   );
 }
