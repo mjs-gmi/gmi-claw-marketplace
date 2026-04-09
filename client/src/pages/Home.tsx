@@ -345,17 +345,18 @@ export default function Home() {
                   style={{ lineHeight: 1.05, letterSpacing: "-0.025em", minHeight: "4.5rem" }}
                 >
                   <span style={{ color: "#DDEA4D" }}>{typedTitle}</span>
-                  {/* Blinking cursor */}
+                  {/* Blinking cursor — thin vertical bar, sized relative to font */}
                   <span
+                    aria-hidden="true"
                     style={{
                       display: "inline-block",
-                      width: "3px",
-                      height: "0.9em",
+                      width: "2px",
+                      height: "0.75em",
                       background: "#DDEA4D",
-                      marginLeft: "4px",
-                      verticalAlign: "middle",
+                      marginLeft: "6px",
+                      marginBottom: "0.1em",
+                      verticalAlign: "text-bottom",
                       animation: typingDone ? "blink 1s step-end infinite" : "none",
-                      opacity: typingDone ? undefined : 1,
                     }}
                   />
                 </h1>
