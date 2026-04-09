@@ -378,7 +378,7 @@ export default function Home() {
                       Browse Claws <ArrowRight size={15} />
                     </button>
                   </Link>
-                  <Link href="/dashboard">
+                  <Link href="/deploy">
                     <button
                       className="flex items-center gap-2 text-sm font-medium px-6 py-3"
                       style={{ border: "1px solid #2a2a2a", color: "#666" }}
@@ -391,7 +391,7 @@ export default function Home() {
                         (e.currentTarget as HTMLButtonElement).style.color = "#666";
                       }}
                     >
-                      Publish a Claw &lt;/&gt;
+                      Deploy a Claw &lt;/&gt;
                     </button>
                   </Link>
                 </div>

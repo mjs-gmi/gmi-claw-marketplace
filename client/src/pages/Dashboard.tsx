@@ -693,7 +693,6 @@ export default function Dashboard() {
               <div className="space-y-0.5">
                 {[
                   { label: "Marketplace", href: "/marketplace" },
-                  { label: "List a Claw", href: "/list-claw" },
                   { label: "New Deployment", href: "/deploy" },
                 ].map((link) => (
                   <a

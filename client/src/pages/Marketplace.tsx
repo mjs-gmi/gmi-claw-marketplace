@@ -183,10 +183,10 @@ export default function Marketplace() {
                 )}
               </div>
               <button
-                onClick={() => setLocation("/list-claw")}
+                onClick={() => setLocation("/deploy")}
                 className="btn-primary-lime px-4 py-2.5 text-xs font-bold flex items-center gap-1.5"
               >
-                <Plus size={12} /> List a Claw
+                <Plus size={12} /> Deploy a Claw
               </button>
             </div>
           </div>
@@ -255,14 +255,14 @@ export default function Marketplace() {
             >
               <div className="font-display text-sm text-white">Build on GMI</div>
               <p className="text-xs text-gray-600 font-mono-gmi leading-relaxed">
-                List your Claw for free. Deploy on GMI infrastructure.
+                Deploy your Claw privately, then publish to the Marketplace.
               </p>
               <button
-                onClick={() => setLocation("/list-claw")}
+                onClick={() => setLocation("/deploy")}
                 className="w-full text-xs font-bold py-2 flex items-center justify-center gap-1"
                 style={{ background: "#DDEA4D", color: "#000" }}
               >
-                List a Claw <ArrowRight size={11} />
+                Deploy a Claw <ArrowRight size={11} />
               </button>
             </div>
           </aside>

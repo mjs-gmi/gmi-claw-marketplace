@@ -1,11 +1,10 @@
 import { Link, useLocation } from "wouter";
-import { LayoutGrid, TerminalSquare, PlusSquare, Home, Search } from "lucide-react";
+import { LayoutGrid, TerminalSquare, Rocket, Home, Search } from "lucide-react";
 
 const navLinks = [
   { href: "/", label: "Home", icon: Home },
   { href: "/marketplace", label: "Marketplace", icon: LayoutGrid },
   { href: "/dashboard", label: "Dashboard", icon: TerminalSquare },
-  { href: "/list-claw", label: "List a Claw", icon: PlusSquare },
 ];
 
 export default function Navbar() {
@@ -107,12 +106,13 @@ export default function Navbar() {
           >
             Sign In
           </button>
-          <Link href="/list-claw">
+          <Link href="/deploy">
             <button
-              className="w-full text-xs font-bold py-2"
+              className="w-full text-xs font-bold py-2 flex items-center justify-center gap-1.5"
               style={{ background: "#DDEA4D", color: "#000" }}
             >
-              + List a Claw
+              <Rocket size={12} />
+              Deploy a Claw
             </button>
           </Link>
         </div>
