@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutGrid, TerminalSquare, Rocket, Home, Search } from "lucide-react";
+import { LayoutGrid, TerminalSquare, Rocket, Home, Search, ListPlus } from "lucide-react";
 
 const navLinks = [
   { href: "/", label: "Home", icon: Home },
@@ -110,9 +110,28 @@ export default function Navbar() {
             <button
               className="w-full text-xs font-bold py-2 flex items-center justify-center gap-1.5"
               style={{ background: "#DDEA4D", color: "#000" }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#eef566"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#DDEA4D"; }}
             >
               <Rocket size={12} />
               Deploy a Claw
+            </button>
+          </Link>
+          <Link href="/list-claw">
+            <button
+              className="w-full text-xs font-medium py-2 flex items-center justify-center gap-1.5 transition-colors"
+              style={{ border: "1px solid #2a2a2a", color: "#888" }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.borderColor = "#DDEA4D";
+                (e.currentTarget as HTMLButtonElement).style.color = "#DDEA4D";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.borderColor = "#2a2a2a";
+                (e.currentTarget as HTMLButtonElement).style.color = "#888";
+              }}
+            >
+              <ListPlus size={12} />
+              List a Claw
             </button>
           </Link>
         </div>
