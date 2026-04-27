@@ -50,14 +50,14 @@ function RadioCard({ selected, onClick, children }: { selected: boolean; onClick
 function RadioDot({ selected }: { selected: boolean }) {
   return (
     <div className="w-4 h-4 rounded-full border flex items-center justify-center shrink-0"
-      style={{ borderColor: selected ? "#DDEA4D" : "#444", background: selected ? "#DDEA4D" : "transparent" }}>
+      style={{ borderColor: selected ? "#DDEA4D" : "#888", background: selected ? "#DDEA4D" : "transparent" }}>
       {selected && <div className="w-2 h-2 rounded-full bg-black" />}
     </div>
   );
 }
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
-  return <label className="block font-mono-gmi text-xs text-gray-500 uppercase tracking-widest mb-1.5">{children}</label>;
+  return <label className="block font-mono-gmi text-xs text-gray-300 uppercase tracking-widest mb-1.5">{children}</label>;
 }
 
 function TextInput({ label, placeholder, value, onChange, mono = false, hint }: {
@@ -71,7 +71,7 @@ function TextInput({ label, placeholder, value, onChange, mono = false, hint }: 
         style={{ border: "1px solid #2a2a2a", fontFamily: mono ? "var(--font-mono-gmi)" : undefined }}
         onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
         onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")} />
-      {hint && <p className="text-xs text-gray-600 font-mono-gmi mt-1">{hint}</p>}
+      {hint && <p className="text-xs text-gray-400 font-mono-gmi mt-1">{hint}</p>}
     </div>
   );
 }
@@ -82,12 +82,12 @@ function Toggle({ on, onToggle, label, desc }: { on: boolean; onToggle: () => vo
       style={{ background: on ? "rgba(221,234,77,0.04)" : "#0a0a0a", border: `1px solid ${on ? "rgba(221,234,77,0.3)" : "#2a2a2a"}` }}>
       <div>
         <div className="font-mono-gmi text-sm font-bold" style={{ color: on ? "#DDEA4D" : "#888" }}>{label}</div>
-        <div className="font-mono-gmi text-xs text-gray-600 mt-0.5">{desc}</div>
+        <div className="font-mono-gmi text-xs text-gray-400 mt-0.5">{desc}</div>
       </div>
       <div className="shrink-0 ml-4">
         {on
           ? <ToggleRight size={24} style={{ color: "#DDEA4D" }} />
-          : <ToggleLeft size={24} style={{ color: "#444" }} />}
+          : <ToggleLeft size={24} style={{ color: "#888" }} />}
       </div>
     </button>
   );
@@ -138,12 +138,12 @@ export default function DeployWizard() {
     setEnvVars((v) => v.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
 
   const DEPLOY_STEPS = [
-    { label: "Allocating compute resources", duration: 1200 },
-    { label: "Pulling container image", duration: 1800 },
-    { label: "Configuring network & secrets", duration: 1400 },
-    { label: "Starting container runtime", duration: 1600 },
-    { label: "Running health checks", duration: 1200 },
-    { label: "Registering private endpoint", duration: 900 },
+    { label: "Validating image URL", duration: 1200 },
+    { label: "Inspecting container environment", duration: 1800 },
+    { label: "Registering template in CE", duration: 1400 },
+    { label: "Storing infrastructure configuration", duration: 1000 },
+    { label: "Running pre-publish checks", duration: 1200 },
+    { label: "Publishing template", duration: 900 },
   ];
 
   const handleDeploy = () => {
@@ -160,8 +160,8 @@ export default function DeployWizard() {
         setTimeout(() => {
           setDeploying(false);
           setDeployed(true);
-          toast.success("Private deployment initiated", {
-            description: "Your Claw is being provisioned. Billing has started.",
+          toast.success("Claw registered and deployed", {
+            description: "Your Claw is live on GMI infrastructure.",
           });
         }, 600);
       }
@@ -193,20 +193,20 @@ export default function DeployWizard() {
                 </div>
               </div>
               <span className="font-mono-gmi text-xs uppercase tracking-widest" style={{ color: "#DDEA4D" }}>
-                Deploying Privately
+                Registering Claw
               </span>
             </div>
 
             <h2 className="font-display text-2xl text-white mb-1" style={{ letterSpacing: "-0.03em" }}>
               {projectName || "Your Claw"}
             </h2>
-            <p className="text-gray-600 text-xs font-mono-gmi mb-8">
-              GMI Cluster Engine is provisioning your infrastructure...
+            <p className="text-gray-400 text-xs font-mono-gmi mb-8">
+              GMI Cluster Engine is provisioning your Claw infrastructure...
             </p>
 
             {/* Progress bar */}
             <div className="mb-8">
-              <div className="flex justify-between font-mono-gmi text-xs text-gray-600 mb-2">
+              <div className="flex justify-between font-mono-gmi text-xs text-gray-400 mb-2">
                 <span>Progress</span>
                 <span style={{ color: "#DDEA4D" }}>{progress}%</span>
               </div>
@@ -244,7 +244,7 @@ export default function DeployWizard() {
                     <span
                       className="font-mono-gmi text-sm"
                       style={{
-                        color: done ? "#888" : active ? "#fff" : "#333",
+                        color: done ? "#888" : active ? "#fff" : "#777",
                         textDecoration: done ? "line-through" : "none",
                       }}
                     >
@@ -261,7 +261,7 @@ export default function DeployWizard() {
             </div>
 
             {/* Footer note */}
-            <p className="font-mono-gmi text-xs text-gray-700 mt-10">
+            <p className="font-mono-gmi text-xs text-gray-300 mt-10">
               Do not close this window. You will be redirected automatically.
             </p>
           </div>
@@ -270,10 +270,31 @@ export default function DeployWizard() {
     );
   }
 
-  // ── Deployed success screen ────────────────────────────────────────────
+  // ── Published success screen ────────────────────────────────────────────
   if (deployed) {
-    const privateUrl = `https://${projectName.toLowerCase().replace(/\s+/g, "-") || "my-claw"}.private.gmi.ai`;
-    const maasKey = "gmi_maas_sk_" + Math.random().toString(36).slice(2, 18);
+    const templateId = "tpl_" + Math.random().toString(36).slice(2, 14);
+    const slug = projectName.toLowerCase().replace(/\s+/g, "-") || "my-claw";
+
+    const codeSnippet = `# Step 1: Provision a container
+curl -X POST https://console.gmicloud.ai/api/v1/containers \\
+  -H "Authorization: Bearer {your_api_key}" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "name": "${slug}-instance",
+    "templateId": "${templateId}",
+    "product": "{gpu_type}",
+    "idc": "{data_center}",
+    "count": 1
+  }'
+
+# Step 2: Poll for running status + endpoint
+curl https://console.gmicloud.ai/api/v1/containers/{container_id} \\
+  -H "Authorization: Bearer {your_api_key}"
+# Wait until status = "running", then use publicIP + port
+
+# Step 3: Terminate when done
+curl -X DELETE https://console.gmicloud.ai/api/v1/containers/{container_id} \\
+  -H "Authorization: Bearer {your_api_key}"`;
 
     return (
       <div className="min-h-screen flex bg-black text-white">
@@ -284,60 +305,65 @@ export default function DeployWizard() {
             <div className="flex items-center gap-3 mb-8">
               <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: "#DDEA4D" }} />
               <span className="font-mono-gmi text-xs uppercase tracking-widest" style={{ color: "#DDEA4D" }}>
-                Running Privately
+                Template Published ✓
               </span>
             </div>
 
             <h1 className="font-display text-3xl text-white mb-1" style={{ letterSpacing: "-0.03em" }}>
-              {projectName || "Your Claw"} is deployed
+              {projectName || "Your Claw"} is ready to provision
             </h1>
-            <p className="text-gray-500 text-sm font-mono-gmi mb-8">
-              Private deployment active. Test your Claw before submitting for Marketplace review.
+            <p className="text-gray-300 text-sm font-mono-gmi mb-8">
+              Your template is published on GMI Cluster Engine. Enterprise callers can now provision user instances via the API.
+              No containers are running yet — they are provisioned on demand.
             </p>
 
-            {/* Endpoints */}
-            <div className="space-y-3 mb-8">
-              {useCompute && (
-                <div className="p-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                  <div className="font-mono-gmi text-xs text-gray-600 uppercase tracking-widest mb-2">Private Endpoint</div>
-                  <div className="flex items-center justify-between gap-4">
-                    <code className="font-mono-gmi text-sm text-white break-all">{privateUrl}</code>
-                    <button onClick={() => { navigator.clipboard.writeText(privateUrl); toast.success("Copied"); }}
-                      className="shrink-0 font-mono-gmi text-xs px-3 py-1.5 transition-all"
-                      style={{ border: "1px solid #2a2a2a", color: "#888" }}>
-                      Copy
-                    </button>
-                  </div>
-                </div>
-              )}
-              {useMaaS && (
-                <div className="p-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                  <div className="font-mono-gmi text-xs text-gray-600 uppercase tracking-widest mb-2">GMI MaaS API Key</div>
-                  <div className="flex items-center justify-between gap-4">
-                    <code className="font-mono-gmi text-sm text-white break-all">{maasKey}</code>
-                    <button onClick={() => { navigator.clipboard.writeText(maasKey); toast.success("Copied"); }}
-                      className="shrink-0 font-mono-gmi text-xs px-3 py-1.5 transition-all"
-                      style={{ border: "1px solid #2a2a2a", color: "#888" }}>
-                      Copy
-                    </button>
-                  </div>
-                </div>
-              )}
+            {/* Template ID */}
+            <div className="p-4 mb-4" style={{ background: "#0a0a0a", border: "1px solid rgba(221,234,77,0.3)" }}>
+              <div className="font-mono-gmi text-xs uppercase tracking-widest mb-2" style={{ color: "#DDEA4D" }}>Template ID</div>
+              <div className="flex items-center justify-between gap-4">
+                <code className="font-mono-gmi text-sm text-white break-all">{templateId}</code>
+                <button onClick={() => { navigator.clipboard.writeText(templateId); toast.success("Copied"); }}
+                  className="shrink-0 font-mono-gmi text-xs px-3 py-1.5 transition-all"
+                  style={{ border: "1px solid #DDEA4D", color: "#DDEA4D" }}>
+                  Copy
+                </button>
+              </div>
             </div>
 
             {/* Status cards */}
-            <div className="grid grid-cols-2 gap-3 mb-8">
+            <div className="grid grid-cols-2 gap-3 mb-6">
               {[
-                { label: "Infrastructure State", value: "Running (Private)", color: "#DDEA4D" },
+                { label: "Template State", value: "Active", color: "#DDEA4D" },
                 { label: "Marketplace State", value: "Not Listed", color: "#888" },
-                { label: "Billing", value: "Active", color: "#DDEA4D" },
-                { label: "Est. Daily Cost", value: `$${(minCost * 24).toFixed(2)} – $${(maxCost * 24).toFixed(2)}`, color: "#fff" },
+                { label: "Containers Running", value: "0 (on demand)", color: "#fff" },
+                { label: "Billing", value: "Pay per provisioning", color: "#fff" },
               ].map((item) => (
                 <div key={item.label} className="p-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                  <div className="font-mono-gmi text-xs text-gray-600 mb-1">{item.label}</div>
+                  <div className="font-mono-gmi text-xs text-gray-400 mb-1">{item.label}</div>
                   <div className="font-mono-gmi text-sm font-bold" style={{ color: item.color }}>{item.value}</div>
                 </div>
               ))}
+            </div>
+
+            {/* Provisioning code */}
+            <div className="mb-6">
+              <div className="font-mono-gmi text-xs text-gray-400 uppercase tracking-widest mb-2">
+                How to provision user instances via API
+              </div>
+              <div className="relative" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
+                <button
+                  onClick={() => { navigator.clipboard.writeText(codeSnippet); toast.success("Code copied"); }}
+                  className="absolute top-3 right-3 font-mono-gmi text-xs px-2.5 py-1 transition-all"
+                  style={{ border: "1px solid #2a2a2a", color: "#999", background: "#0a0a0a" }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#fff"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#999"; }}
+                >
+                  Copy
+                </button>
+                <pre className="p-4 font-mono-gmi text-xs text-gray-400 overflow-x-auto" style={{ lineHeight: 1.7, whiteSpace: "pre" }}>
+                  {codeSnippet}
+                </pre>
+              </div>
             </div>
 
             {/* Next step banner */}
@@ -346,19 +372,19 @@ export default function DeployWizard() {
                 Next Step
               </div>
               <p className="text-sm text-gray-400 font-mono-gmi leading-relaxed">
-                Test your Claw using the private endpoint above. When you're ready to go public,
-                create a Marketplace Listing from your Project Dashboard.
+                Integrate the provisioning API into your own system using the template_id above.
+                When you're ready for broader distribution, list this Claw on the Marketplace.
               </p>
             </div>
 
             <div className="flex gap-3">
-              <button onClick={() => setLocation("/dashboard")}
+              <button onClick={() => setLocation("/list-claw")}
                 className="btn-primary-lime px-6 py-2.5 text-sm font-bold flex items-center gap-2">
-                Go to Dashboard <ArrowRight size={14} />
+                List this Claw <ArrowRight size={14} />
               </button>
-              <button onClick={() => setLocation("/marketplace")}
+              <button onClick={() => setLocation("/dashboard")}
                 className="btn-outline-dashed px-6 py-2.5 text-sm">
-                Marketplace
+                Go to Dashboard
               </button>
             </div>
           </div>
@@ -378,7 +404,7 @@ export default function DeployWizard() {
 
             {/* Back */}
             <button onClick={() => setLocation("/dashboard")}
-              className="flex items-center gap-2 text-gray-500 hover:text-white transition-colors font-mono-gmi text-xs mb-10">
+              className="flex items-center gap-2 text-gray-300 hover:text-white transition-colors font-mono-gmi text-xs mb-10">
               <ArrowLeft size={13} /> Back to Console
             </button>
 
@@ -386,10 +412,10 @@ export default function DeployWizard() {
             <div className="mb-10">
               <div className="gmi-label mb-2">Developer Console · New Claw Project</div>
               <h1 className="font-display text-4xl text-white mb-2" style={{ letterSpacing: "-0.03em" }}>
-                Deploy a Claw
+                Register a Claw
               </h1>
-              <p className="text-gray-500 text-sm font-mono-gmi">
-                Configure infrastructure and deploy privately. Publish to the Marketplace after testing.
+              <p className="text-gray-300 text-sm font-mono-gmi">
+                Configure infrastructure and register your Claw. List it on the Marketplace after testing.
               </p>
             </div>
 
@@ -399,11 +425,11 @@ export default function DeployWizard() {
                 <div key={s.id} className="flex items-center shrink-0">
                   <div className="flex items-center gap-2">
                     <div className="w-6 h-6 flex items-center justify-center text-xs font-mono-gmi font-bold shrink-0"
-                      style={{ background: i <= step ? "#DDEA4D" : "#111", color: i <= step ? "#000" : "#555", border: i <= step ? "none" : "1px solid #2a2a2a" }}>
+                      style={{ background: i <= step ? "#DDEA4D" : "#111", color: i <= step ? "#000" : "#999", border: i <= step ? "none" : "1px solid #2a2a2a" }}>
                       {i < step ? "✓" : i + 1}
                     </div>
                     <span className="text-xs font-mono-gmi hidden sm:inline whitespace-nowrap"
-                      style={{ color: i === step ? "#fff" : "#555" }}>
+                      style={{ color: i === step ? "#fff" : "#999" }}>
                       {s.label}
                     </span>
                   </div>
@@ -447,7 +473,7 @@ export default function DeployWizard() {
                   <Cpu size={15} style={{ color: "#DDEA4D" }} />
                   <h2 className="font-display text-lg text-white">Infrastructure Selection</h2>
                 </div>
-                <p className="text-xs text-gray-600 font-mono-gmi -mt-4">
+                <p className="text-xs text-gray-400 font-mono-gmi -mt-4">
                   Select Compute, MaaS, or both. At least one GMI component is required.
                 </p>
 
@@ -474,7 +500,7 @@ export default function DeployWizard() {
                             <RadioCard key={opt.id} selected={dockerSource === opt.id} onClick={() => setDockerSource(opt.id)}>
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
-                                  <opt.icon size={13} style={{ color: dockerSource === opt.id ? "#DDEA4D" : "#555" }} />
+                                  <opt.icon size={13} style={{ color: dockerSource === opt.id ? "#DDEA4D" : "#999" }} />
                                   <span className="font-mono-gmi text-xs font-bold" style={{ color: dockerSource === opt.id ? "#DDEA4D" : "#888" }}>
                                     {opt.label}
                                   </span>
@@ -493,12 +519,12 @@ export default function DeployWizard() {
                             mono
                           />
                         ) : (
-                          <div className="p-6 text-center font-mono-gmi text-xs text-gray-600 cursor-pointer transition-all"
+                          <div className="p-6 text-center font-mono-gmi text-xs text-gray-400 cursor-pointer transition-all"
                             style={{ border: "1px dashed #2a2a2a" }}
                             onClick={() => toast.info("File upload coming soon — use Registry URL for now.")}>
-                            <Upload size={18} className="mx-auto mb-2" style={{ color: "#444" }} />
+                            <Upload size={18} className="mx-auto mb-2" style={{ color: "#888" }} />
                             Click to upload Docker image (.tar.gz)
-                            <br /><span style={{ color: "#555" }}>Max 2 GB</span>
+                            <br /><span style={{ color: "#999" }}>Max 2 GB</span>
                           </div>
                         )}
                       </div>
@@ -524,10 +550,10 @@ export default function DeployWizard() {
                                   <RadioDot selected={computeTier === t.id} />
                                 </div>
                               </div>
-                              <div className="grid grid-cols-3 gap-3 font-mono-gmi text-xs text-gray-500">
-                                <span><span className="text-gray-700">CPU</span> {t.cpu}</span>
-                                <span><span className="text-gray-700">RAM</span> {t.ram}</span>
-                                <span><span className="text-gray-700">Storage</span> {t.storage}</span>
+                              <div className="grid grid-cols-3 gap-3 font-mono-gmi text-xs text-gray-300">
+                                <span><span className="text-gray-300">CPU</span> {t.cpu}</span>
+                                <span><span className="text-gray-300">RAM</span> {t.ram}</span>
+                                <span><span className="text-gray-300">Storage</span> {t.storage}</span>
                               </div>
                             </RadioCard>
                           ))}
@@ -549,7 +575,7 @@ export default function DeployWizard() {
                                 </span>
                                 <RadioDot selected={storageMode === opt.id} />
                               </div>
-                              <p className="text-xs text-gray-600 font-mono-gmi">{opt.desc}</p>
+                              <p className="text-xs text-gray-400 font-mono-gmi">{opt.desc}</p>
                             </RadioCard>
                           ))}
                         </div>
@@ -560,8 +586,8 @@ export default function DeployWizard() {
                         <FieldLabel>Auto-Scaling Configuration</FieldLabel>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
-                            <label className="block font-mono-gmi text-xs text-gray-600 mb-1.5">
-                              Min Containers <span className="text-gray-700">(≥ 1, no cold starts)</span>
+                            <label className="block font-mono-gmi text-xs text-gray-400 mb-1.5">
+                              Min Containers <span className="text-gray-300">(≥ 1, no cold starts)</span>
                             </label>
                             <input type="number" min="1" value={minContainers}
                               onChange={(e) => setMinContainers(e.target.value)}
@@ -574,7 +600,7 @@ export default function DeployWizard() {
                               }} />
                           </div>
                           <div>
-                            <label className="block font-mono-gmi text-xs text-gray-600 mb-1.5">Max Containers</label>
+                            <label className="block font-mono-gmi text-xs text-gray-400 mb-1.5">Max Containers</label>
                             <input type="number" min={minContainers} value={maxContainers}
                               onChange={(e) => setMaxContainers(e.target.value)}
                               className="w-full px-4 py-3 text-sm text-white bg-transparent outline-none font-mono-gmi"
@@ -583,7 +609,7 @@ export default function DeployWizard() {
                               onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")} />
                           </div>
                         </div>
-                        <p className="text-xs text-gray-700 font-mono-gmi mt-2">
+                        <p className="text-xs text-gray-300 font-mono-gmi mt-2">
                           Billing is based on active containers × tier price. Min containers are always running.
                         </p>
                       </div>
@@ -603,13 +629,13 @@ export default function DeployWizard() {
                   {useMaaS && (
                     <div className="mt-4 space-y-3 pl-4" style={{ borderLeft: "2px solid rgba(221,234,77,0.2)" }}>
                       <FieldLabel>Select Models</FieldLabel>
-                      <p className="text-xs text-gray-600 font-mono-gmi -mt-1">
+                      <p className="text-xs text-gray-400 font-mono-gmi -mt-1">
                         Select all models your Claw may call. You can change this later.
                       </p>
 
                       {/* Search box */}
                       <div className="relative">
-                        <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#555" }} />
+                        <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#999" }} />
                         <input
                           type="text"
                           placeholder="Search models..."
@@ -624,7 +650,7 @@ export default function DeployWizard() {
                           <button
                             onClick={() => setModelSearch("")}
                             className="absolute right-3 top-1/2 -translate-y-1/2"
-                            style={{ color: "#555" }}
+                            style={{ color: "#999" }}
                           >
                             <X size={11} />
                           </button>
@@ -679,7 +705,7 @@ export default function DeployWizard() {
                                 <div
                                   className="w-3.5 h-3.5 flex items-center justify-center"
                                   style={{
-                                    border: `1px solid ${sel ? "#DDEA4D" : "#444"}`,
+                                    border: `1px solid ${sel ? "#DDEA4D" : "#888"}`,
                                     background: sel ? "#DDEA4D" : "transparent",
                                   }}
                                 >
@@ -687,7 +713,7 @@ export default function DeployWizard() {
                                 </div>
                                 <span
                                   className="font-mono-gmi text-xs px-1.5 py-0.5"
-                                  style={{ background: "rgba(255,255,255,0.04)", color: "#555" }}
+                                  style={{ background: "rgba(255,255,255,0.04)", color: "#999" }}
                                 >
                                   {model.context}
                                 </span>
@@ -701,7 +727,7 @@ export default function DeployWizard() {
                               </div>
                               {/* Tokens per dollar */}
                               {model.tokensPerDollar && (
-                                <div className="font-mono-gmi text-xs" style={{ color: "#555" }}>
+                                <div className="font-mono-gmi text-xs" style={{ color: "#999" }}>
                                   {model.tokensPerDollar} tok/$
                                 </div>
                               )}
@@ -713,7 +739,7 @@ export default function DeployWizard() {
                           m.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
                           m.id.toLowerCase().includes(modelSearch.toLowerCase())
                         ).length === 0 && (
-                          <div className="font-mono-gmi text-xs text-gray-700 py-4 px-2">
+                          <div className="font-mono-gmi text-xs text-gray-300 py-4 px-2">
                             No models match "{modelSearch}"
                           </div>
                         )}
@@ -753,18 +779,18 @@ export default function DeployWizard() {
                           style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
                           <Lock size={12} style={{ color: "#DDEA4D" }} />
                           <span style={{ color: "#DDEA4D" }}>GMI_MAAS_API_KEY</span>
-                          <span className="text-gray-700 ml-auto">Auto-generated on deploy</span>
+                          <span className="text-gray-300 ml-auto">Auto-generated on deploy</span>
                         </div>
                         <div className="flex items-center gap-3 px-4 py-3 font-mono-gmi text-xs"
                           style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
                           <Lock size={12} style={{ color: "#DDEA4D" }} />
                           <span style={{ color: "#DDEA4D" }}>GMI_MAAS_BASE_URL</span>
-                          <span className="text-gray-700 ml-auto">https://api.gmi.ai/v1</span>
+                          <span className="text-gray-300 ml-auto">https://api.gmi.ai/v1</span>
                         </div>
                       </>
                     )}
                     {!useMaaS && (
-                      <p className="text-xs text-gray-600 font-mono-gmi px-1">
+                      <p className="text-xs text-gray-400 font-mono-gmi px-1">
                         No auto-injected variables — MaaS is disabled.
                       </p>
                     )}
@@ -783,7 +809,7 @@ export default function DeployWizard() {
                   </div>
 
                   {envVars.length === 0 ? (
-                    <p className="text-xs text-gray-700 font-mono-gmi px-1">
+                    <p className="text-xs text-gray-300 font-mono-gmi px-1">
                       No custom variables. Click "Add Variable" to add database URIs, API keys, or other config.
                     </p>
                   ) : (
@@ -808,7 +834,7 @@ export default function DeployWizard() {
                               onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")} />
                             <button onClick={() => setShowSecrets((s) => ({ ...s, [i]: !s[i] }))}
                               className="px-3 py-2.5 transition-all"
-                              style={{ border: "1px solid #2a2a2a", borderLeft: "none", color: "#555" }}>
+                              style={{ border: "1px solid #2a2a2a", borderLeft: "none", color: "#999" }}>
                               {showSecrets[i] ? <EyeOff size={12} /> : <Eye size={12} />}
                             </button>
                           </div>
@@ -816,14 +842,14 @@ export default function DeployWizard() {
                             className="shrink-0 px-3 py-2.5 font-mono-gmi text-xs transition-all"
                             style={{
                               border: `1px solid ${v.secret ? "rgba(221,234,77,0.3)" : "#2a2a2a"}`,
-                              color: v.secret ? "#DDEA4D" : "#555",
+                              color: v.secret ? "#DDEA4D" : "#999",
                               background: v.secret ? "rgba(221,234,77,0.06)" : "transparent",
                             }}>
                             Secret
                           </button>
                           <button onClick={() => removeEnvVar(i)}
                             className="shrink-0 p-2.5 transition-all"
-                            style={{ border: "1px solid #2a2a2a", color: "#555" }}>
+                            style={{ border: "1px solid #2a2a2a", color: "#999" }}>
                             <Trash2 size={12} />
                           </button>
                         </div>
@@ -839,12 +865,12 @@ export default function DeployWizard() {
               <div className="space-y-6">
                 <div className="flex items-center gap-2 mb-2">
                   <Zap size={15} style={{ color: "#DDEA4D" }} />
-                  <h2 className="font-display text-lg text-white">Review & Deploy Privately</h2>
+                  <h2 className="font-display text-lg text-white">Review & Publish Template</h2>
                 </div>
 
                 {/* Config summary */}
                 <div className="p-5 space-y-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                  <p className="font-mono-gmi text-xs text-gray-500 uppercase tracking-widest border-b border-gray-800 pb-3">
+                  <p className="font-mono-gmi text-xs text-gray-300 uppercase tracking-widest border-b border-gray-800 pb-3">
                     Configuration Summary
                   </p>
                   {[
@@ -859,7 +885,7 @@ export default function DeployWizard() {
                     { label: "Custom Env Vars", value: envVars.length > 0 ? `${envVars.length} variable(s)` : "None" },
                   ].map(({ label, value }) => (
                     <div key={label} className="grid grid-cols-3 gap-4">
-                      <div className="gmi-label text-gray-600">{label}</div>
+                      <div className="gmi-label text-gray-400">{label}</div>
                       <div className="col-span-2 font-mono-gmi text-sm text-gray-300 break-all">{value}</div>
                     </div>
                   ))}
@@ -868,29 +894,29 @@ export default function DeployWizard() {
                 {/* Cost estimate */}
                 {useCompute && (
                   <div className="p-5 space-y-3" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                    <p className="font-mono-gmi text-xs text-gray-500 uppercase tracking-widest border-b border-gray-800 pb-3">
+                    <p className="font-mono-gmi text-xs text-gray-300 uppercase tracking-widest border-b border-gray-800 pb-3">
                       Cost Estimate
                     </p>
                     <div className="grid grid-cols-3 gap-4 font-mono-gmi text-sm">
                       <div>
-                        <div className="text-gray-600 text-xs mb-1">Base (Min containers)</div>
+                        <div className="text-gray-400 text-xs mb-1">Base (Min containers)</div>
                         <div className="text-white font-bold">${minCost.toFixed(2)}/hr</div>
-                        <div className="text-gray-600 text-xs mt-0.5">${(minCost * 24).toFixed(2)}/day</div>
+                        <div className="text-gray-400 text-xs mt-0.5">${(minCost * 24).toFixed(2)}/day</div>
                       </div>
                       <div>
-                        <div className="text-gray-600 text-xs mb-1">Max (Max containers)</div>
+                        <div className="text-gray-400 text-xs mb-1">Max (Max containers)</div>
                         <div className="text-white font-bold">${maxCost.toFixed(2)}/hr</div>
-                        <div className="text-gray-600 text-xs mt-0.5">${(maxCost * 24).toFixed(2)}/day</div>
+                        <div className="text-gray-400 text-xs mt-0.5">${(maxCost * 24).toFixed(2)}/day</div>
                       </div>
                       <div>
-                        <div className="text-gray-600 text-xs mb-1">MaaS Tokens</div>
-                        <div className="text-gray-500 font-bold text-xs mt-1">Billed per token used</div>
+                        <div className="text-gray-400 text-xs mb-1">MaaS Tokens</div>
+                        <div className="text-gray-300 font-bold text-xs mt-1">Billed per token used</div>
                       </div>
                     </div>
                     <div className="h-1.5 w-full" style={{ background: "#1a1a1a" }}>
                       <div className="h-full" style={{ width: `${Math.min((minCost / maxCost) * 100, 100)}%`, background: "#DDEA4D" }} />
                     </div>
-                    <p className="text-xs text-gray-700 font-mono-gmi">
+                    <p className="text-xs text-gray-300 font-mono-gmi">
                       Billing begins immediately upon clicking "Deploy Privately". You can stop containers from the Developer Console.
                     </p>
                   </div>
@@ -898,11 +924,10 @@ export default function DeployWizard() {
 
                 {/* Decoupled flow notice */}
                 <div className="p-4 font-mono-gmi text-xs" style={{ background: "rgba(221,234,77,0.04)", border: "1px solid rgba(221,234,77,0.2)" }}>
-                  <div className="font-bold mb-1" style={{ color: "#DDEA4D" }}>Deployment ≠ Publishing</div>
+                  <div className="font-bold mb-1" style={{ color: "#DDEA4D" }}>Registration ≠ Listing</div>
                   <p className="text-gray-400 leading-relaxed">
-                    Clicking "Deploy Privately" provisions your infrastructure and starts billing, but does <strong>not</strong> publish
-                    your Claw to the public Marketplace. After testing, you can create a Marketplace Listing from your Project Dashboard.
-                    GMI reviews listings within 3 business days.
+                    Clicking "Register &amp; Deploy" provisions your infrastructure and starts billing, but does <strong>not</strong> publish
+                    your Claw to the public Marketplace. After testing, list it from your Dashboard — listings go live instantly.
                   </p>
                 </div>
               </div>
@@ -935,7 +960,7 @@ export default function DeployWizard() {
                   style={{ background: "#DDEA4D", color: "#000" }}
                   onMouseEnter={(e) => (e.currentTarget.style.background = "#e8f060")}
                   onMouseLeave={(e) => (e.currentTarget.style.background = "#DDEA4D")}>
-                  Deploy Privately <Zap size={14} />
+                  Publish Template <Zap size={14} />
                 </button>
               )}
             </div>
