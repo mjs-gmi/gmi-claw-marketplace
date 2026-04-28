@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useLocation } from "wouter";
 import {
-  ArrowLeft, ArrowRight, CheckCircle, Info, Server, ToggleLeft, ToggleRight,
+  ArrowLeft, ArrowRight, CheckCircle, Info, Server,
+  ToggleLeft, ToggleRight, ChevronDown, Eye, EyeOff,
 } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
@@ -9,45 +10,68 @@ import Footer from "@/components/Footer";
 import { TypeLabel, TYPE_LABELS } from "@/lib/clawData";
 import { toast } from "sonner";
 
-// Steps — always the same two-step flow once context is confirmed
-const STEPS = ["Listing Info", "Review & Publish"];
+// ── Mock CE templates (in production, fetched from API) ──────────────────────
+const MOCK_CE_TEMPLATES = [
+  { id: "tpl_9f3a-771e-contract", name: "contract-review-v2", runtime: "Node 20", instances: 3 },
+  { id: "tpl_4b2c-code-review",   name: "code-review-agent",  runtime: "Python 3.11", instances: 1 },
+  { id: "tpl_7d1e-rag-pipeline",  name: "rag-pipeline-v1",    runtime: "Python 3.11", instances: 2 },
+];
 
 const TYPE_DESCRIPTIONS: Record<TypeLabel, string> = {
-  Developer:   "Tools for developers — code review, testing, data pipelines, benchmarks",
+  Developer:    "Tools for developers — code review, testing, data pipelines, benchmarks",
   Productivity: "Personal & team productivity — daily tasks, scheduling, research, writing",
-  Business:    "Business process automation — support, HR, legal, finance, enterprise workflows",
-  Creative:    "Creative & media — music, content creation, design, marketing automation",
+  Business:     "Business process automation — support, HR, legal, finance, enterprise workflows",
+  Creative:     "Creative & media — music, content creation, design, marketing automation",
 };
 
-function resolveBadge(useMaaS: boolean, fromDeploy: boolean) {
-  if (!fromDeploy) return { label: "Powered by GMI MaaS", color: "#c084fc" };
-  if (useMaaS)    return { label: "Verified",             color: "#DDEA4D" };
-  return              { label: "Powered by GMI CE",       color: "#7ec8ff" };
+function resolveBadge(path: "A" | "B", useMaaS: boolean) {
+  if (path === "B") return { label: "Powered by GMI MaaS", color: "#c084fc" };
+  if (useMaaS)      return { label: "Verified",             color: "#DDEA4D" };
+  return                   { label: "Powered by GMI CE",    color: "#7ec8ff" };
 }
 
-// ── Parse context from URL query string ─────────────────────────────────────
 function parseContext() {
   const params = new URLSearchParams(window.location.search);
   return {
-    from:         params.get("from") || "",          // "deploy" | "dashboard" | ""
-    templateId:   params.get("templateId") || "",
-    projectName:  params.get("projectName") || "",
-    projectId:    params.get("projectId") || "",
-    useMaaS:      params.get("useMaaS") === "true",
+    from:        params.get("from") || "",
+    templateId:  params.get("templateId") || "",
+    projectName: params.get("projectName") || "",
+    projectId:   params.get("projectId") || "",
+    useMaaS:     params.get("useMaaS") === "true",
   };
 }
 
+// ── Path A steps ─────────────────────────────────────────────────────────────
+const STEPS_A = ["Listing Info", "Review & Publish"];
+// ── Path B steps ─────────────────────────────────────────────────────────────
+const STEPS_B = ["Infrastructure", "Listing Info", "Review & Publish"];
+
 export default function ListClaw() {
   const [, setLocation] = useLocation();
-  const [ctx]           = useState(parseContext);
+  const [ctx] = useState(parseContext);
 
   const hasContext = ctx.from === "deploy" || ctx.from === "dashboard";
+
+  // System determines path: if came from deploy (has CE template) → Path A, else → Path B
+  const path: "A" | "B" = ctx.from === "deploy" ? "A" : "B";
+  const STEPS = path === "A" ? STEPS_A : STEPS_B;
 
   const [step,      setStep]      = useState(0);
   const [submitted, setSubmitted] = useState(false);
   const [useMaaS,   setUseMaaS]   = useState(ctx.useMaaS);
+  const [selectedTemplate, setSelectedTemplate] = useState(
+    ctx.templateId
+      ? MOCK_CE_TEMPLATES.find((t) => t.id === ctx.templateId) || MOCK_CE_TEMPLATES[0]
+      : MOCK_CE_TEMPLATES[0]
+  );
+  const [showTemplateDropdown, setShowTemplateDropdown] = useState(false);
 
-  const badge = resolveBadge(useMaaS, ctx.from === "deploy");
+  // Path B infra fields
+  const [maasKey,      setMaasKey]      = useState("");
+  const [endpointUrl,  setEndpointUrl]  = useState("");
+  const [showKey,      setShowKey]      = useState(false);
+
+  const badge = resolveBadge(path, useMaaS);
 
   const [form, setForm] = useState({
     name:            ctx.projectName || "",
@@ -63,7 +87,13 @@ export default function ListClaw() {
     setForm((prev) => ({ ...prev, [field]: value }));
 
   const canProceed = () => {
-    if (step === 0) {
+    // Path B step 0: infra fields
+    if (path === "B" && step === 0) {
+      return maasKey.trim().length > 0 && endpointUrl.trim().startsWith("https://");
+    }
+    // Listing Info step
+    const listingStep = path === "A" ? 0 : 1;
+    if (step === listingStep) {
       return (
         form.name.trim() &&
         form.publisher.trim() &&
@@ -83,12 +113,12 @@ export default function ListClaw() {
     });
   };
 
-  // ── Guard: no deploy context ─────────────────────────────────────────────
+  // ── Guard ─────────────────────────────────────────────────────────────────
   if (!hasContext) {
     return (
       <div className="min-h-screen flex bg-black text-white">
         <Topbar />
-      <Navbar />
+        <Navbar />
         <div className="flex-1 flex items-center justify-center" style={{ marginLeft: "210px", paddingTop: "40px" }}>
           <div className="max-w-md px-8 text-center">
             <div
@@ -120,11 +150,7 @@ export default function ListClaw() {
             </div>
             <p className="font-mono-gmi text-xs text-gray-600 mt-6">
               Already deployed? Go to{" "}
-              <button
-                className="underline"
-                style={{ color: "#888" }}
-                onClick={() => setLocation("/dashboard")}
-              >
+              <button className="underline" style={{ color: "#888" }} onClick={() => setLocation("/dashboard")}>
                 My Claws
               </button>{" "}
               and click "Create Listing" on any unlisted project.
@@ -136,12 +162,12 @@ export default function ListClaw() {
     );
   }
 
-  // ── Success screen ────────────────────────────────────────────────────────
+  // ── Success ───────────────────────────────────────────────────────────────
   if (submitted) {
     return (
       <div className="min-h-screen flex bg-black text-white">
         <Topbar />
-      <Navbar />
+        <Navbar />
         <div className="flex-1" style={{ marginLeft: "210px", paddingTop: "40px" }}>
           <div className="pt-8 pb-20 flex items-center justify-center min-h-screen">
             <div className="text-center max-w-md px-4">
@@ -185,7 +211,10 @@ export default function ListClaw() {
     );
   }
 
-  // ── Multi-step form ───────────────────────────────────────────────────────
+  // ── Listing Info step index ───────────────────────────────────────────────
+  const listingInfoStep = path === "A" ? 0 : 1;
+  const reviewStep      = path === "A" ? 1 : 2;
+
   return (
     <div className="min-h-screen flex bg-black text-white">
       <Topbar />
@@ -206,12 +235,12 @@ export default function ListClaw() {
             >
               <ArrowLeft size={13} />
               {step === 0
-                ? ctx.from === "deploy" ? "Back to Deploy" : "Back to Dashboard"
+                ? ctx.from === "deploy" ? "Back to Register" : "Back to Dashboard"
                 : "Back"}
             </button>
 
             {/* Header */}
-            <div className="mb-8">
+            <div className="mb-6">
               <div className="gmi-label mb-2">Marketplace · Create Listing</div>
               <h1 className="font-display text-4xl text-white mb-2" style={{ letterSpacing: "-0.03em" }}>
                 List a Claw
@@ -221,21 +250,23 @@ export default function ListClaw() {
               </p>
             </div>
 
-            {/* Deploy context banner */}
-            <div
-              className="flex items-start gap-3 p-4 mb-8 font-mono-gmi text-xs"
-              style={{ background: "rgba(221,234,77,0.04)", border: "1px solid rgba(221,234,77,0.2)" }}
-            >
-              <CheckCircle size={13} className="shrink-0 mt-0.5" style={{ color: "#DDEA4D" }} />
-              <div>
-                <span style={{ color: "#DDEA4D" }}>
-                  {ctx.from === "deploy" ? "Deployed from CE" : "Deployed project"}:{" "}
-                </span>
-                <span className="text-white">{ctx.projectName || ctx.templateId || ctx.projectId}</span>
-                {ctx.templateId && (
-                  <span className="text-gray-500 ml-2">· {ctx.templateId}</span>
-                )}
+            {/* Path badge */}
+            <div className="flex items-center gap-3 mb-8">
+              <div
+                className="inline-flex items-center gap-1.5 px-3 py-1 font-mono-gmi text-xs"
+                style={
+                  path === "A"
+                    ? { background: "rgba(221,234,77,0.06)", border: "1px solid rgba(221,234,77,0.25)", color: "#DDEA4D" }
+                    : { background: "rgba(96,165,250,0.06)", border: "1px solid rgba(96,165,250,0.25)", color: "#60a5fa" }
+                }
+              >
+                {path === "A" ? "Path A · GMI CE Deployment" : "Path B · Self-hosted + MaaS"}
               </div>
+              <span className="font-mono-gmi text-xs text-gray-600">
+                {path === "A"
+                  ? "CE template detected — linking your deployment to this listing"
+                  : "No CE template found — you'll provide your own endpoint + MaaS key"}
+              </span>
             </div>
 
             {/* Step indicator */}
@@ -246,7 +277,7 @@ export default function ListClaw() {
                     <div
                       className="w-6 h-6 flex items-center justify-center text-xs font-mono-gmi font-bold"
                       style={{
-                        background: i <= step ? "#DDEA4D" : "#111",
+                        background: i <= step ? (path === "A" ? "#DDEA4D" : "#60a5fa") : "#111",
                         color: i <= step ? "#000" : "#999",
                         border: i <= step ? "none" : "1px solid #2a2a2a",
                       }}
@@ -254,8 +285,8 @@ export default function ListClaw() {
                       {i < step ? "✓" : i + 1}
                     </div>
                     <span
-                      className="text-xs font-mono-gmi whitespace-nowrap"
-                      style={{ color: i === step ? "#fff" : "#999" }}
+                      className="font-mono-gmi text-xs"
+                      style={{ color: i === step ? "#fff" : "#555" }}
                     >
                       {s}
                     </span>
@@ -263,20 +294,177 @@ export default function ListClaw() {
                   {i < STEPS.length - 1 && (
                     <div
                       className="w-8 h-px mx-3"
-                      style={{ background: i < step ? "#DDEA4D" : "#2a2a2a" }}
+                      style={{ background: i < step ? (path === "A" ? "#DDEA4D" : "#60a5fa") : "#2a2a2a" }}
                     />
                   )}
                 </div>
               ))}
             </div>
 
-            {/* ── Step 0: Listing Info ── */}
-            {step === 0 && (
+            {/* ── PATH B · Step 0: Infrastructure ── */}
+            {path === "B" && step === 0 && (
+              <div className="space-y-6">
+                {/* Context note */}
+                <div
+                  className="flex items-start gap-3 p-4 font-mono-gmi text-xs"
+                  style={{ background: "rgba(96,165,250,0.04)", border: "1px solid rgba(96,165,250,0.2)" }}
+                >
+                  <Info size={13} className="shrink-0 mt-0.5" style={{ color: "#60a5fa" }} />
+                  <div style={{ color: "#93c5fd" }}>
+                    No GMI CE deployment was found for this project. To list on the Marketplace,
+                    provide a <strong>project-scoped GMI MaaS API key</strong> and your{" "}
+                    <strong>external HTTPS endpoint</strong>. GMI will proxy consumer requests to your endpoint.
+                  </div>
+                </div>
+
+                {/* MaaS API Key */}
+                <div>
+                  <label className="gmi-label block mb-2">GMI MaaS API Key *</label>
+                  <div className="relative">
+                    <input
+                      type={showKey ? "text" : "password"}
+                      value={maasKey}
+                      onChange={(e) => setMaasKey(e.target.value)}
+                      placeholder="gmi_maas_proj_••••••••••••••••"
+                      className="w-full bg-transparent px-4 py-3 pr-12 text-sm text-white font-mono-gmi outline-none"
+                      style={{ border: "1px solid #2a2a2a" }}
+                      onFocus={(e) => (e.currentTarget.style.borderColor = "#60a5fa")}
+                      onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowKey((v) => !v)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                    >
+                      {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-600 font-mono-gmi mt-1">
+                    Must be a project-scoped key (prefix: <code className="text-gray-400">gmi_maas_proj_</code>).
+                    Generate one in{" "}
+                    <span className="underline cursor-pointer text-gray-400">Settings → API Keys</span>.
+                  </p>
+                </div>
+
+                {/* External Endpoint URL */}
+                <div>
+                  <label className="gmi-label block mb-2">External Endpoint URL *</label>
+                  <input
+                    type="url"
+                    value={endpointUrl}
+                    onChange={(e) => setEndpointUrl(e.target.value)}
+                    placeholder="https://your-agent.example.com/v1/invoke"
+                    className="w-full bg-transparent px-4 py-3 text-sm text-white font-mono-gmi outline-none"
+                    style={{ border: "1px solid #2a2a2a" }}
+                    onFocus={(e) => (e.currentTarget.style.borderColor = "#60a5fa")}
+                    onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                  />
+                  <p className="text-xs text-gray-600 font-mono-gmi mt-1">
+                    Must be HTTPS. GMI proxies consumer requests to this URL — your endpoint must be publicly reachable.
+                    You are responsible for uptime and latency.
+                  </p>
+                  {endpointUrl && !endpointUrl.startsWith("https://") && (
+                    <p className="text-xs font-mono-gmi mt-1" style={{ color: "#f87171" }}>
+                      Endpoint must start with https://
+                    </p>
+                  )}
+                </div>
+
+                {/* Badge preview for Path B */}
+                <div className="flex items-center gap-2 font-mono-gmi text-xs text-gray-500">
+                  <span>Badge on listing:</span>
+                  <span
+                    className="inline-flex items-center gap-1 px-2 py-0.5"
+                    style={{ background: "#c084fc12", border: "1px solid #c084fc44", color: "#c084fc" }}
+                  >
+                    <CheckCircle size={9} />
+                    Powered by GMI MaaS
+                  </span>
+                </div>
+
+                <div
+                  className="flex items-start gap-2 p-3 font-mono-gmi text-xs"
+                  style={{ background: "#0a0a0a", border: "1px solid #1e1e1e", color: "#666" }}
+                >
+                  <Info size={12} className="shrink-0 mt-0.5" />
+                  <span>
+                    Want the <span style={{ color: "#DDEA4D" }}>Verified</span> badge and GMI-managed infrastructure?{" "}
+                    <button
+                      className="underline"
+                      style={{ color: "#888" }}
+                      onClick={() => setLocation("/deploy")}
+                    >
+                      Register with GMI CE instead →
+                    </button>
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* ── PATH A · Step 0 / PATH B · Step 1: Listing Info ── */}
+            {step === listingInfoStep && (
               <div className="space-y-6">
 
-                {/* MaaS toggle (only for CE-deployed claws) */}
-                {ctx.from === "deploy" && (
-                  <div className="space-y-3 pb-2">
+                {/* Path A: CE Template selector + MaaS toggle */}
+                {path === "A" && (
+                  <div className="space-y-4 pb-2">
+
+                    {/* CE Template selector */}
+                    <div>
+                      <label className="gmi-label block mb-2">CE Template *</label>
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setShowTemplateDropdown((v) => !v)}
+                          className="w-full flex items-center justify-between px-4 py-3 text-sm font-mono-gmi text-white text-left"
+                          style={{ background: "#0a0a0a", border: "1px solid #2a2a2a" }}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="w-2 h-2 rounded-full"
+                              style={{ background: "#DDEA4D" }}
+                            />
+                            <span>{selectedTemplate.name}</span>
+                            <span className="text-gray-500 text-xs">{selectedTemplate.id}</span>
+                          </div>
+                          <ChevronDown size={14} className="text-gray-500" />
+                        </button>
+
+                        {showTemplateDropdown && (
+                          <div
+                            className="absolute top-full left-0 right-0 z-10 mt-1"
+                            style={{ background: "#111", border: "1px solid #2a2a2a" }}
+                          >
+                            {MOCK_CE_TEMPLATES.map((tpl) => (
+                              <button
+                                key={tpl.id}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedTemplate(tpl);
+                                  setShowTemplateDropdown(false);
+                                }}
+                                className="w-full flex items-center justify-between px-4 py-3 text-sm font-mono-gmi text-left hover:bg-white/5 transition-colors"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div
+                                    className="w-2 h-2 rounded-full"
+                                    style={{ background: tpl.id === selectedTemplate.id ? "#DDEA4D" : "#333" }}
+                                  />
+                                  <span className="text-white">{tpl.name}</span>
+                                  <span className="text-gray-500 text-xs">{tpl.runtime}</span>
+                                </div>
+                                <span className="text-gray-600 text-xs">{tpl.instances} inst.</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-600 font-mono-gmi mt-1">
+                        This CE template will be linked to the listing. Consumers access your Claw through GMI's infrastructure.
+                      </p>
+                    </div>
+
+                    {/* MaaS toggle */}
                     <div
                       className="flex items-center justify-between p-4"
                       style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}
@@ -334,7 +522,7 @@ export default function ListClaw() {
                     onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
                   />
                   <p className="text-xs text-gray-600 font-mono-gmi mt-1">
-                    This is the public-facing name shown on the Marketplace. Your internal project name stays private.
+                    Public-facing name on the Marketplace. Your internal project name stays private.
                   </p>
                 </div>
 
@@ -447,7 +635,6 @@ export default function ListClaw() {
                   />
                 </div>
 
-                {/* Subtle info note */}
                 <div className="flex items-start gap-2 font-mono-gmi text-xs text-gray-600">
                   <Info size={12} className="shrink-0 mt-0.5" />
                   <span>
@@ -458,8 +645,8 @@ export default function ListClaw() {
               </div>
             )}
 
-            {/* ── Step 1: Review ── */}
-            {step === 1 && (
+            {/* ── Review step ── */}
+            {step === reviewStep && (
               <div className="space-y-6">
                 <div className="p-6 space-y-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
                   <div className="flex items-center justify-between">
@@ -478,19 +665,19 @@ export default function ListClaw() {
                   </div>
 
                   {[
-                    { label: "Listing Name",      value: form.name },
-                    { label: "Publisher",          value: form.publisher },
-                    { label: "Contact",            value: form.contact },
-                    { label: "Type",               value: form.typeLabel },
-                    { label: "Short Description",  value: form.description },
-                    { label: "Tags",               value: form.tags || "—" },
-                    ctx.templateId
-                      ? { label: "CE Template", value: ctx.templateId }
-                      : { label: "Project",     value: ctx.projectName || ctx.projectId },
+                    { label: "Listing Name",     value: form.name },
+                    { label: "Publisher",         value: form.publisher },
+                    { label: "Contact",           value: form.contact },
+                    { label: "Type",              value: form.typeLabel },
+                    { label: "Short Description", value: form.description },
+                    { label: "Tags",              value: form.tags || "—" },
+                    path === "A"
+                      ? { label: "CE Template", value: `${selectedTemplate.name} · ${selectedTemplate.id}` }
+                      : { label: "Endpoint",    value: endpointUrl },
                   ].map(({ label, value }) => (
                     <div key={label} className="grid grid-cols-3 gap-4" style={{ borderTop: "1px solid #111", paddingTop: "0.75rem" }}>
                       <div className="gmi-label text-gray-500">{label}</div>
-                      <div className="col-span-2 font-mono-gmi text-sm text-gray-300">{value}</div>
+                      <div className="col-span-2 font-mono-gmi text-sm text-gray-300 break-all">{value}</div>
                     </div>
                   ))}
 
@@ -526,7 +713,7 @@ export default function ListClaw() {
               >
                 <ArrowLeft size={14} />
                 {step === 0
-                  ? ctx.from === "deploy" ? "Back to Deploy" : "Back to Dashboard"
+                  ? ctx.from === "deploy" ? "Back to Register" : "Back to Dashboard"
                   : "Back"}
               </button>
 
