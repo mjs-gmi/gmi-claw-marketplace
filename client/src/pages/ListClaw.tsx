@@ -368,10 +368,10 @@ export default function ListClaw() {
                     <AlertTriangle size={14} className="shrink-0 mt-0.5" style={{ color: "#f87171" }} />
                     <div>
                       <div className="font-bold mb-1" style={{ color: "#fca5a5" }}>
-                        MaaS Key has no recent usage (last 30 days)
+                        MaaS Key has no usage
                       </div>
                       <div style={{ color: "#f87171" }} className="leading-relaxed">
-                        To list on the Marketplace, your GMI MaaS key must show active usage within the past 30 days.
+                        To list on the Marketplace, your GMI MaaS key must have at least one inference call recorded.
                         This confirms your Claw is actively using GMI infrastructure.
                         Make at least one inference call with this key, then try again.
                       </div>
@@ -449,19 +449,19 @@ export default function ListClaw() {
                   {usageCheck === "checking" && (
                     <p className="text-xs font-mono-gmi mt-1.5 flex items-center gap-1.5" style={{ color: "#60a5fa" }}>
                       <Loader2 size={10} className="animate-spin" />
-                      Checking MaaS usage for the last 30 days…
+                      Checking MaaS usage…
                     </p>
                   )}
                   {usageCheck === "pass" && (
                     <p className="text-xs font-mono-gmi mt-1.5 flex items-center gap-1.5" style={{ color: "#4ade80" }}>
                       <CheckCircle size={10} />
-                      Recent usage confirmed — key is eligible for listing.
+                      Usage confirmed — key is eligible for listing.
                     </p>
                   )}
                   {usageCheck === "fail" && (
                     <p className="text-xs font-mono-gmi mt-1.5 flex items-center gap-1.5" style={{ color: "#f87171" }}>
                       <AlertTriangle size={10} />
-                      No usage found in the last 30 days. Listing is blocked.
+                      No usage found. Listing is blocked.
                     </p>
                   )}
                   {usageCheck === "idle" && (
@@ -813,11 +813,11 @@ export default function ListClaw() {
                   <div className="p-5 space-y-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
                     <div className="gmi-label text-gray-400 mb-3">Pre-submit Checks</div>
 
-                    {/* Check 1: MaaS Key has recent usage (30d) — Path B only */}
+                    {/* Check 1: MaaS Key has usage — Path B only */}
                     {path === "B" && (
                       <div className="flex items-start gap-2 font-mono-gmi text-xs">
                         <CheckCircle size={12} className="shrink-0 mt-0.5" style={{ color: "#4ade80" }} />
-                        <span style={{ color: "#86efac" }}>MaaS Key has recent usage (30d)</span>
+                        <span style={{ color: "#86efac" }}>MaaS Key has usage</span>
                       </div>
                     )}
 
