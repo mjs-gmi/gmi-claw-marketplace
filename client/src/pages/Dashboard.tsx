@@ -307,13 +307,15 @@ function MonitorTab({ project }: { project: Project }) {
 
 // ─── Integration tab ──────────────────────────────────────────────────────────
 function IntegrationTab({ project }: { project: Project }) {
-  const snippet = `curl -X POST "${project.privateUrl}/invoke" \\
-  -H "Authorization: Bearer ${project.maasKey.slice(0, 20)}••••" \\
+  const endpoint = `${project.privateUrl}/invoke`;
+  const curlSnippet = `curl -X POST ${project.privateUrl}/invoke \\
+  -H "Authorization: Bearer $GMI_MAAS_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"input": "your input here"}'`;
 
   return (
     <div className="space-y-6">
+      {/* GMI MaaS API Key */}
       <div className="p-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
         <div className="font-mono-gmi text-xs uppercase tracking-widest mb-2" style={{ color: "#888" }}>GMI MaaS API Key</div>
         <div className="flex items-center justify-between gap-4">
@@ -325,15 +327,28 @@ function IntegrationTab({ project }: { project: Project }) {
         </div>
       </div>
 
+      {/* Endpoint block */}
       <div style={{ border: "1px solid #1a1a1a" }}>
         <div className="flex items-center justify-between px-4 py-2.5" style={{ background: "#0a0a0a", borderBottom: "1px solid #1a1a1a" }}>
-          <span className="font-mono-gmi text-xs uppercase tracking-widest" style={{ color: "#888" }}>cURL · Quick Start</span>
-          <button onClick={() => { navigator.clipboard.writeText(snippet); toast.success("Copied"); }}
+          <span className="font-mono-gmi text-xs font-bold" style={{ color: "#ccc" }}>Endpoint</span>
+          <button onClick={() => { navigator.clipboard.writeText(endpoint); toast.success("Copied"); }}
             className="flex items-center gap-1.5 font-mono-gmi text-xs px-3 py-1.5" style={{ border: "1px solid #2a2a2a", color: "#888" }}>
             <Copy size={11} /> Copy
           </button>
         </div>
-        <pre className="p-4 text-xs overflow-x-auto" style={{ background: "#000", color: "#aaa", fontFamily: "'GeistMono', monospace", lineHeight: 1.6 }}>{snippet}</pre>
+        <pre className="px-4 py-3 text-xs overflow-x-auto" style={{ background: "#000", color: "#aaa", fontFamily: "'GeistMono', monospace", lineHeight: 1.6 }}>{endpoint}</pre>
+      </div>
+
+      {/* cURL block */}
+      <div style={{ border: "1px solid #1a1a1a" }}>
+        <div className="flex items-center justify-between px-4 py-2.5" style={{ background: "#0a0a0a", borderBottom: "1px solid #1a1a1a" }}>
+          <span className="font-mono-gmi text-xs font-bold" style={{ color: "#ccc" }}>cURL</span>
+          <button onClick={() => { navigator.clipboard.writeText(curlSnippet); toast.success("Copied"); }}
+            className="flex items-center gap-1.5 font-mono-gmi text-xs px-3 py-1.5" style={{ border: "1px solid #2a2a2a", color: "#888" }}>
+            <Copy size={11} /> Copy
+          </button>
+        </div>
+        <pre className="px-4 py-4 text-xs overflow-x-auto" style={{ background: "#000", color: "#aaa", fontFamily: "'GeistMono', monospace", lineHeight: 1.8 }}>{curlSnippet}</pre>
       </div>
 
       <div className="flex items-start gap-3 p-4 font-mono-gmi text-xs" style={{ background: "rgba(221,234,77,0.04)", border: "1px solid rgba(221,234,77,0.15)", color: "#999" }}>
