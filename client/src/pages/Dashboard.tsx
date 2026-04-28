@@ -307,17 +307,10 @@ function MonitorTab({ project }: { project: Project }) {
 
 // ─── Integration tab ──────────────────────────────────────────────────────────
 function IntegrationTab({ project }: { project: Project }) {
-  const snippet = `import requests
-
-response = requests.post(
-    "${project.privateUrl}/invoke",
-    headers={
-        "Authorization": "Bearer ${project.maasKey.slice(0, 20)}••••",
-        "Content-Type": "application/json",
-    },
-    json={"input": "your input here"},
-)
-print(response.json())`;
+  const snippet = `curl -X POST "${project.privateUrl}/invoke" \\
+  -H "Authorization: Bearer ${project.maasKey.slice(0, 20)}••••" \\
+  -H "Content-Type: application/json" \\
+  -d '{"input": "your input here"}'`;
 
   return (
     <div className="space-y-6">
@@ -334,7 +327,7 @@ print(response.json())`;
 
       <div style={{ border: "1px solid #1a1a1a" }}>
         <div className="flex items-center justify-between px-4 py-2.5" style={{ background: "#0a0a0a", borderBottom: "1px solid #1a1a1a" }}>
-          <span className="font-mono-gmi text-xs uppercase tracking-widest" style={{ color: "#888" }}>Python · Quick Start</span>
+          <span className="font-mono-gmi text-xs uppercase tracking-widest" style={{ color: "#888" }}>cURL · Quick Start</span>
           <button onClick={() => { navigator.clipboard.writeText(snippet); toast.success("Copied"); }}
             className="flex items-center gap-1.5 font-mono-gmi text-xs px-3 py-1.5" style={{ border: "1px solid #2a2a2a", color: "#888" }}>
             <Copy size={11} /> Copy
