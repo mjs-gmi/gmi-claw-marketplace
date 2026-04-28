@@ -95,7 +95,6 @@ export default function DeployModal({ claw, onClose }: DeployModalProps) {
                 { label: "CLAW ID", value: claw.id },
                 { label: "MODEL", value: claw.model },
                 { label: "CATEGORY", value: claw.category },
-                { label: "PRICING", value: claw.price },
               ].map((item) => (
                 <div key={item.label}>
                   <div className="text-gray-600 mb-0.5">{item.label}</div>

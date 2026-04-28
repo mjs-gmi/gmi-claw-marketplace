@@ -1,0 +1,131 @@
+direction: right
+
+# ─── GLOBAL CHROME ────────────────────────────────────────────────────────────
+chrome: {
+  label: "GLOBAL CHROME (every page)"
+  style.stroke: "#000"
+  style.fill: "#f0f0f0"
+  style.font-size: 11
+
+  topbar: "Topbar\nback-arrow  breadcrumb  $0.00  [A]"
+  sidebar: "Left Sidebar\n[Inference | Compute]\n---\nHome  Storage\nModels Hub  Playground\nMy Models  Deployments  Fine-Tuning\nWorkflow Gallery  My Workflows\nTeam Space  My Media\n---\nClaw Marketplace\n  Browse Agents\n  My Claws\n  Deploy & List\n---\nSetting  Docs"
+}
+
+# ─── PAGE: MARKETPLACE ────────────────────────────────────────────────────────
+P1: {
+  label: "F-01  Marketplace\n/marketplace"
+  style.stroke: "#000"
+  style.fill: "#fff"
+  style.font-size: 11
+
+  search: "Search bar (full-text)"
+  filters: "Filters\nAll  Developer  Productivity\nBusiness  Creative\n[Verified Only toggle]"
+  grid: "Claw Card Grid\n(Verified first, then by date)\nCard: Logo  Name  Publisher\nCategory  Badge  Short desc"
+  empty: "Empty state\n(no results)"
+}
+
+# ─── PAGE: CLAW DETAIL ────────────────────────────────────────────────────────
+P2: {
+  label: "F-02  Claw Detail\n/marketplace/:id"
+  style.stroke: "#000"
+  style.fill: "#fff"
+  style.font-size: 11
+
+  header: "Name  Publisher  Badge  Category"
+  placeholder: "Image / Demo placeholder"
+  desc: "Full description"
+  infra: "Infrastructure section\n(CE template  MaaS key)"
+  avail: "Availability badge\nAvailable  Early Access  Unavailable"
+  cta_access: "[Access Claw]\n(adapts to availability)"
+  cta_back: "[Back to Marketplace]"
+}
+
+# ─── PAGE: DEPLOY WIZARD ──────────────────────────────────────────────────────
+P3: {
+  label: "F-04  Deploy and List\n/deploy"
+  style.stroke: "#000"
+  style.fill: "#fff"
+  style.font-size: 11
+
+  step1: "Step 1\nSelect CE Template\n(pulls from CE API)"
+  step2: "Step 2\nConfigure Resources\nGPU  region  replicas"
+  step3: "Step 3\nReview and Deploy\nsummary + cost estimate"
+  success: "Success screen\n[View in My Claws]\n[List this Claw]"
+}
+
+# ─── PAGE: LIST A CLAW ────────────────────────────────────────────────────────
+P4: {
+  label: "F-05  List a Claw\n/list-claw"
+  style.stroke: "#000"
+  style.fill: "#fff"
+  style.font-size: 11
+
+  gate_no_ctx: "Guard: no deploy context\nDeploy first, then list\n[Go to Deploy and List]"
+  gate_path_a: "Path A  (has CE template)\nContext banner: template ID\nToggle: Also using GMI MaaS?\n  ON  -> badge: Verified\n  OFF -> badge: Powered by GMI CE"
+  gate_path_b: "Path B  (no CE template)\nStep 1: MaaS API Key\n        Endpoint URL"
+  step_info: "Listing Info\nName  Description  Category\nTags  Availability"
+  review: "Review\nAll fields + badge preview\n[Submit Listing]"
+  done: "Submitted\n[View in Marketplace]\n[Back to My Claws]"
+}
+
+# ─── PAGE: MY CLAWS ───────────────────────────────────────────────────────────
+P5: {
+  label: "F-06  My Claws\n/dashboard"
+  style.stroke: "#000"
+  style.fill: "#fff"
+  style.font-size: 11
+
+  tabs: "Tab A: My Deployments and Listings\nTab B: Claws I Use"
+
+  zone_a_list: "Tab A  Left\nClaw list\nfilter  name  badge  status\n[List] button on unlisted rows\n[Unpublish] on published rows"
+  zone_a_detail: "Tab A  Right  Detail Panel\nName  Badge  tpl_id\n[View public listing]  [Unpublish]\n---\nSub-tabs:\n  Monitor  Integration\n  Analytics  Performance"
+  zone_a_monitor: "Monitor\nCalls  Latency  Uptime  Instances\nPrivate Endpoint  Live logs"
+  zone_a_integration: "Integration\nMaaS API Key  Python snippet"
+  zone_a_analytics: "Analytics\n7-day bar chart  metrics table"
+  zone_a_performance: "Performance\nImpressions  CTR  Conversions\nCategory Rank  trend chart"
+
+  zone_b_list: "Tab B  Left\nRecently used Claws\n(sorted by last accessed)"
+  zone_b_detail: "Tab B  Right  Detail Panel\nName  Badge  Publisher\n[View listing]\nFrequency (30d)\nLast Accessed  Availability"
+}
+
+# ─── FLOWS ────────────────────────────────────────────────────────────────────
+
+# Sidebar nav
+chrome.sidebar -> P1: "Browse Agents"
+chrome.sidebar -> P5: "My Claws"
+chrome.sidebar -> P3: "Deploy and List"
+
+# Marketplace
+P1.grid -> P2: "click card"
+P2.cta_back -> P1: "back"
+
+# Deploy wizard
+P3.step1 -> P3.step2: "Next"
+P3.step2 -> P3.step3: "Next"
+P3.step3 -> P3.success: "Deploy"
+P3.success -> P5: "View in My Claws"
+P3.success -> P4.gate_path_a: "List this Claw\n(templateId + projectName)"
+
+# Dashboard inline List button
+P5.zone_a_list -> P4.gate_path_a: "List button\n(projectName + projectId)"
+
+# List flow
+P4.gate_no_ctx -> P3: "Go to Deploy and List"
+P4.gate_path_a -> P4.step_info: "Next"
+P4.gate_path_b -> P4.step_info: "Next"
+P4.step_info -> P4.review: "Next"
+P4.review -> P4.done: "Submit"
+P4.done -> P1: "View in Marketplace"
+P4.done -> P5: "Back to My Claws"
+
+# My Claws sub-tabs
+P5.zone_a_list -> P5.zone_a_detail: "select claw"
+P5.zone_a_detail -> P5.zone_a_monitor: "Monitor tab"
+P5.zone_a_detail -> P5.zone_a_integration: "Integration tab"
+P5.zone_a_detail -> P5.zone_a_analytics: "Analytics tab"
+P5.zone_a_detail -> P5.zone_a_performance: "Performance tab"
+P5.zone_a_detail -> P2: "View public listing"
+
+# Claws I Use
+P5.zone_b_list -> P5.zone_b_detail: "select"
+P5.zone_b_detail -> P2: "View listing"

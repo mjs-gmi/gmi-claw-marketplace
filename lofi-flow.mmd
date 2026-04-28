@@ -1,0 +1,112 @@
+flowchart LR
+
+%% ─── GLOBAL CHROME ───────────────────────────────────────────────────────────
+subgraph CHROME["GLOBAL CHROME — every page"]
+  direction TB
+  TOPBAR["Topbar\n← back · breadcrumb · credits · avatar"]
+  SIDEBAR["Left Sidebar\n[Inference | Compute]\n──────────────\nHome · Storage\nModels Hub · Playground\nMy Models · Deployments · Fine-Tuning\nWorkflow Gallery · My Workflows\nTeam Space · My Media\n──────────────\nClaw Marketplace\n  Browse Agents\n  My Claws\n  Register & List\n──────────────\nSetting · Docs"]
+end
+
+%% ─── F-01 MARKETPLACE ────────────────────────────────────────────────────────
+subgraph P1["F-01  Marketplace   /marketplace"]
+  direction TB
+  P1_SEARCH["Search bar (full-text)"]
+  P1_FILTERS["Filters: All · Developer · Productivity · Business · Creative\nVerified Only toggle"]
+  P1_GRID["Claw Card Grid\nVerified first, then by date\nCard: Logo · Name · Publisher · Category · Badge · Short desc"]
+  P1_EMPTY["Empty state"]
+end
+
+%% ─── F-02 CLAW DETAIL ────────────────────────────────────────────────────────
+subgraph P2["F-02  Claw Detail   /marketplace/:id"]
+  direction TB
+  P2_HEADER["Name · Publisher · Badge · Category"]
+  P2_IMG["Image / Demo placeholder"]
+  P2_DESC["Full description"]
+  P2_INFRA["Infrastructure section\nCE template · MaaS key"]
+  P2_AVAIL["Availability: Available · Early Access · Unavailable"]
+  P2_ACCESS["[Access Claw] — adapts to availability"]
+  P2_BACK["[← Back to Marketplace]"]
+end
+
+%% ─── F-04 DEPLOY WIZARD ──────────────────────────────────────────────────────
+subgraph P3["F-04  Register and List   /deploy"]
+  direction TB
+  P3_S1["Step 1 · Select CE Template\npulls templates from CE API"]
+  P3_S2["Step 2 · Configure Resources\nGPU · region · replicas"]
+  P3_S3["Step 3 · Review and Deploy\nsummary + cost estimate"]
+  P3_OK["Success screen\n[View in My Claws]\n[List this Claw →]"]
+end
+
+%% ─── F-05 LIST A CLAW ────────────────────────────────────────────────────────
+subgraph P4["F-05  List a Claw   /list-claw"]
+  direction TB
+  P4_GUARD["Guard: no deploy context\nRegister first, then list\n[Go to Register and List]"]
+  P4_PA["Path A — has CE template\nContext banner: template ID\nToggle: Also using GMI MaaS?\n  ON  → badge: Verified\n  OFF → badge: Powered by GMI CE"]
+  P4_PB["Path B — no CE template\nStep 1: MaaS API Key + Endpoint URL"]
+  P4_INFO["Listing Info\nName · Description · Category · Tags · Availability"]
+  P4_REVIEW["Review\nAll fields + badge preview\n[Submit Listing]"]
+  P4_DONE["Submitted\n[View in Marketplace]\n[Back to My Claws]"]
+end
+
+%% ─── F-06 MY CLAWS ───────────────────────────────────────────────────────────
+subgraph P5["F-06  My Claws   /dashboard"]
+  direction TB
+
+  subgraph ZA["Tab A — My Deployments and Listings"]
+    direction LR
+    ZA_LIST["Left: Claw list\nfilter · name · badge · status\n[List →] on unlisted rows\n[Unpublish] on published rows"]
+    ZA_DETAIL["Right: Detail Panel\nName · Badge · tpl_id\n[View public listing] [Unpublish]\n──────────────\nSub-tabs:\n  Monitor | Integration | Analytics | Performance"]
+    ZA_MON["Monitor\nCalls · Latency · Uptime · Instances\nPrivate Endpoint · Live logs"]
+    ZA_INT["Integration\nMaaS API Key · Python snippet"]
+    ZA_ANA["Analytics\n7-day bar chart · metrics table"]
+    ZA_PERF["Performance\nImpressions · CTR · Conversions\nCategory Rank · trend chart"]
+  end
+
+  subgraph ZB["Tab B — Claws I Use"]
+    direction LR
+    ZB_LIST["Left: Recently used Claws\nsorted by last accessed"]
+    ZB_DETAIL["Right: Detail Panel\nName · Badge · Publisher\n[View listing]\nFrequency 30d · Last Accessed · Availability"]
+  end
+end
+
+%% ─── FLOWS ───────────────────────────────────────────────────────────────────
+
+%% Sidebar nav
+SIDEBAR -->|"Browse Agents"| P1
+SIDEBAR -->|"My Claws"| P5
+SIDEBAR -->|"Register and List"| P3
+
+%% Marketplace
+P1_GRID -->|"click card"| P2
+P2_BACK -->|"back"| P1
+
+%% Deploy wizard steps
+P3_S1 -->|"Next"| P3_S2
+P3_S2 -->|"Next"| P3_S3
+P3_S3 -->|"Deploy"| P3_OK
+P3_OK -->|"View in My Claws"| P5
+P3_OK -->|"List this Claw\ncarries templateId + projectName"| P4_PA
+
+%% Dashboard inline List button
+ZA_LIST -->|"List button\ncarries projectName + projectId"| P4_PA
+
+%% List flow routing
+P4_GUARD -->|"Go to Register and List"| P3
+P4_PA -->|"Next"| P4_INFO
+P4_PB -->|"Next"| P4_INFO
+P4_INFO -->|"Next"| P4_REVIEW
+P4_REVIEW -->|"Submit"| P4_DONE
+P4_DONE -->|"View in Marketplace"| P1
+P4_DONE -->|"Back to My Claws"| P5
+
+%% My Claws — Tab A detail
+ZA_LIST -->|"select claw"| ZA_DETAIL
+ZA_DETAIL -->|"Monitor tab"| ZA_MON
+ZA_DETAIL -->|"Integration tab"| ZA_INT
+ZA_DETAIL -->|"Analytics tab"| ZA_ANA
+ZA_DETAIL -->|"Performance tab"| ZA_PERF
+ZA_DETAIL -->|"View public listing"| P2
+
+%% My Claws — Tab B
+ZB_LIST -->|"select"| ZB_DETAIL
+ZB_DETAIL -->|"View listing"| P2

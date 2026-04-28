@@ -6,6 +6,7 @@ import {
   ToggleLeft, ToggleRight, Lock, Search, X,
 } from "lucide-react";
 import Navbar from "@/components/Navbar";
+import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
 import { toast } from "sonner";
 
@@ -18,10 +19,43 @@ const STEPS = [
 ];
 
 const COMPUTE_TIERS = [
-  { id: "A", cpu: "4 cores", ram: "32 GiB", storage: "1 TiB NVMe", priceHr: 0.72, label: "Tier A", note: "High-memory workloads" },
-  { id: "B", cpu: "2 cores", ram: "16 GiB", storage: "200 GiB NVMe", priceHr: 0.36, label: "Tier B", note: "Medium workloads" },
-  { id: "C", cpu: "1 core", ram: "8 GiB", storage: "100 GiB NVMe", priceHr: 0.18, label: "Tier C", note: "Recommended for most Claws", recommended: true },
-  { id: "D", cpu: "1 core", ram: "4 GiB", storage: "50 GiB NVMe", priceHr: 0.08, label: "Tier D", note: "Lightweight tasks" },
+  {
+    id: "performance",
+    label: "Performance",
+    cpu: "32 vCPU",
+    ram: "128 GB",
+    net: "25 Gbps",
+    priceHr: 1.20,
+    note: "High-concurrency agents, heavy orchestration workloads",
+    recommended: false,
+  },
+  {
+    id: "standard",
+    label: "Standard",
+    cpu: "16 vCPU",
+    ram: "64 GB",
+    net: "10 Gbps",
+    priceHr: 0.60,
+    note: "Most agent workloads — API orchestration, RAG, tool-use",
+    recommended: true,
+  },
+  {
+    id: "economy",
+    label: "Economy",
+    cpu: "4 vCPU",
+    ram: "16 GB",
+    net: "1 Gbps",
+    priceHr: 0.15,
+    note: "Lightweight agents, low-traffic or dev/test deployments",
+    recommended: false,
+  },
+];
+
+const IDC_REGIONS = [
+  { id: "us-west", label: "US West", flag: "🇺🇸" },
+  { id: "us-east", label: "US East", flag: "🇺🇸" },
+  { id: "asia-sg", label: "Asia (Singapore)", flag: "🇸🇬" },
+  { id: "eu-de", label: "Europe (Germany)", flag: "🇩🇪" },
 ];
 
 const MAAS_MODELS = [
@@ -93,6 +127,13 @@ function Toggle({ on, onToggle, label, desc }: { on: boolean; onToggle: () => vo
   );
 }
 
+// ─── Tab 2 steps ────────────────────────────────────────────────────────────
+const STEPS_TAB2 = [
+  { id: 0, label: "MaaS Key" },
+  { id: 1, label: "Endpoint" },
+  { id: 2, label: "Review & Submit" },
+];
+
 // ─── Main component ─────────────────────────────────────────────────────────
 export default function DeployWizard() {
   const [, setLocation] = useLocation();
@@ -101,14 +142,36 @@ export default function DeployWizard() {
   const [deploying, setDeploying] = useState(false);
   const [deployStep, setDeployStep] = useState(0);
 
+  // Tab state
+  const [activeTab, setActiveTab] = useState<"ce" | "selfhosted">("ce");
+  const [nudgeShownThisSession, setNudgeShownThisSession] = useState(false);
+  const [showNudge, setShowNudge] = useState(false);
+
+  // Tab 2 state
+  const [tab2Step, setTab2Step] = useState(0);
+  const [tab2MaasKey, setTab2MaasKey] = useState("");
+  const [tab2Endpoint, setTab2Endpoint] = useState("");
+  const [tab2Submitted, setTab2Submitted] = useState(false);
+  const [tab2Submitting, setTab2Submitting] = useState(false);
+
+  const switchToSelfHosted = () => {
+    if (!nudgeShownThisSession) {
+      setShowNudge(true);
+    } else {
+      setActiveTab("selfhosted");
+      setTab2Step(0);
+    }
+  };
+
   // Step 0 — Basic Info
   const [projectName, setProjectName] = useState("");
 
   // Step 1 — Infrastructure
-  const [useCompute, setUseCompute] = useState(true);
+  const [useCompute] = useState(true); // always true in Tab 1
   const [dockerSource, setDockerSource] = useState<"registry" | "upload">("registry");
   const [dockerUrl, setDockerUrl] = useState("");
-  const [computeTier, setComputeTier] = useState("C");
+  const [computeTier, setComputeTier] = useState("standard");
+  const [idcRegion, setIdcRegion] = useState("us-west");
   const [storageMode, setStorageMode] = useState<"shared" | "dedicated">("shared");
   const [minContainers, setMinContainers] = useState("1");
   const [maxContainers, setMaxContainers] = useState("5");
@@ -175,8 +238,9 @@ export default function DeployWizard() {
     const progress = Math.round(((deployStep + 1) / totalSteps) * 100);
     return (
       <div className="min-h-screen flex bg-black text-white">
-        <Navbar />
-        <div className="flex-1 flex items-center justify-center" style={{ marginLeft: "220px" }}>
+        <Topbar />
+      <Navbar />
+        <div className="flex-1 flex items-center justify-center" style={{ marginLeft: "210px", paddingTop: "40px" }}>
           <div className="w-full max-w-lg px-8">
             {/* Animated GMI logo pulse */}
             <div className="flex items-center gap-3 mb-10">
@@ -274,6 +338,7 @@ export default function DeployWizard() {
   if (deployed) {
     const templateId = "tpl_" + Math.random().toString(36).slice(2, 14);
     const slug = projectName.toLowerCase().replace(/\s+/g, "-") || "my-claw";
+    const listUrl = `/list-claw?from=deploy&templateId=${encodeURIComponent(templateId)}&projectName=${encodeURIComponent(projectName || slug)}&useMaaS=${useMaaS}`;
 
     const codeSnippet = `# Step 1: Provision a container
 curl -X POST https://console.gmicloud.ai/api/v1/containers \\
@@ -282,7 +347,7 @@ curl -X POST https://console.gmicloud.ai/api/v1/containers \\
   -d '{
     "name": "${slug}-instance",
     "templateId": "${templateId}",
-    "product": "{gpu_type}",
+    "product": "{cpu_tier}",
     "idc": "{data_center}",
     "count": 1
   }'
@@ -298,8 +363,9 @@ curl -X DELETE https://console.gmicloud.ai/api/v1/containers/{container_id} \\
 
     return (
       <div className="min-h-screen flex bg-black text-white">
-        <Navbar />
-        <div className="flex-1" style={{ marginLeft: "220px" }}>
+        <Topbar />
+      <Navbar />
+        <div className="flex-1" style={{ marginLeft: "210px", paddingTop: "40px" }}>
           <div className="pt-12 pb-20 px-8 max-w-2xl">
             {/* Status header */}
             <div className="flex items-center gap-3 mb-8">
@@ -378,7 +444,7 @@ curl -X DELETE https://console.gmicloud.ai/api/v1/containers/{container_id} \\
             </div>
 
             <div className="flex gap-3">
-              <button onClick={() => setLocation("/list-claw")}
+              <button onClick={() => setLocation(listUrl)}
                 className="btn-primary-lime px-6 py-2.5 text-sm font-bold flex items-center gap-2">
                 List this Claw <ArrowRight size={14} />
               </button>
@@ -394,11 +460,85 @@ curl -X DELETE https://console.gmicloud.ai/api/v1/containers/{container_id} \\
     );
   }
 
+
+
+  // ── Tab 2 submitted screen ────────────────────────────────────────────────
+  if (tab2Submitted) {
+    return (
+      <div className="min-h-screen flex bg-black text-white">
+        <Topbar />
+        <Navbar />
+        <div className="flex-1" style={{ marginLeft: "210px", paddingTop: "40px" }}>
+          <div className="pt-12 pb-20 px-8 max-w-2xl">
+            <div className="flex items-center gap-3 mb-8">
+              <div className="w-2 h-2 rounded-full" style={{ background: "#DDEA4D" }} />
+              <span className="font-mono-gmi text-xs uppercase tracking-widest" style={{ color: "#DDEA4D" }}>Listing Submitted ✓</span>
+            </div>
+            <h1 className="font-display text-3xl text-white mb-2" style={{ letterSpacing: "-0.03em" }}>Your Claw is under review</h1>
+            <p className="text-gray-300 text-sm font-mono-gmi mb-8">
+              We’ve received your self-hosted Claw submission. GMI will verify your MaaS key and endpoint before listing goes live.
+            </p>
+            <div className="grid grid-cols-2 gap-3 mb-8">
+              {[
+                { label: "Deployment Type", value: "Self-hosted + GMI MaaS", color: "#fff" },
+                { label: "Badge", value: "Powered by GMI MaaS", color: "#60a5fa" },
+                { label: "Marketplace State", value: "Pending Review", color: "#f59e0b" },
+                { label: "Endpoint", value: tab2Endpoint || "—", color: "#fff" },
+              ].map((item) => (
+                <div key={item.label} className="p-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
+                  <div className="font-mono-gmi text-xs text-gray-400 mb-1">{item.label}</div>
+                  <div className="font-mono-gmi text-sm font-bold break-all" style={{ color: item.color }}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setLocation("/dashboard")}
+                className="btn-primary-lime px-6 py-2.5 text-sm font-bold flex items-center gap-2">
+                Go to My Claws <ArrowRight size={14} />
+              </button>
+              <button onClick={() => setLocation("/marketplace")}
+                className="btn-outline-dashed px-6 py-2.5 text-sm">Browse Marketplace</button>
+            </div>
+          </div>
+          <Footer />
+        </div>
+      </div>
+    );
+  }
+
   // ── Wizard ──────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen flex bg-black text-white">
+      <Topbar />
       <Navbar />
-      <div className="flex-1" style={{ marginLeft: "220px" }}>
+
+      {/* Nudge modal */}
+      {showNudge && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.8)" }}>
+          <div className="w-full max-w-md p-8" style={{ background: "#111", border: "1px solid #2a2a2a" }}>
+            <div className="font-mono-gmi text-xs uppercase tracking-widest mb-3" style={{ color: "#f59e0b" }}>⚠ Before you switch</div>
+            <h3 className="font-display text-xl text-white mb-3" style={{ letterSpacing: "-0.02em" }}>You’ll miss out on bundle pricing</h3>
+            <p className="text-sm text-gray-300 font-mono-gmi leading-relaxed mb-6">
+              By switching to self-hosted, you lose access to GMI’s CE + MaaS bundle pricing and the <span style={{ color: "#DDEA4D" }}>Verified</span> badge.
+              Self-hosted Claws receive the <span style={{ color: "#60a5fa" }}>Powered by GMI MaaS</span> badge only.
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => setShowNudge(false)}
+                className="flex-1 btn-primary-lime py-2.5 text-sm font-bold">
+                Stay on GMI Full Stack
+              </button>
+              <button
+                onClick={() => { setShowNudge(false); setNudgeShownThisSession(true); setActiveTab("selfhosted"); setTab2Step(0); }}
+                className="flex-1 py-2.5 text-sm font-mono-gmi transition-all"
+                style={{ border: "1px solid #2a2a2a", color: "#888" }}>
+                Continue to self-hosted
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex-1" style={{ marginLeft: "210px", paddingTop: "40px" }}>
         <div className="pt-8 pb-20">
           <div className="px-8 max-w-3xl">
 
@@ -409,7 +549,7 @@ curl -X DELETE https://console.gmicloud.ai/api/v1/containers/{container_id} \\
             </button>
 
             {/* Header */}
-            <div className="mb-10">
+            <div className="mb-8">
               <div className="gmi-label mb-2">Developer Console · New Claw Project</div>
               <h1 className="font-display text-4xl text-white mb-2" style={{ letterSpacing: "-0.03em" }}>
                 Register a Claw
@@ -419,6 +559,191 @@ curl -X DELETE https://console.gmicloud.ai/api/v1/containers/{container_id} \\
               </p>
             </div>
 
+
+
+            {/* ── Tab switcher ─────────────────────────────────────────── */}
+            <div className="flex mb-8" style={{ borderBottom: "1px solid #1e1e1e" }}>
+              <button
+                onClick={() => { setActiveTab("ce"); setStep(0); }}
+                className="px-5 py-3 font-mono-gmi text-sm font-bold transition-all"
+                style={{
+                  borderBottom: activeTab === "ce" ? "2px solid #DDEA4D" : "2px solid transparent",
+                  color: activeTab === "ce" ? "#DDEA4D" : "#888",
+                  marginBottom: "-1px",
+                }}>
+                GMI CE Deployment
+              </button>
+              <button
+                onClick={switchToSelfHosted}
+                className="px-5 py-3 font-mono-gmi text-sm font-bold transition-all"
+                style={{
+                  borderBottom: activeTab === "selfhosted" ? "2px solid #60a5fa" : "2px solid transparent",
+                  color: activeTab === "selfhosted" ? "#60a5fa" : "#888",
+                  marginBottom: "-1px",
+                }}>
+                Self-hosted + MaaS
+              </button>
+            </div>
+
+            {/* ── SELF-HOSTED CONTENT ────────────────────────────────────── */}
+            {activeTab === "selfhosted" && (
+              <div>
+                <div className="flex items-center gap-0 mb-10">
+                  {STEPS_TAB2.map((s, i) => (
+                    <div key={s.id} className="flex items-center shrink-0">
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 flex items-center justify-center text-xs font-mono-gmi font-bold shrink-0"
+                          style={{ background: i <= tab2Step ? "#60a5fa" : "#111", color: i <= tab2Step ? "#000" : "#999", border: i <= tab2Step ? "none" : "1px solid #2a2a2a" }}>
+                          {i < tab2Step ? "✓" : i + 1}
+                        </div>
+                        <span className="text-xs font-mono-gmi hidden sm:inline whitespace-nowrap"
+                          style={{ color: i === tab2Step ? "#fff" : "#999" }}>
+                          {s.label}
+                        </span>
+                      </div>
+                      {i < STEPS_TAB2.length - 1 && (
+                        <div className="w-8 h-px mx-3 shrink-0" style={{ background: i < tab2Step ? "#60a5fa" : "#2a2a2a" }} />
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Badge notice */}
+                <div className="flex items-start gap-3 p-4 mb-6 font-mono-gmi text-xs"
+                  style={{ background: "rgba(96,165,250,0.06)", border: "1px solid rgba(96,165,250,0.25)" }}>
+                  <Info size={13} className="shrink-0 mt-0.5" style={{ color: "#60a5fa" }} />
+                  <span style={{ color: "#93c5fd" }}>
+                    Self-hosted Claws receive the <strong>Powered by GMI MaaS</strong> badge. You host the compute; GMI provides the model layer only.
+                  </span>
+                </div>
+
+                {/* Step 0: MaaS Key */}
+                {tab2Step === 0 && (
+                  <div className="space-y-6">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Zap size={15} style={{ color: "#60a5fa" }} />
+                      <h2 className="font-display text-lg text-white">GMI MaaS API Key</h2>
+                    </div>
+                    <p className="text-xs text-gray-300 font-mono-gmi -mt-2">
+                      Provide a project-scoped MaaS API key. GMI will validate it before your listing goes live.
+                    </p>
+                    <TextInput
+                      label="MaaS API Key *"
+                      placeholder="gmi_sk_..."
+                      value={tab2MaasKey}
+                      onChange={setTab2MaasKey}
+                      mono
+                      hint="Create a project-scoped key in Console → Settings → API Keys."
+                    />
+                    <div className="flex items-start gap-3 p-4 font-mono-gmi text-xs"
+                      style={{ background: "rgba(221,234,77,0.04)", border: "1px solid rgba(221,234,77,0.15)", color: "#DDEA4D" }}>
+                      <Info size={13} className="shrink-0 mt-0.5" />
+                      <span>
+                        Your Claw must reference <code className="bg-black px-1">GMI_MAAS_API_KEY</code> in its code to call models.
+                        GMI validates this key is active and project-scoped before approving your listing.
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 1: External Endpoint */}
+                {tab2Step === 1 && (
+                  <div className="space-y-6">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Server size={15} style={{ color: "#60a5fa" }} />
+                      <h2 className="font-display text-lg text-white">External Endpoint URL</h2>
+                    </div>
+                    <p className="text-xs text-gray-300 font-mono-gmi -mt-2">
+                      Provide the public URL where your Claw is hosted. This is what Enterprise callers will use to access your Claw.
+                    </p>
+                    <TextInput
+                      label="Endpoint URL *"
+                      placeholder="https://your-claw.yourdomain.com"
+                      value={tab2Endpoint}
+                      onChange={setTab2Endpoint}
+                      mono
+                      hint="Must be publicly reachable over HTTPS. GMI will run a health check before approving."
+                    />
+                    <div className="flex items-start gap-3 p-4 font-mono-gmi text-xs"
+                      style={{ background: "rgba(255,80,80,0.06)", border: "1px solid rgba(255,80,80,0.2)", color: "#ff8080" }}>
+                      <Info size={13} className="shrink-0 mt-0.5" />
+                      <span>
+                        You are solely responsible for uptime and availability of this endpoint.
+                        If your endpoint goes down, your Marketplace listing will be marked Unavailable automatically.
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 2: Review & Submit */}
+                {tab2Step === 2 && (
+                  <div className="space-y-6">
+                    <div className="flex items-center gap-2 mb-2">
+                      <CheckCircle size={15} style={{ color: "#60a5fa" }} />
+                      <h2 className="font-display text-lg text-white">Review & Submit</h2>
+                    </div>
+                    <div className="p-5 space-y-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
+                      <p className="font-mono-gmi text-xs text-gray-300 uppercase tracking-widest border-b border-gray-800 pb-3">Configuration Summary</p>
+                      {[
+                        { label: "Deployment Type", value: "Self-hosted + GMI MaaS" },
+                        { label: "MaaS API Key", value: tab2MaasKey ? tab2MaasKey.slice(0, 12) + "..." : "Not set" },
+                        { label: "Endpoint URL", value: tab2Endpoint || "Not set" },
+                        { label: "Badge", value: "Powered by GMI MaaS" },
+                      ].map(({ label, value }) => (
+                        <div key={label} className="grid grid-cols-3 gap-4">
+                          <div className="gmi-label text-gray-400">{label}</div>
+                          <div className="col-span-2 font-mono-gmi text-sm text-gray-300 break-all">{value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="p-4 font-mono-gmi text-xs" style={{ background: "rgba(221,234,77,0.04)", border: "1px solid rgba(221,234,77,0.2)" }}>
+                      <div className="font-bold mb-1" style={{ color: "#DDEA4D" }}>Submission ≠ Listing</div>
+                      <p className="text-gray-400 leading-relaxed">
+                        Submitting does <strong>not</strong> immediately publish your Claw. GMI will verify your MaaS key and endpoint health before the listing goes live.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Tab 2 navigation */}
+                <div className="flex items-center justify-between mt-10">
+                  <button
+                    onClick={() => (tab2Step === 0 ? setActiveTab("ce") : setTab2Step(tab2Step - 1))}
+                    className="btn-outline-dashed px-6 py-2.5 text-sm flex items-center gap-2">
+                    <ArrowLeft size={14} />
+                    {tab2Step === 0 ? "Switch to CE" : "Back"}
+                  </button>
+                  {tab2Step < STEPS_TAB2.length - 1 ? (
+                    <button
+                      onClick={() => {
+                        if (tab2Step === 0 && !tab2MaasKey.trim()) { toast.error("Please enter your MaaS API key."); return; }
+                        if (tab2Step === 1 && !tab2Endpoint.trim()) { toast.error("Please enter your endpoint URL."); return; }
+                        setTab2Step(tab2Step + 1);
+                      }}
+                      className="px-8 py-2.5 text-sm font-bold flex items-center gap-2 transition-all"
+                      style={{ background: "#60a5fa", color: "#000" }}>
+                      Continue <ArrowRight size={14} />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        if (!tab2MaasKey.trim() || !tab2Endpoint.trim()) { toast.error("MaaS key and endpoint are required."); return; }
+                        setTab2Submitting(true);
+                        setTimeout(() => { setTab2Submitting(false); setTab2Submitted(true); toast.success("Submission received"); }, 2000);
+                      }}
+                      disabled={tab2Submitting}
+                      className="px-8 py-2.5 text-sm font-bold flex items-center gap-2 transition-all"
+                      style={{ background: tab2Submitting ? "#2a2a2a" : "#60a5fa", color: tab2Submitting ? "#888" : "#000" }}>
+                      {tab2Submitting ? "Submitting..." : "Submit"} {!tab2Submitting && <Zap size={14} />}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ── CE WIZARD CONTENT ─────────────────────────────────── */}
+            {activeTab === "ce" && (
+            <div>
             {/* Step indicator */}
             <div className="flex items-center gap-0 mb-10">
               {STEPS.map((s, i) => (
@@ -471,23 +796,16 @@ curl -X DELETE https://console.gmicloud.ai/api/v1/containers/{container_id} \\
               <div className="space-y-8">
                 <div className="flex items-center gap-2 mb-2">
                   <Cpu size={15} style={{ color: "#DDEA4D" }} />
-                  <h2 className="font-display text-lg text-white">Infrastructure Selection</h2>
+                  <h2 className="font-display text-lg text-white">Infrastructure</h2>
                 </div>
-                <p className="text-xs text-gray-400 font-mono-gmi -mt-4">
-                  Select Compute, MaaS, or both. At least one GMI component is required.
+                <p className="text-xs font-mono-gmi -mt-4" style={{ color: "#aaa" }}>
+                  Configure compute resources for your Claw. GMI CE will provision containers on demand.
                 </p>
 
-                {/* 2A: Compute */}
-                <div>
-                  <Toggle
-                    on={useCompute}
-                    onToggle={() => setUseCompute((v) => !v)}
-                    label="GMI Compute — Host my Claw on GMI infrastructure"
-                    desc="Provision a VM to run your Claw's Docker container"
-                  />
-
-                  {useCompute && (
-                    <div className="mt-4 space-y-5 pl-4" style={{ borderLeft: "2px solid rgba(221,234,77,0.2)" }}>
+                {/* 2A: Compute — always shown, no toggle */}
+                <div className="space-y-5">
+                  {/* Docker image — kept here */}
+                    <div className="space-y-5">
 
                       {/* Docker image */}
                       <div>
@@ -529,15 +847,15 @@ curl -X DELETE https://console.gmicloud.ai/api/v1/containers/{container_id} \\
                         )}
                       </div>
 
-                      {/* Compute tier */}
+                      {/* Compute tier — CPU-based */}
                       <div>
                         <FieldLabel>Compute Tier</FieldLabel>
                         <div className="space-y-2">
                           {COMPUTE_TIERS.map((t) => (
                             <RadioCard key={t.id} selected={computeTier === t.id} onClick={() => setComputeTier(t.id)}>
-                              <div className="flex items-center justify-between mb-1">
+                              <div className="flex items-center justify-between mb-2">
                                 <div className="flex items-center gap-3">
-                                  <span className="font-mono-gmi text-sm font-bold" style={{ color: computeTier === t.id ? "#DDEA4D" : "#888" }}>
+                                  <span className="font-mono-gmi text-sm font-bold" style={{ color: computeTier === t.id ? "#DDEA4D" : "#ddd" }}>
                                     {t.label}
                                   </span>
                                   {t.recommended && (
@@ -547,60 +865,57 @@ curl -X DELETE https://console.gmicloud.ai/api/v1/containers/{container_id} \\
                                   )}
                                 </div>
                                 <div className="flex items-center gap-3">
+                                  <span className="font-mono-gmi text-sm font-bold" style={{ color: computeTier === t.id ? "#DDEA4D" : "#aaa" }}>
+                                    ${t.priceHr.toFixed(2)}/hr
+                                  </span>
                                   <RadioDot selected={computeTier === t.id} />
                                 </div>
                               </div>
-                              <div className="grid grid-cols-3 gap-3 font-mono-gmi text-xs text-gray-300">
-                                <span><span className="text-gray-300">CPU</span> {t.cpu}</span>
-                                <span><span className="text-gray-300">RAM</span> {t.ram}</span>
-                                <span><span className="text-gray-300">Storage</span> {t.storage}</span>
+                              <div className="grid grid-cols-3 gap-3 font-mono-gmi text-xs" style={{ color: "#bbb" }}>
+                                <span><span style={{ color: "#888" }}>CPU </span>{t.cpu}</span>
+                                <span><span style={{ color: "#888" }}>RAM </span>{t.ram}</span>
+                                <span><span style={{ color: "#888" }}>NET </span>{t.net}</span>
                               </div>
+                              <p className="font-mono-gmi text-xs mt-1.5" style={{ color: "#888" }}>{t.note}</p>
                             </RadioCard>
                           ))}
                         </div>
                       </div>
 
-                      {/* Storage mode */}
+                      {/* IDC Region */}
                       <div>
-                        <FieldLabel>Storage Mode</FieldLabel>
+                        <FieldLabel>Data Center Region</FieldLabel>
                         <div className="grid grid-cols-2 gap-2">
-                          {[
-                            { id: "shared" as const, label: "Shared", desc: "Data-isolated between containers" },
-                            { id: "dedicated" as const, label: "Dedicated", desc: "Fully isolated per container" },
-                          ].map((opt) => (
-                            <RadioCard key={opt.id} selected={storageMode === opt.id} onClick={() => setStorageMode(opt.id)}>
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="font-mono-gmi text-sm font-bold" style={{ color: storageMode === opt.id ? "#DDEA4D" : "#888" }}>
-                                  {opt.label}
+                          {IDC_REGIONS.map((r) => (
+                            <RadioCard key={r.id} selected={idcRegion === r.id} onClick={() => setIdcRegion(r.id)}>
+                              <div className="flex items-center justify-between">
+                                <span className="font-mono-gmi text-sm" style={{ color: idcRegion === r.id ? "#DDEA4D" : "#ddd" }}>
+                                  {r.flag} {r.label}
                                 </span>
-                                <RadioDot selected={storageMode === opt.id} />
+                                <RadioDot selected={idcRegion === r.id} />
                               </div>
-                              <p className="text-xs text-gray-400 font-mono-gmi">{opt.desc}</p>
                             </RadioCard>
                           ))}
                         </div>
                       </div>
 
-                      {/* Auto-scaling */}
+                      {/* Scaling */}
                       <div>
-                        <FieldLabel>Auto-Scaling Configuration</FieldLabel>
+                        <FieldLabel>Scaling</FieldLabel>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
-                            <label className="block font-mono-gmi text-xs text-gray-400 mb-1.5">
-                              Min Containers <span className="text-gray-300">(≥ 1, no cold starts)</span>
+                            <label className="block font-mono-gmi text-xs mb-1.5" style={{ color: "#aaa" }}>
+                              Min Instances <span style={{ color: "#888" }}>— 0 = serverless (cold start)</span>
                             </label>
-                            <input type="number" min="1" value={minContainers}
+                            <input type="number" min="0" value={minContainers}
                               onChange={(e) => setMinContainers(e.target.value)}
                               className="w-full px-4 py-3 text-sm text-white bg-transparent outline-none font-mono-gmi"
                               style={{ border: "1px solid #2a2a2a" }}
                               onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-                              onBlur={(e) => {
-                                e.currentTarget.style.borderColor = "#2a2a2a";
-                                if (parseInt(e.target.value) < 1) setMinContainers("1");
-                              }} />
+                              onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")} />
                           </div>
                           <div>
-                            <label className="block font-mono-gmi text-xs text-gray-400 mb-1.5">Max Containers</label>
+                            <label className="block font-mono-gmi text-xs mb-1.5" style={{ color: "#aaa" }}>Max Instances</label>
                             <input type="number" min={minContainers} value={maxContainers}
                               onChange={(e) => setMaxContainers(e.target.value)}
                               className="w-full px-4 py-3 text-sm text-white bg-transparent outline-none font-mono-gmi"
@@ -609,21 +924,20 @@ curl -X DELETE https://console.gmicloud.ai/api/v1/containers/{container_id} \\
                               onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")} />
                           </div>
                         </div>
-                        <p className="text-xs text-gray-300 font-mono-gmi mt-2">
-                          Billing is based on active containers × tier price. Min containers are always running.
+                        <p className="font-mono-gmi text-xs mt-2" style={{ color: "#888" }}>
+                          Billed per instance·hr. Min instances are always running and always billed.
                         </p>
                       </div>
                     </div>
-                  )}
-                </div>
+                  </div>
 
-                {/* 2B: MaaS */}
+                          {/* 2B: MaaS — optional add-on */}
                 <div>
                   <Toggle
                     on={useMaaS}
                     onToggle={() => setUseMaaS((v) => !v)}
-                    label="GMI MaaS — Access 200+ frontier models"
-                    desc="Get a GMI MaaS API key injected into your container automatically"
+                    label="Add GMI MaaS — Access 200+ frontier models"
+                    desc="Optional: GMI injects a MaaS API key into your container at startup. Enables Verified badge."
                   />
 
                   {useMaaS && (
@@ -964,6 +1278,9 @@ curl -X DELETE https://console.gmicloud.ai/api/v1/containers/{container_id} \\
                 </button>
               )}
             </div>
+
+          </div>
+            )}
 
           </div>
         </div>

@@ -1,9 +1,11 @@
 import { useParams, Link } from "wouter";
 import { ArrowLeft, CheckCircle, ExternalLink, Tag, AlertCircle, Clock } from "lucide-react";
 import Navbar from "@/components/Navbar";
+import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
 import { ALL_CLAWS, getBadgeConfig } from "@/lib/clawData";
 import { toast } from "sonner";
+import { ImageIcon } from "lucide-react";
 
 const TYPE_CONFIG: Record<string, { color: string; bg: string }> = {
   Developer: { color: "#7ec8ff", bg: "rgba(126,200,255,0.08)" },
@@ -64,9 +66,10 @@ export default function ClawDetail() {
 
   return (
     <div className="min-h-screen flex bg-black text-white">
+      <Topbar />
       <Navbar />
 
-      <div className="flex-1" style={{ marginLeft: "220px" }}>
+      <div className="flex-1" style={{ marginLeft: "210px", paddingTop: "40px" }}>
         <div className="pt-8 pb-20">
           <div className="px-8 max-w-6xl">
 
@@ -145,6 +148,22 @@ export default function ClawDetail() {
                   <p className="text-gray-400 leading-relaxed text-sm">{fullDescription}</p>
                 </div>
 
+                {/* Image placeholder */}
+                <div>
+                  <h2 className="font-display text-lg text-white mb-3">Preview</h2>
+                  <div
+                    className="w-full flex flex-col items-center justify-center gap-3"
+                    style={{
+                      background: "#0a0a0a",
+                      border: "1px solid #1e1e1e",
+                      aspectRatio: "16/9",
+                    }}
+                  >
+                    <ImageIcon size={36} className="text-gray-700" />
+                    <span className="font-mono-gmi text-xs text-gray-600">Image / Demo coming soon</span>
+                  </div>
+                </div>
+
                 {/* Infrastructure info */}
                 <div>
                   <h2 className="font-display text-lg text-white mb-3">Infrastructure</h2>
@@ -175,22 +194,6 @@ export default function ClawDetail() {
                   className="sticky top-24 p-6 space-y-6"
                   style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}
                 >
-                  {/* Pricing */}
-                  <div>
-                    <div className="gmi-label text-gray-400 mb-2">Pricing</div>
-                    <div
-                      className="font-display text-2xl mb-1"
-                      style={{ color: "#DDEA4D", letterSpacing: "-0.02em" }}
-                    >
-                      {claw.pricing}
-                    </div>
-                    <div className="text-xs text-gray-400 font-mono-gmi leading-relaxed">
-                      No credit card required. Pay only for what you use.
-                    </div>
-                  </div>
-
-                  <div style={{ borderTop: "1px solid #1e1e1e" }} />
-
                   {/* Availability status */}
                   <div className="flex items-center gap-2 font-mono-gmi text-xs">
                     {claw.availability === "available" && (
@@ -270,10 +273,7 @@ export default function ClawDetail() {
                       <CheckCircle size={12} className="shrink-0 mt-0.5 text-gray-300" />
                       <span>Browser-based. No SDK, API key, or installation required.</span>
                     </div>
-                    <div className="flex items-start gap-2 text-xs text-gray-400 font-mono-gmi">
-                      <CheckCircle size={12} className="shrink-0 mt-0.5 text-gray-300" />
-                      <span>Pricing set by publisher. GMI provides the infrastructure.</span>
-                    </div>
+
                   </div>
                 </div>
               </div>

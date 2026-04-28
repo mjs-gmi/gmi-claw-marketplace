@@ -111,7 +111,7 @@ export default function Footer() {
             PRODUCT
           </div>
           <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-            {["Marketplace", "Developer Toolkit", "Cluster Engine", "Pricing"].map((item) => (
+            {["Marketplace", "Developer Toolkit", "Cluster Engine"].map((item) => (
               <li key={item}>
                 <span
                   style={{

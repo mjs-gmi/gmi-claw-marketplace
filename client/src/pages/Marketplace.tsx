@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import Navbar from "@/components/Navbar";
+import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
 import { ALL_CLAWS, TYPE_LABELS, getBadgeConfig, type Claw, type TypeLabel } from "@/lib/clawData";
 
@@ -171,8 +172,9 @@ export default function Marketplace() {
 
   return (
     <div style={{ minHeight: "100vh", background: "#000000", color: "#ffffff" }}>
+      <Topbar />
       <Navbar />
-      <div style={{ marginLeft: "220px", display: "flex", flexDirection: "column" }}>
+      <div style={{ marginLeft: "210px", paddingTop: "40px", display: "flex", flexDirection: "column" }}>
 
         {/* Hero */}
         <section style={{ borderBottom: "1px solid #222222", background: "#000000", backgroundImage: "radial-gradient(circle, rgba(221,234,77,0.07) 1px, transparent 1px)", backgroundSize: "24px 24px" }}>
