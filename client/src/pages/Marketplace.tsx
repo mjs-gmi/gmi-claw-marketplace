@@ -5,144 +5,264 @@ import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
 import { ALL_CLAWS, TYPE_LABELS, getBadgeConfig, type Claw, type TypeLabel } from "@/lib/clawData";
 
-const QUICKSTART_CMD = "openclaw plugins install clawhub:openclaw-gmicloud-provider";
+// ─── Design tokens — extracted verbatim from Figma JSON ──────────────────────
+// Geist Sans across the board. Mono only inside the terminal block.
+const FONT      = "'Geist', system-ui, sans-serif";
+const FONT_MONO = "'GeistMono', ui-monospace, 'SFMono-Regular', monospace";
 
-const STATS = [
-  { value: "200+", label: "Claws" },
-  { value: "12K+", label: "Registrations" },
-  { value: "<30s", label: "Register Time" },
-  { value: "99.5%", label: "Uptime SLA" },
-];
+// Colors (lab/oklab from Figma → sRGB hex)
+const C = {
+  bg:        "#0a0a0a",                  // lab(2.75 0 0)
+  fg:        "#fafafa",                  // lab(98.26 0 0)
+  muted:     "#a3a3a3",                  // lab(66.13 …) — neutral-400
+  mutedSoft: "rgba(250,250,250,0.7)",    // sidebar section labels
+  border:    "#404040",                  // rgb(64,64,64) — neutral-700
+  borderSoft:"#262626",                  // neutral-800
+  card:      "rgba(23,23,23,0.6)",       // ~ neutral-900 / 60
+  cardSolid: "#171717",                  // neutral-900
+  pillBg:    "rgba(82,82,82,0.3)",       // search/input chrome
+  activeBg:  "rgba(255,255,255,0.12)",   // active filter pill
+  lime:      "#DDEA4D",                  // accent — GMI lime
+  limeText:  "#0a0a0a",
+  // Category accent (purple from "Da" avatar in Figma): lab(76.74 18.39 -37.07)
+  catAccent: "#c7a7ff",
+} as const;
 
-function QuickStartCopyButton({ cmd }: { cmd: string }) {
+// One real command: turns GMI Cloud into a provider inside an existing OpenClaw setup.
+const OPENCLAW_INSTALL_CMD = "openclaw plugins install clawhub:openclaw-gmicloud-provider";
+
+const ALL_TYPES: (TypeLabel | "All")[] = ["All", ...TYPE_LABELS];
+
+// Subtle per-category accent. Avatar bg uses 12% alpha of the same.
+const TYPE_COLOR: Record<TypeLabel, string> = {
+  "Code & Dev Tools":     "#7dd3fc", // sky-300
+  "Data & Analytics":     C.lime,
+  "Customer Support":     "#86efac", // green-300
+  "Content & Marketing":  "#f9a8d4", // pink-300
+  "Research & Knowledge": "#c7a7ff", // violet/purple
+};
+
+// ─── Icons (1.5-stroke lucide-style) ─────────────────────────────────────────
+const IconSearch = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
+  </svg>
+);
+const IconCheck = ({ size = 12 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M20 6 9 17l-5-5" />
+  </svg>
+);
+const IconPlus = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+const IconArrowRight = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M5 12h14M13 5l7 7-7 7" />
+  </svg>
+);
+const IconX = ({ size = 12 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M18 6 6 18M6 6l12 12" />
+  </svg>
+);
+const IconCopy = ({ size = 12 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" />
+  </svg>
+);
+
+function CopyButton({ cmd }: { cmd: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
-      onClick={() => { navigator.clipboard.writeText(cmd); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
-      style={{ background: copied ? "rgba(221,234,77,0.15)" : "#111", border: "1px solid #2a2a2a", color: copied ? "#DDEA4D" : "#888", padding: "3px 7px", cursor: "pointer", fontFamily: "'GeistMono', monospace", fontSize: "0.5rem", letterSpacing: "0.1em", textTransform: "uppercase" }}
+      onClick={() => { navigator.clipboard.writeText(cmd); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        background: "transparent",
+        border: "none",
+        color: copied ? C.lime : C.muted,
+        fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
+        cursor: "pointer",
+        padding: "2px 6px",
+        borderRadius: 6,
+      }}
     >
-      {copied ? "COPIED" : "COPY"}
+      {copied ? <><IconCheck size={11} /> Copied</> : <><IconCopy size={11} /> Copy</>}
     </button>
   );
 }
 
-const ALL_TYPES: (TypeLabel | "All")[] = ["All", ...TYPE_LABELS];
-
-const TYPE_COLORS: Record<TypeLabel | "All", string> = {
-  All: "#999999",
-  Developer: "#7ec8ff",
-  Productivity: "#DDEA4D",
-  Business: "#34d399",
-  Creative: "#f9a8d4",
-};
-
-const IconSearch = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M10 2a8 8 0 1 0 4.906 14.32l4.387 4.387 1.414-1.414-4.387-4.387A8 8 0 0 0 10 2zm0 2a6 6 0 1 1 0 12A6 6 0 0 1 10 4z"/>
-  </svg>
-);
-const IconX = () => (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/>
-  </svg>
-);
-const IconArrow = () => (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8-8-8z"/>
-  </svg>
-);
-const IconCheck = () => (
-  <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
-  </svg>
-);
-const IconPlus = () => (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
-  </svg>
-);
-
-// Only rendered in catalog for Verified — CE/MaaS badges hidden per PRD
 function VerifiedBadge({ path }: { path: Claw["infrastructurePath"] }) {
   if (path !== "gmi_ce_maas") return null;
   const badge = getBadgeConfig(path);
   return (
-    <span title={badge.tooltip} style={{ display: "inline-flex", alignItems: "center", gap: "3px", fontFamily: "'GeistMono', monospace", fontSize: "0.5rem", letterSpacing: "0.1em", textTransform: "uppercase", color: badge.color, border: `1px solid ${badge.border}`, background: badge.bg, padding: "1px 6px", cursor: "help" }}>
-      <IconCheck /> {badge.label}
+    <span
+      title={badge.tooltip}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 4,
+        fontFamily: FONT, fontSize: 11, fontWeight: 500, lineHeight: "16px",
+        color: C.lime,
+        background: "rgba(221,234,77,0.10)",
+        border: `1px solid rgba(221,234,77,0.35)`,
+        padding: "1px 7px",
+        borderRadius: 999,
+        cursor: "help",
+      }}
+    >
+      <IconCheck size={10} /> Verified
     </span>
   );
 }
 
-function TypeTag({ type }: { type: TypeLabel }) {
-  const colors: Record<TypeLabel, string> = { Developer: "#7ec8ff", Productivity: "#DDEA4D", Business: "#34d399", Creative: "#f9a8d4" };
+function CategoryTag({ type }: { type: TypeLabel }) {
+  const color = TYPE_COLOR[type];
   return (
-    <span style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.5rem", letterSpacing: "0.12em", textTransform: "uppercase", color: colors[type], border: `1px solid ${colors[type]}33`, padding: "1px 6px" }}>
+    <span
+      style={{
+        fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
+        color,
+        background: `${color}14`,
+        padding: "2px 8px",
+        borderRadius: 999,
+        whiteSpace: "nowrap",
+      }}
+    >
       {type}
     </span>
   );
 }
 
-function ClawCard({ claw }: { claw: Claw }) {
+function Avatar({ publisher, color }: { publisher: string; color: string }) {
+  const initials = publisher.replace(/[^a-zA-Z0-9]/g, "").slice(0, 2);
+  const display = initials ? initials[0].toUpperCase() + (initials[1] || "").toLowerCase() : "?";
+  return (
+    <div
+      style={{
+        width: 36, height: 36,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        background: `${color}1f`,
+        border: `1px solid ${color}55`,
+        color,
+        fontFamily: FONT, fontSize: 14, fontWeight: 700, lineHeight: "20px",
+        borderRadius: 8,
+        flexShrink: 0,
+      }}
+    >
+      {display}
+    </div>
+  );
+}
+
+function VerifiedCheck() {
+  return (
+    <span
+      title="Verified — hosted on GMI Cluster Engine with GMI MaaS"
+      style={{
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        width: 14, height: 14, borderRadius: 999,
+        background: "#7dd3fc",
+        color: "#0a0a0a",
+        flexShrink: 0,
+      }}
+    >
+      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M20 6 9 17l-5-5" />
+      </svg>
+    </span>
+  );
+}
+
+function MiniAvatar({ publisher, color }: { publisher: string; color: string }) {
+  const initials = publisher.replace(/[^a-zA-Z0-9]/g, "").slice(0, 2);
+  const display = initials ? initials[0].toUpperCase() + (initials[1] || "").toLowerCase() : "?";
+  return (
+    <div
+      style={{
+        width: 28, height: 28,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        background: "#0a0a0a",
+        border: `1px solid ${C.border}`,
+        color,
+        fontFamily: FONT, fontSize: 11, fontWeight: 700, lineHeight: "14px",
+        borderRadius: 6,
+        flexShrink: 0,
+      }}
+    >
+      {display}
+    </div>
+  );
+}
+
+function AgentCard({ claw }: { claw: Claw }) {
   const [, setLocation] = useLocation();
   const [hovered, setHovered] = useState(false);
+  const typeColor = TYPE_COLOR[claw.typeLabel];
   const isVerified = claw.infrastructurePath === "gmi_ce_maas";
-
-  const borderColor = hovered
-    ? "#DDEA4D"
-    : isVerified
-    ? "rgba(221,234,77,0.28)"
-    : "#222222";
-  const bgColor = hovered
-    ? (isVerified ? "rgba(221,234,77,0.04)" : "#0a0a0a")
-    : isVerified
-    ? "rgba(221,234,77,0.015)"
-    : "#000000";
 
   return (
     <div
-      style={{ background: bgColor, border: `1px solid ${borderColor}`, cursor: "pointer", transition: "border-color 0.12s ease, background 0.12s ease", display: "flex", flexDirection: "column", position: "relative", overflow: "hidden" }}
       onClick={() => setLocation(`/marketplace/${claw.id}`)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      style={{
+        background: C.cardSolid,
+        border: `1px solid ${hovered ? "#525252" : C.border}`,
+        borderRadius: 10,
+        padding: 14,
+        cursor: "pointer",
+        transition: "border-color .15s ease, transform .15s ease",
+        transform: hovered ? "translateY(-1px)" : "none",
+        display: "flex", flexDirection: "column", gap: 10,
+        minHeight: 152,
+      }}
     >
-      {/* Verified accent bar */}
-      {isVerified && (
-        <div style={{ height: "2px", background: "linear-gradient(90deg, #DDEA4D 0%, rgba(221,234,77,0.15) 100%)", flexShrink: 0 }} />
-      )}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <MiniAvatar publisher={claw.publisher} color={typeColor} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <h3
+              style={{
+                fontFamily: FONT, fontSize: 13, fontWeight: 600, lineHeight: "18px",
+                color: C.fg,
+                margin: 0,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                minWidth: 0, flex: 1,
+              }}
+            >
+              {claw.name}
+            </h3>
+            {isVerified && <VerifiedCheck />}
+          </div>
+          <div
+            style={{
+              fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px",
+              color: C.muted,
+              marginTop: 2,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            }}
+          >
+            {claw.publisher}
+          </div>
+        </div>
+      </div>
 
-      <div style={{ padding: "1.125rem", display: "flex", flexDirection: "column", flex: 1 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.375rem", marginBottom: "0.625rem", flexWrap: "wrap" }}>
-          <VerifiedBadge path={claw.infrastructurePath} />
-          <TypeTag type={claw.typeLabel} />
-        </div>
-        <h3 style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.875rem", fontWeight: 700, color: hovered ? "#DDEA4D" : "#ffffff", marginBottom: "0.5rem", letterSpacing: "-0.01em", lineHeight: 1.3, transition: "color 0.12s ease" }}>
-          {claw.name}
-        </h3>
-        <p style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.6875rem", color: "#999999", lineHeight: 1.6, marginBottom: "0.875rem", flex: 1, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-          {claw.description}
-        </p>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: "0.625rem", borderTop: `1px solid ${isVerified ? "rgba(221,234,77,0.1)" : "#1a1a1a"}` }}>
-          <span style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.5625rem", color: "#888888", letterSpacing: "0.05em" }}>@{claw.publisher}</span>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            {claw.availability === "available" && (
-              <span style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.5625rem", color: "#DDEA4D", letterSpacing: "0.08em", display: "flex", alignItems: "center", gap: "0.25rem" }}>
-                <span style={{ width: "4px", height: "4px", background: "#DDEA4D", borderRadius: "50%", display: "inline-block" }} />
-                AVAILABLE
-              </span>
-            )}
-            {claw.availability === "early_access" && (
-              <span style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.5625rem", color: "#fb923c", letterSpacing: "0.08em" }}>EARLY ACCESS</span>
-            )}
-            {claw.availability === "unavailable" && (
-              <span style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.5625rem", color: "#777777", letterSpacing: "0.08em" }}>UNAVAILABLE</span>
-            )}
-          </div>
-        </div>
-        {hovered && (
-          <div style={{ marginTop: "0.625rem", background: "#DDEA4D", color: "#000000", padding: "0.4375rem", fontFamily: "'GeistMono', monospace", fontSize: "0.5625rem", fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.375rem" }}>
-            VIEW CLAW <IconArrow />
-          </div>
-        )}
+      <p
+        style={{
+          fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px",
+          color: C.muted,
+          margin: 0,
+          display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
+          flex: 1,
+        }}
+      >
+        {claw.description}
+      </p>
+
+      <div>
+        <CategoryTag type={claw.typeLabel} />
       </div>
     </div>
   );
@@ -156,178 +276,255 @@ export default function Marketplace() {
 
   const filtered = ALL_CLAWS
     .filter((c) => {
-      const matchesSearch = c.name.toLowerCase().includes(search.toLowerCase()) || c.description.toLowerCase().includes(search.toLowerCase()) || c.tags.some((t) => t.toLowerCase().includes(search.toLowerCase()));
+      const q = search.toLowerCase();
+      const matchesSearch =
+        c.name.toLowerCase().includes(q) ||
+        c.description.toLowerCase().includes(q) ||
+        c.tags.some((t) => t.toLowerCase().includes(q));
       const matchesType = activeType === "All" || c.typeLabel === activeType;
       const matchesTrust = !verifiedOnly || c.infrastructurePath === "gmi_ce_maas";
       return matchesSearch && matchesType && matchesTrust;
     })
-    // Verified first, then by name
     .sort((a, b) => {
       const aV = a.infrastructurePath === "gmi_ce_maas" ? 0 : 1;
       const bV = b.infrastructurePath === "gmi_ce_maas" ? 0 : 1;
       return aV - bV;
     });
 
-  const verifiedCount = filtered.filter((c) => c.infrastructurePath === "gmi_ce_maas").length;
-
   return (
-    <div style={{ minHeight: "100vh", background: "#000000", color: "#ffffff" }}>
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.fg, fontFamily: FONT }}>
       <Topbar />
       <Navbar />
-      <div style={{ marginLeft: "210px", paddingTop: "40px", display: "flex", flexDirection: "column" }}>
+      <div style={{ marginLeft: 210, paddingTop: 40, display: "flex", flexDirection: "column" }}>
 
-        {/* Hero */}
-        <section style={{ borderBottom: "1px solid #222222", background: "#000000", backgroundImage: "radial-gradient(circle, rgba(221,234,77,0.07) 1px, transparent 1px)", backgroundSize: "24px 24px" }}>
-          <div style={{ padding: "1.25rem 2rem 0", display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <span style={{ display: "inline-block", width: "5px", height: "5px", background: "#DDEA4D" }} />
-            <span style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.5rem", letterSpacing: "0.2em", textTransform: "uppercase", color: "#DDEA4D" }}>GMI CLAW MARKETPLACE — V1</span>
+        {/* Compact console-style page header */}
+        <header style={{ padding: "14px 24px 8px" }}>
+          <h1 style={{ fontFamily: FONT, fontSize: 20, fontWeight: 700, lineHeight: "26px", color: C.fg, margin: 0, letterSpacing: "-0.01em" }}>
+            Browse Agents
+          </h1>
+          <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, margin: "2px 0 0" }}>
+            AI Agents shipped by builders on GMI Cloud — install one, or register your own.
+          </p>
+        </header>
+
+        {/* Thin OpenClaw plugin banner — single horizontal row */}
+        <div style={{ padding: "0 24px" }}>
+          <div
+            style={{
+              background: C.card,
+              border: `1px solid ${C.border}`,
+              borderRadius: 8,
+              padding: "8px 12px",
+              display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+            }}
+          >
+            <span
+              style={{
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                width: 22, height: 22, borderRadius: 6,
+                background: "rgba(125,211,252,0.10)",
+                color: "#7dd3fc",
+                flexShrink: 0,
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 2v4M15 2v4M6 6h12v6a6 6 0 0 1-12 0V6zM12 18v4" />
+              </svg>
+            </span>
+            <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.fg, whiteSpace: "nowrap" }}>
+              On OpenClaw?
+            </span>
+            <code
+              style={{
+                fontFamily: FONT_MONO, fontSize: 12, color: C.fg,
+                background: "#0d0d0d",
+                border: `1px solid ${C.borderSoft}`,
+                padding: "3px 8px", borderRadius: 6,
+                whiteSpace: "nowrap", overflowX: "auto",
+                flex: "1 1 auto",
+                minWidth: 0,
+              }}
+            >
+              <span style={{ color: C.muted }}>$ </span>{OPENCLAW_INSTALL_CMD}
+            </code>
+            <CopyButton cmd={OPENCLAW_INSTALL_CMD} />
+            <button
+              onClick={() => setLocation("/deploy")}
+              style={{
+                fontFamily: FONT, fontSize: 12, fontWeight: 500,
+                background: "transparent", color: "#7dd3fc",
+                border: "none", padding: "2px 4px", cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Not on OpenClaw? Register →
+            </button>
           </div>
+        </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0, borderBottom: "1px solid #1a1a1a" }}>
-            <div style={{ padding: "2rem 2rem 2.5rem", borderRight: "1px solid #1a1a1a" }}>
-              <h1 style={{ fontFamily: "'Press Start 2P', monospace", fontSize: "1.35rem", fontWeight: 400, color: "#ffffff", lineHeight: 1.7, marginBottom: "1rem", letterSpacing: "0.02em" }}>
-                Browse, Register,<br />
-                <span style={{ color: "#DDEA4D" }}>and Monetize</span><br />
-                AI Claws.
-              </h1>
-              <p style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.75rem", color: "#999999", lineHeight: 1.7, marginBottom: "1.75rem", maxWidth: "380px" }}>
-                The combined marketplace and registration platform for production-grade AI agents — discovery, infrastructure, and monetization in one system.
-              </p>
-              <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                <button onClick={() => document.getElementById("catalog")?.scrollIntoView({ behavior: "smooth" })} style={{ background: "#DDEA4D", color: "#000000", border: "none", fontFamily: "'GeistMono', monospace", fontSize: "0.6875rem", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", padding: "0.625rem 1.25rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.375rem" }}>
-                  Browse Claws <IconArrow />
-                </button>
-                <button onClick={() => setLocation("/deploy")} style={{ background: "transparent", color: "#DDEA4D", border: "1px solid rgba(221,234,77,0.35)", fontFamily: "'GeistMono', monospace", fontSize: "0.6875rem", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", padding: "0.625rem 1.25rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.375rem" }}>
-                  Register a Claw <IconArrow />
-                </button>
-              </div>
-            </div>
+        {/* ── Catalog header ─────────────────────────────────────────────── */}
+        <section id="catalog" style={{ padding: "14px 24px 8px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+            <h2
+              style={{
+                fontFamily: FONT, fontSize: 20, fontWeight: 500, lineHeight: "28px",
+                color: C.fg, margin: 0, letterSpacing: "-0.01em",
+              }}
+            >
+              Agent Catalog
+            </h2>
 
-            <div style={{ padding: "2rem 2rem 2.5rem", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-              <div style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.5rem", letterSpacing: "0.2em", textTransform: "uppercase", color: "#DDEA4D", marginBottom: "0.75rem" }}>Quick Start</div>
-              <div>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.4rem 0.875rem", background: "#0d0d0d", border: "1px solid #2a2a2a", borderBottom: "1px solid #1a1a1a" }}>
-                  <div style={{ display: "flex", gap: "4px" }}>
-                    <span style={{ width: "7px", height: "7px", background: "#ff5f57", display: "inline-block" }} />
-                    <span style={{ width: "7px", height: "7px", background: "#febc2e", display: "inline-block" }} />
-                    <span style={{ width: "7px", height: "7px", background: "#28c840", display: "inline-block" }} />
-                  </div>
-                  <span style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.5rem", letterSpacing: "0.15em", color: "#777", textTransform: "uppercase" }}>TERMINAL</span>
-                  <QuickStartCopyButton cmd={QUICKSTART_CMD} />
-                </div>
-                <div style={{ background: "#000", border: "1px solid #2a2a2a", borderTop: "none", padding: "1rem 1.25rem", fontFamily: "'GeistMono', monospace", fontSize: "0.75rem" }}>
-                  <span style={{ color: "#777" }}>$ </span>
-                  <span style={{ color: "#DDEA4D" }}>{QUICKSTART_CMD}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", borderBottom: "1px solid #1a1a1a" }}>
-            {STATS.map((s, i) => (
-              <div key={s.label} style={{ flex: 1, padding: "0.875rem 2rem", borderRight: i < STATS.length - 1 ? "1px solid #1a1a1a" : "none", display: "flex", alignItems: "baseline", gap: "0.5rem" }}>
-                <span style={{ fontFamily: "'Press Start 2P', monospace", fontSize: "0.75rem", color: "#DDEA4D", letterSpacing: "0.04em" }}>{s.value}</span>
-                <span style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.5625rem", color: "#888", letterSpacing: "0.1em", textTransform: "uppercase" }}>{s.label}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* Page header */}
-        <div style={{ borderBottom: "1px solid #222222", background: "#000000" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.625rem 2rem", borderBottom: "1px solid #1a1a1a" }}>
-            <span style={{ display: "inline-block", width: "5px", height: "5px", background: "#DDEA4D" }} />
-            <span style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.5rem", letterSpacing: "0.2em", textTransform: "uppercase", color: "#DDEA4D" }}>CLAW MARKETPLACE</span>
-            <span style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.5rem", letterSpacing: "0.1em", color: "#777777" }}>— {ALL_CLAWS.length} CLAWS AVAILABLE · GMI CLUSTER ENGINE</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1.25rem 2rem" }}>
-            <h1 style={{ fontFamily: "'Press Start 2P', monospace", fontSize: "1rem", fontWeight: 400, color: "#ffffff", letterSpacing: "0.02em", lineHeight: 1.6 }}>CLAW CATALOG</h1>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-              <div style={{ position: "relative" }}>
-                <span style={{ position: "absolute", left: "0.625rem", top: "50%", transform: "translateY(-50%)", color: "#888888", pointerEvents: "none" }}><IconSearch /></span>
-                <input type="text" placeholder="SEARCH CLAWS..." value={search} onChange={(e) => setSearch(e.target.value)}
-                  style={{ width: "220px", background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#ffffff", fontFamily: "'GeistMono', monospace", fontSize: "0.6875rem", letterSpacing: "0.05em", padding: "0.5rem 2rem 0.5rem 2rem", outline: "none" }}
-                  onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-                  onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+                <span style={{ position: "absolute", left: 10, color: C.muted, display: "flex" }}>
+                  <IconSearch size={14} />
+                </span>
+                <input
+                  type="text"
+                  placeholder="Search Agents…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  style={{
+                    width: 260,
+                    background: C.pillBg,
+                    border: `1px solid ${C.border}`,
+                    color: C.fg,
+                    fontFamily: FONT, fontSize: 14, fontWeight: 400, lineHeight: "20px",
+                    padding: "8px 32px 8px 32px",
+                    borderRadius: 8,
+                    outline: "none",
+                  }}
                 />
                 {search && (
-                  <button onClick={() => setSearch("")} style={{ position: "absolute", right: "0.5rem", top: "50%", transform: "translateY(-50%)", color: "#888888", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center" }}><IconX /></button>
+                  <button
+                    onClick={() => setSearch("")}
+                    style={{ position: "absolute", right: 8, color: C.muted, background: "none", border: "none", cursor: "pointer", display: "flex" }}
+                  >
+                    <IconX />
+                  </button>
                 )}
               </div>
-              <button onClick={() => setLocation("/deploy")} style={{ background: "#DDEA4D", color: "#000000", border: "1px solid #DDEA4D", fontFamily: "'GeistMono', monospace", fontSize: "0.6875rem", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", padding: "0.5rem 1rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.375rem" }}>
-                <IconPlus /> REGISTER A CLAW
+              <button
+                onClick={() => setLocation("/deploy")}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
+                  background: C.lime, color: C.limeText,
+                  border: "none",
+                  padding: "8px 14px",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                }}
+              >
+                <IconPlus /> Register an Agent
               </button>
             </div>
           </div>
-        </div>
 
-        {/* Horizontal filter bar */}
-        <div style={{ display: "flex", alignItems: "center", padding: "0 2rem", borderBottom: "1px solid #1a1a1a", background: "#000000", overflowX: "auto" }}>
-          <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
-            {ALL_TYPES.map((type) => {
-              const isActive = activeType === type;
-              return (
-                <button key={type} onClick={() => setActiveType(type)}
-                  style={{ padding: "0.625rem 0.875rem", fontFamily: "'GeistMono', monospace", fontSize: "0.5625rem", letterSpacing: "0.08em", textTransform: "uppercase", background: "transparent", color: isActive ? "#ffffff" : "#888888", border: "none", borderBottom: `2px solid ${isActive ? "#DDEA4D" : "transparent"}`, cursor: "pointer", transition: "color 0.1s ease, border-color 0.1s ease", display: "flex", alignItems: "center", gap: "0.375rem", whiteSpace: "nowrap" }}
-                  onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.color = "#aaaaaa"; }}
-                  onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.color = "#888888"; }}
-                >
-                  <span style={{ width: "5px", height: "5px", background: isActive ? TYPE_COLORS[type] : "#666666", display: "inline-block", flexShrink: 0, transition: "background 0.1s ease" }} />
-                  {type}
-                </button>
-              );
-            })}
-          </div>
-          <div style={{ width: "1px", height: "20px", background: "#1a1a1a", margin: "0 0.75rem", flexShrink: 0 }} />
-          <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
-            {[{ label: "All Claws", value: false }, { label: "Verified Only", value: true }].map((opt) => {
-              const isActive = verifiedOnly === opt.value;
-              return (
-                <button key={String(opt.value)} onClick={() => setVerifiedOnly(opt.value)}
-                  style={{ padding: "0.625rem 0.875rem", fontFamily: "'GeistMono', monospace", fontSize: "0.5625rem", letterSpacing: "0.08em", textTransform: "uppercase", background: "transparent", color: isActive ? "#DDEA4D" : "#888888", border: "none", borderBottom: `2px solid ${isActive ? "#DDEA4D" : "transparent"}`, cursor: "pointer", transition: "color 0.1s ease, border-color 0.1s ease", whiteSpace: "nowrap" }}
-                  onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.color = "#aaaaaa"; }}
-                  onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.color = "#888888"; }}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+          {/* Category pills + Verified toggle */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {ALL_TYPES.map((type) => {
+                const isActive = activeType === type;
+                return (
+                  <button
+                    key={type}
+                    onClick={() => setActiveType(type)}
+                    style={{
+                      fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
+                      background: isActive ? C.activeBg : "transparent",
+                      color: isActive ? C.fg : C.muted,
+                      border: `1px solid ${isActive ? "transparent" : C.border}`,
+                      padding: "6px 12px",
+                      borderRadius: 999,
+                      cursor: "pointer",
+                      transition: "background .15s ease, color .15s ease",
+                    }}
+                  >
+                    {type}
+                  </button>
+                );
+              })}
+            </div>
 
-        {/* Catalog grid */}
-        <div id="catalog" style={{ flex: 1, padding: "1.5rem 2rem" }}>
+            <label
+              onClick={() => setVerifiedOnly((v) => !v)}
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}
+            >
+              <span
+                style={{
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  width: 18, height: 18, borderRadius: 999,
+                  background: verifiedOnly ? "#7dd3fc" : "transparent",
+                  border: `1.5px solid ${verifiedOnly ? "#7dd3fc" : "#7dd3fc"}`,
+                  color: verifiedOnly ? "#0a0a0a" : "#7dd3fc",
+                  transition: "background .15s ease",
+                }}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+              </span>
+              <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px", color: "#7dd3fc" }}>
+                Verified Only
+              </span>
+              <span
+                style={{
+                  width: 32, height: 18,
+                  background: verifiedOnly ? "#7dd3fc" : C.border,
+                  borderRadius: 999,
+                  position: "relative",
+                  transition: "background .15s ease",
+                  marginLeft: 4,
+                }}
+              >
+                <span
+                  style={{
+                    position: "absolute",
+                    top: 2,
+                    left: verifiedOnly ? 16 : 2,
+                    width: 14, height: 14,
+                    background: verifiedOnly ? "#0a0a0a" : "#fafafa",
+                    borderRadius: 999,
+                    transition: "left .15s ease",
+                  }}
+                />
+              </span>
+            </label>
+          </div>
+        </section>
+
+        {/* ── Catalog grid ───────────────────────────────────────────────── */}
+        <section style={{ padding: "12px 32px 32px" }}>
           {filtered.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "5rem 0", fontFamily: "'GeistMono', monospace" }}>
-              <div style={{ fontSize: "0.75rem", color: "#888888", marginBottom: "0.5rem" }}>// NO CLAWS FOUND</div>
-              <div style={{ fontSize: "0.625rem", color: "#777777", letterSpacing: "0.05em" }}>Try adjusting your search or filter</div>
+            <div style={{ textAlign: "center", padding: "64px 0", fontFamily: FONT }}>
+              <div style={{ fontSize: 14, fontWeight: 500, color: C.fg, marginBottom: 6 }}>No agents found</div>
+              <div style={{ fontSize: 12, color: C.muted }}>Try adjusting your search or filter.</div>
             </div>
           ) : (
             <>
-              <div style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.5625rem", color: "#888888", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "1rem", paddingBottom: "0.625rem", borderBottom: "1px solid #1a1a1a", display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <span>{filtered.length} RESULT{filtered.length !== 1 ? "S" : ""}</span>
-                {verifiedCount > 0 && (
-                  <>
-                    <span style={{ color: "#2a2a2a" }}>·</span>
-                    <span style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}>
-                      <span style={{ width: "5px", height: "5px", background: "#DDEA4D", display: "inline-block" }} />
-                      <span style={{ color: "#DDEA4D" }}>{verifiedCount} VERIFIED</span>
-                    </span>
-                    <span style={{ color: "#2a2a2a" }}>·</span>
-                    <span>VERIFIED FIRST</span>
-                  </>
-                )}
+              <div
+                style={{
+                  fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px",
+                  color: C.muted, marginBottom: 12,
+                }}
+              >
+                {filtered.length} {filtered.length === 1 ? "result" : "results"} · Verified first
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "1px", background: "#1a1a1a" }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+                  gap: 12,
+                }}
+              >
                 {filtered.map((claw) => (
-                  <div key={claw.id} style={{ background: "#000000" }}>
-                    <ClawCard claw={claw} />
-                  </div>
+                  <AgentCard key={claw.id} claw={claw} />
                 ))}
               </div>
             </>
           )}
-        </div>
+        </section>
 
         <Footer />
       </div>

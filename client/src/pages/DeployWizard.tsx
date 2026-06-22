@@ -1,1289 +1,2624 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import {
-  ArrowLeft, ArrowRight, CheckCircle, Server, Cpu, Github,
-  Upload, Terminal, Zap, Plus, Trash2, Eye, EyeOff, Info,
-  ToggleLeft, ToggleRight, Lock, Search, X,
-} from "lucide-react";
+import { ALL_CLAWS } from "@/lib/clawData";
 import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
-import { toast } from "sonner";
 
-// ─── Constants ─────────────────────────────────────────────────────────────
+// ─── Tokens ───────────────────────────────────────────────────────────────
+const FONT = "'Geist', system-ui, sans-serif";
+const MONO = "'GeistMono', ui-monospace, monospace";
+const C = {
+  bg:           "#0a0a0a",
+  fg:           "#fafafa",
+  muted:        "#a3a3a3",
+  border:       "#404040",
+  borderSoft:   "#262626",
+  card:         "rgba(23,23,23,0.95)",
+  cardSolid:    "#171717",
+  warnBg:       "#1e1e1e",
+  pillBg:       "rgba(82,82,82,0.3)",
+  selectedYel:  "rgba(99,105,35,0.3)",
+  selectedYelB: "rgba(221,234,77,0.55)",
+  lime:         "#DDEA4D",
+  limeText:     "#0a0a0a",
+  link:         "#5b94f0",
+  warn:         "#fbbf24",
+  ok:           "#34d399",
+} as const;
+
 const STEPS = [
-  { id: 0, label: "Basic Info" },
-  { id: 1, label: "Infrastructure" },
-  { id: 2, label: "Env Variables" },
-  { id: 3, label: "Review & Deploy" },
+  { id: 1, title: "Basics & Template" },
+  { id: 2, title: "Infrastructure" },
+  { id: 3, title: "Networking" },
+  { id: 4, title: "Env Variables" },
+  { id: 5, title: "Review & Register" },
+] as const;
+
+// Connect-your-agent flow: a different 4-section path (no infra/networking/env — the user runs it themselves)
+const CONNECT_STEPS = [
+  { id: 1, title: "Basic" },
+  { id: 2, title: "MaaS Key" },
+  { id: 3, title: "Endpoint" },
+  { id: 4, title: "Review & Submit" },
+] as const;
+
+type StepId = (typeof STEPS)[number]["id"];
+type HostMode = "gmi" | "connect";
+
+// Shared between Connect submit + Dashboard read (My Agents shows the synced MaaS key).
+// Persisted in localStorage so re-visiting the dashboard picks them up.
+const REGISTERED_AGENTS_KEY = "gmi:registered-agents";
+
+export interface RegisteredAgent {
+  id: string;
+  name: string;
+  templateId: string;
+  hostMode: HostMode;
+  maasKey: string;
+  accessUrl: string;
+  category: string;
+  registeredAt: string;
+}
+
+function genMaasKey(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let out = "gmi_";
+  for (let i = 0; i < 40; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+function persistRegisteredAgent(agent: RegisteredAgent) {
+  try {
+    const existing: RegisteredAgent[] = JSON.parse(localStorage.getItem(REGISTERED_AGENTS_KEY) || "[]");
+    existing.unshift(agent);  // most recent first
+    localStorage.setItem(REGISTERED_AGENTS_KEY, JSON.stringify(existing));
+  } catch { /* ignore — localStorage may be disabled */ }
+}
+
+// ─── Mock infra catalog ──────────────────────────────────────────────────
+interface Region { id: string; name: string; sub: string; popular?: boolean }
+const REGIONS: Region[] = [
+  { id: "us-ia-iowa-1",   name: "IOWA IDC-1",      sub: "US-IA, US",    popular: true },
+  { id: "us-or-portland", name: "Portland IDC-1",  sub: "US-OR, US" },
+  { id: "eu-de-frankfurt",name: "Frankfurt IDC-1", sub: "DE-HE, Germany" },
+  { id: "ap-sg-singapore",name: "Singapore IDC-1", sub: "SG, Singapore" },
 ];
 
-const COMPUTE_TIERS = [
-  {
-    id: "performance",
-    label: "Performance",
-    cpu: "32 vCPU",
-    ram: "128 GB",
-    net: "25 Gbps",
-    priceHr: 1.20,
-    note: "High-concurrency agents, heavy orchestration workloads",
-    recommended: false,
-  },
-  {
-    id: "standard",
-    label: "Standard",
-    cpu: "16 vCPU",
-    ram: "64 GB",
-    net: "10 Gbps",
-    priceHr: 0.60,
-    note: "Most agent workloads — API orchestration, RAG, tool-use",
-    recommended: true,
-  },
-  {
-    id: "economy",
-    label: "Economy",
-    cpu: "4 vCPU",
-    ram: "16 GB",
-    net: "1 Gbps",
-    priceHr: 0.15,
-    note: "Lightweight agents, low-traffic or dev/test deployments",
-    recommended: false,
-  },
+interface ComputeTier {
+  id: string; name: string; sub: string;
+  cpu: string; ram: string; pricePerHr: number;
+}
+const COMPUTE_TIERS: ComputeTier[] = [
+  { id: "container", name: "Container", sub: "Instance type for the Agentbox marketplace",
+    cpu: "2 vCPU", ram: "4 GB", pricePerHr: 0.0475 },
+  { id: "standard",  name: "Standard",  sub: "Most production agents",
+    cpu: "4 vCPU", ram: "8 GB", pricePerHr: 0.094 },
+  { id: "performance", name: "Performance", sub: "High-throughput agents",
+    cpu: "8 vCPU", ram: "16 GB", pricePerHr: 0.182 },
 ];
 
-const IDC_REGIONS = [
-  { id: "us-west", label: "US West", flag: "🇺🇸" },
-  { id: "us-east", label: "US East", flag: "🇺🇸" },
-  { id: "asia-sg", label: "Asia (Singapore)", flag: "🇸🇬" },
-  { id: "eu-de", label: "Europe (Germany)", flag: "🇩🇪" },
+interface ModelSpec {
+  id: string; name: string; ctx: string;
+  inPrice: string; outPrice?: string;
+}
+const MODELS: ModelSpec[] = [
+  { id: "deepseek-v4-flash", name: "DeepSeek-V4-Flash", ctx: "1M ctx",
+    inPrice: "$0.098 / 1M tok" },
+  { id: "claude-opus-48",    name: "Claude Opus 4.8",   ctx: "409.6K ctx",
+    inPrice: "$5.00 / 1M tok", outPrice: "$25.00 / 1M tok" },
+  { id: "gpt-55",            name: "GPT-5.5",           ctx: "1.1M ctx",
+    inPrice: "$5.00 / 1M tok", outPrice: "$20.00 / 1M tok" },
 ];
 
-const MAAS_MODELS = [
-  { id: "claude-opus-4", name: "Claude Opus 4", context: "200K", tokensPerDollar: "" },
-  { id: "claude-sonnet-4", name: "Claude Sonnet 4", context: "200K", tokensPerDollar: "" },
-  { id: "llama-3-1-70b", name: "Llama 3.1 70B", context: "128K", tokensPerDollar: "1M" },
-  { id: "llama-3-1-8b", name: "Llama 3.1 8B", context: "128K", tokensPerDollar: "5M" },
-  { id: "deepseek-coder-v2", name: "DeepSeek-Coder V2", context: "128K", tokensPerDollar: "2M" },
-  { id: "deepseek-r1-32b", name: "DeepSeek-R1 32B", context: "64K", tokensPerDollar: "1.5M" },
-  { id: "qwen2-5-72b", name: "Qwen2.5 72B", context: "128K", tokensPerDollar: "1.2M" },
-  { id: "qwen2-5-7b", name: "Qwen2.5 7B", context: "128K", tokensPerDollar: "8M" },
-  { id: "mixtral-8x7b", name: "Mixtral 8x7B", context: "32K", tokensPerDollar: "2.5M" },
-  { id: "gemma-2-27b", name: "Gemma 2 27B", context: "8K", tokensPerDollar: "3M" },
+interface PortMap {
+  id: string;
+  protocol: string;
+  listening: string;
+  internal: string;
+  name: string;
+}
+const DEFAULT_PORTS: PortMap[] = [
+  { id: "p1", protocol: "HTTPS/2", listening: "", internal: "8080", name: "web" },
 ];
 
-// ─── Shared primitives ──────────────────────────────────────────────────────
-function RadioCard({ selected, onClick, children }: { selected: boolean; onClick: () => void; children: React.ReactNode }) {
+interface CustomEnv { id: string; key: string; value: string; secret: boolean }
+
+// ─── Template fork (Use this agent) ───────────────────────────────────────
+// Per-catalog template config consumed when wizard is loaded with ?use=<id>.
+// Image / ports / env / region / tier come from the published agent's template.
+// In prod this would come from the catalog API; for prototype we synthesize.
+interface AgentTemplate {
+  image: string;
+  region: string;
+  tier: string;
+  ports: PortMap[];
+  envDeclarations: CustomEnv[];
+  model: string;
+}
+function synthesizeTemplate(id: string, name: string): AgentTemplate {
+  const baseImage = (slug: string) => `registry.gmi/${slug}:latest`;
+  const cleanSlug = id.replace(/-claw$/, "").replace(/-agent$/, "");
+  const declarations: Record<string, CustomEnv[]> = {
+    "topify-claw": [
+      { id: "e1", key: "TOPIFY_API_KEY", value: "", secret: true },
+      { id: "e2", key: "TOPIFY_BRAND_ID", value: "", secret: false },
+    ],
+    "code-review-agent": [
+      { id: "e1", key: "GITHUB_TOKEN", value: "", secret: true },
+      { id: "e2", key: "MAX_FILES_PER_PR", value: "100", secret: false },
+    ],
+    "enterprise-rag-pipeline": [
+      { id: "e1", key: "S3_BUCKET", value: "", secret: false },
+      { id: "e2", key: "S3_ACCESS_KEY", value: "", secret: true },
+      { id: "e3", key: "S3_SECRET_KEY", value: "", secret: true },
+    ],
+    "contract-review-agent": [
+      { id: "e1", key: "JURISDICTION", value: "US-CA", secret: false },
+    ],
+    "data-pipeline-debugger": [
+      { id: "e1", key: "AIRFLOW_URL", value: "", secret: false },
+      { id: "e2", key: "PAGERDUTY_KEY", value: "", secret: true },
+    ],
+    "customer-support-triage": [
+      { id: "e1", key: "ZENDESK_SUBDOMAIN", value: "", secret: false },
+      { id: "e2", key: "ZENDESK_API_TOKEN", value: "", secret: true },
+    ],
+    "sql-query-optimizer": [
+      { id: "e1", key: "DATABASE_URL", value: "", secret: true },
+    ],
+  };
+  return {
+    image: baseImage(cleanSlug || id),
+    region: "us-ia-iowa-1",
+    tier: "container",
+    ports: [{ id: "p1", protocol: "HTTPS/2", listening: "", internal: "8080", name: "web" }],
+    envDeclarations: declarations[id] ?? [],
+    model: "",
+  };
+}
+function lookupTemplate(id: string): { template: AgentTemplate; name: string } | null {
+  const claw = ALL_CLAWS.find((c) => c.id === id);
+  if (!claw) return null;
+  return { template: synthesizeTemplate(id, claw.name), name: claw.name };
+}
+
+// ─── Icons ────────────────────────────────────────────────────────────────
+const IconCheck = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M20 6 9 17l-5-5" />
+  </svg>
+);
+const IconChevronDown = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="m6 9 6 6 6-6" />
+  </svg>
+);
+const IconArrowExternal = ({ size = 12 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M7 17 17 7M8 7h9v9" />
+  </svg>
+);
+const IconUpload = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+  </svg>
+);
+const IconWarn = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+    <path d="M12 9v4M12 17h.01" />
+  </svg>
+);
+const IconLock = ({ size = 12 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="11" width="18" height="11" rx="2" />
+    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+  </svg>
+);
+const IconInfo = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
+  </svg>
+);
+const IconPlus = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+const IconX = ({ size = 14, color = C.muted }: { size?: number; color?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M18 6 6 18M6 6l12 12" />
+  </svg>
+);
+const IconGlobe = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" /><path d="M2 12h20M12 2a15.3 15.3 0 0 1 0 20M12 2a15.3 15.3 0 0 0 0 20" />
+  </svg>
+);
+
+// ─── Small UI helpers ─────────────────────────────────────────────────────
+function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
-    <button onClick={onClick} className="w-full text-left p-4 transition-all"
-      style={{ background: selected ? "rgba(221,234,77,0.06)" : "#0a0a0a", border: `1px solid ${selected ? "#DDEA4D" : "#2a2a2a"}` }}>
-      {children}
-    </button>
+    <span
+      role="switch"
+      aria-checked={on}
+      onClick={() => onChange(!on)}
+      style={{
+        width: 36, height: 20,
+        background: on ? C.lime : C.border,
+        borderRadius: 999,
+        position: "relative",
+        cursor: "pointer",
+        transition: "background .15s ease",
+        flexShrink: 0,
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          top: 2,
+          left: on ? 18 : 2,
+          width: 16, height: 16,
+          background: on ? C.limeText : "#fafafa",
+          borderRadius: 999,
+          transition: "left .15s ease",
+        }}
+      />
+    </span>
   );
 }
 
-function RadioDot({ selected }: { selected: boolean }) {
+function FieldLabel({ children, required }: { children: React.ReactNode; required?: boolean }) {
   return (
-    <div className="w-4 h-4 rounded-full border flex items-center justify-center shrink-0"
-      style={{ borderColor: selected ? "#DDEA4D" : "#888", background: selected ? "#DDEA4D" : "transparent" }}>
-      {selected && <div className="w-2 h-2 rounded-full bg-black" />}
-    </div>
+    <label style={{ fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px", color: C.fg }}>
+      {children}{required && <span style={{ color: C.lime, marginLeft: 2 }}>*</span>}
+    </label>
   );
 }
 
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return <label className="block font-mono-gmi text-xs text-gray-300 uppercase tracking-widest mb-1.5">{children}</label>;
-}
-
-function TextInput({ label, placeholder, value, onChange, mono = false, hint }: {
-  label: string; placeholder: string; value: string; onChange: (v: string) => void; mono?: boolean; hint?: string;
+function TextInput({
+  value, onChange, placeholder, mono = false, disabled = false,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  mono?: boolean;
+  disabled?: boolean;
 }) {
   return (
-    <div>
-      <FieldLabel>{label}</FieldLabel>
-      <input type="text" placeholder={placeholder} value={value} onChange={(e) => onChange(e.target.value)}
-        className="w-full px-4 py-3 text-sm text-white bg-transparent outline-none transition-all"
-        style={{ border: "1px solid #2a2a2a", fontFamily: mono ? "var(--font-mono-gmi)" : undefined }}
-        onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-        onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")} />
-      {hint && <p className="text-xs text-gray-400 font-mono-gmi mt-1">{hint}</p>}
+    <input
+      type="text"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      disabled={disabled}
+      style={{
+        background: disabled ? "rgba(40,40,40,0.5)" : C.pillBg,
+        border: `1px solid ${C.border}`,
+        color: disabled ? C.muted : C.fg,
+        fontFamily: mono ? MONO : FONT,
+        fontSize: 14, fontWeight: 400, lineHeight: "20px",
+        padding: "10px 14px",
+        borderRadius: 8,
+        outline: "none",
+        cursor: disabled ? "not-allowed" : "text",
+      }}
+    />
+  );
+}
+
+function Select({
+  value, onChange, options, placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  placeholder?: string;
+}) {
+  return (
+    <div style={{ position: "relative" }}>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          appearance: "none",
+          width: "100%",
+          background: C.pillBg,
+          border: `1px solid ${C.border}`,
+          color: value ? C.fg : C.muted,
+          fontFamily: FONT, fontSize: 14, fontWeight: 400, lineHeight: "20px",
+          padding: "10px 32px 10px 14px",
+          borderRadius: 8,
+          outline: "none",
+          cursor: "pointer",
+        }}
+      >
+        {placeholder && <option value="" disabled>{placeholder}</option>}
+        {options.map((o) => (
+          <option key={o.value} value={o.value} style={{ background: C.cardSolid, color: C.fg }}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", color: C.muted, pointerEvents: "none" }}>
+        <IconChevronDown />
+      </span>
     </div>
   );
 }
 
-function Toggle({ on, onToggle, label, desc }: { on: boolean; onToggle: () => void; label: string; desc: string }) {
+// ─── Host mode toggle (two big cards) ─────────────────────────────────────
+function HostModeCard({
+  selected, title, badge, description, icon, onClick,
+}: {
+  selected: boolean;
+  title: string;
+  badge?: string;
+  description: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+}) {
   return (
-    <button onClick={onToggle} className="w-full flex items-center justify-between p-4 transition-all text-left"
-      style={{ background: on ? "rgba(221,234,77,0.04)" : "#0a0a0a", border: `1px solid ${on ? "rgba(221,234,77,0.3)" : "#2a2a2a"}` }}>
-      <div>
-        <div className="font-mono-gmi text-sm font-bold" style={{ color: on ? "#DDEA4D" : "#888" }}>{label}</div>
-        <div className="font-mono-gmi text-xs text-gray-400 mt-0.5">{desc}</div>
+    <button
+      onClick={onClick}
+      style={{
+        flex: 1,
+        textAlign: "left",
+        background: selected ? C.selectedYel : C.cardSolid,
+        border: `1px solid ${selected ? C.selectedYelB : C.border}`,
+        borderRadius: 10,
+        padding: "14px 20px",
+        cursor: "pointer",
+        display: "flex", flexDirection: "column", gap: 4,
+        fontFamily: FONT,
+        transition: "background .15s ease, border-color .15s ease",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ color: selected ? C.lime : C.muted, display: "inline-flex" }}>{icon}</span>
+        <span style={{ fontSize: 14, fontWeight: 600, lineHeight: "20px", color: selected ? "#fff" : C.muted }}>
+          {title}
+        </span>
+        {badge && (
+          <span
+            style={{
+              fontSize: 11, fontWeight: 600, lineHeight: "16px",
+              color: C.fg,
+              background: "rgba(255,255,255,0.06)",
+              border: `1px solid ${C.border}`,
+              padding: "1px 7px",
+              borderRadius: 4,
+              letterSpacing: "0.04em",
+            }}
+          >
+            {badge}
+          </span>
+        )}
       </div>
-      <div className="shrink-0 ml-4">
-        {on
-          ? <ToggleRight size={24} style={{ color: "#DDEA4D" }} />
-          : <ToggleLeft size={24} style={{ color: "#888" }} />}
-      </div>
+      <p style={{ margin: "2px 0 0 22px", fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted }}>
+        {description}
+      </p>
     </button>
   );
 }
 
-// ─── Tab 2 steps ────────────────────────────────────────────────────────────
-const STEPS_TAB2 = [
-  { id: 0, label: "MaaS Key" },
-  { id: 1, label: "Endpoint" },
-  { id: 2, label: "Review & Submit" },
-];
+// ─── Stepper row (accordion-style) ────────────────────────────────────────
+function StepperRow({
+  step, title, state, onClick,
+}: {
+  step: StepId;
+  title: string;
+  state: "active" | "done" | "pending";
+  onClick: () => void;
+}) {
+  const numberBg = state === "active" ? C.lime : "transparent";
+  const numberFg = state === "active" ? C.limeText : C.muted;
+  const numberBorder = state === "active" ? "transparent" : C.border;
+  const titleColor = state === "active" ? C.fg : state === "done" ? C.muted : C.muted;
+  const titleWeight: number = state === "active" ? 600 : 500;
 
-// ─── Main component ─────────────────────────────────────────────────────────
-export default function DeployWizard() {
-  const [, setLocation] = useLocation();
-  const [step, setStep] = useState(0);
-  const [deployed, setDeployed] = useState(false);
-  const [deploying, setDeploying] = useState(false);
-  const [deployStep, setDeployStep] = useState(0);
-
-  // Tab state
-  const [activeTab, setActiveTab] = useState<"ce" | "selfhosted">("ce");
-  const [nudgeShownThisSession, setNudgeShownThisSession] = useState(false);
-  const [showNudge, setShowNudge] = useState(false);
-
-  // Tab 2 state
-  const [tab2Step, setTab2Step] = useState(0);
-  const [tab2MaasKey, setTab2MaasKey] = useState("");
-  const [tab2Endpoint, setTab2Endpoint] = useState("");
-  const [tab2Submitted, setTab2Submitted] = useState(false);
-  const [tab2Submitting, setTab2Submitting] = useState(false);
-
-  const switchToSelfHosted = () => {
-    if (!nudgeShownThisSession) {
-      setShowNudge(true);
-    } else {
-      setActiveTab("selfhosted");
-      setTab2Step(0);
-    }
-  };
-
-  // Step 0 — Basic Info
-  const [projectName, setProjectName] = useState("");
-
-  // Step 1 — Infrastructure
-  const [useCompute] = useState(true); // always true in Tab 1
-  const [dockerSource, setDockerSource] = useState<"registry" | "upload">("registry");
-  const [dockerUrl, setDockerUrl] = useState("");
-  const [computeTier, setComputeTier] = useState("standard");
-  const [idcRegion, setIdcRegion] = useState("us-west");
-  const [storageMode, setStorageMode] = useState<"shared" | "dedicated">("shared");
-  const [minContainers, setMinContainers] = useState("1");
-  const [maxContainers, setMaxContainers] = useState("5");
-
-  const [useMaaS, setUseMaaS] = useState(true);
-  const [selectedModels, setSelectedModels] = useState<string[]>(["llama-3-1-70b"]);
-  const [modelSearch, setModelSearch] = useState("");
-
-  // Step 2 — Env Vars
-  const [envVars, setEnvVars] = useState<{ key: string; value: string; secret: boolean }[]>([]);
-  const [showSecrets, setShowSecrets] = useState<Record<number, boolean>>({});
-
-  // Cost calc
-  const tier = COMPUTE_TIERS.find((t) => t.id === computeTier)!;
-  const minCost = useCompute ? (parseInt(minContainers) || 1) * tier.priceHr : 0;
-  const maxCost = useCompute ? (parseInt(maxContainers) || 1) * tier.priceHr : 0;
-
-  const toggleModel = (id: string) => {
-    setSelectedModels((prev) =>
-      prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]
-    );
-  };
-
-  const addEnvVar = () => setEnvVars((v) => [...v, { key: "", value: "", secret: false }]);
-  const removeEnvVar = (i: number) => setEnvVars((v) => v.filter((_, idx) => idx !== i));
-  const updateEnvVar = (i: number, field: "key" | "value" | "secret", val: string | boolean) =>
-    setEnvVars((v) => v.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
-
-  const DEPLOY_STEPS = [
-    { label: "Validating image URL", duration: 1200 },
-    { label: "Inspecting container environment", duration: 1800 },
-    { label: "Registering template in CE", duration: 1400 },
-    { label: "Storing infrastructure configuration", duration: 1000 },
-    { label: "Running pre-publish checks", duration: 1200 },
-    { label: "Publishing template", duration: 900 },
-  ];
-
-  const handleDeploy = () => {
-    setDeploying(true);
-    setDeployStep(0);
-    let current = 0;
-    const advance = () => {
-      current += 1;
-      if (current < DEPLOY_STEPS.length) {
-        setDeployStep(current);
-        setTimeout(advance, DEPLOY_STEPS[current].duration);
-      } else {
-        // All steps done — show success
-        setTimeout(() => {
-          setDeploying(false);
-          setDeployed(true);
-          toast.success("Claw registered and deployed", {
-            description: "Your Claw is live on GMI infrastructure.",
-          });
-        }, 600);
-      }
-    };
-    setTimeout(advance, DEPLOY_STEPS[0].duration);
-  };
-
-  // ── Deploying loading screen ──────────────────────────────────────────
-  if (deploying) {
-    const totalSteps = DEPLOY_STEPS.length;
-    const progress = Math.round(((deployStep + 1) / totalSteps) * 100);
-    return (
-      <div className="min-h-screen flex bg-black text-white">
-        <Topbar />
-      <Navbar />
-        <div className="flex-1 flex items-center justify-center" style={{ marginLeft: "210px", paddingTop: "40px" }}>
-          <div className="w-full max-w-lg px-8">
-            {/* Animated GMI logo pulse */}
-            <div className="flex items-center gap-3 mb-10">
-              <div className="relative w-8 h-8">
-                <div
-                  className="absolute inset-0 rounded-full animate-ping"
-                  style={{ background: "rgba(221,234,77,0.25)" }}
-                />
-                <div
-                  className="relative w-8 h-8 rounded-full flex items-center justify-center"
-                  style={{ background: "rgba(221,234,77,0.15)", border: "1px solid rgba(221,234,77,0.4)" }}
-                >
-                  <Zap size={14} style={{ color: "#DDEA4D" }} />
-                </div>
-              </div>
-              <span className="font-mono-gmi text-xs uppercase tracking-widest" style={{ color: "#DDEA4D" }}>
-                Registering Claw
-              </span>
-            </div>
-
-            <h2 className="font-display text-2xl text-white mb-1" style={{ letterSpacing: "-0.03em" }}>
-              {projectName || "Your Claw"}
-            </h2>
-            <p className="text-gray-400 text-xs font-mono-gmi mb-8">
-              GMI Cluster Engine is provisioning your Claw infrastructure...
-            </p>
-
-            {/* Progress bar */}
-            <div className="mb-8">
-              <div className="flex justify-between font-mono-gmi text-xs text-gray-400 mb-2">
-                <span>Progress</span>
-                <span style={{ color: "#DDEA4D" }}>{progress}%</span>
-              </div>
-              <div className="w-full h-1" style={{ background: "#1a1a1a" }}>
-                <div
-                  className="h-1 transition-all duration-500"
-                  style={{ width: `${progress}%`, background: "#DDEA4D" }}
-                />
-              </div>
-            </div>
-
-            {/* Step list */}
-            <div className="space-y-3">
-              {DEPLOY_STEPS.map((s, i) => {
-                const done = i < deployStep;
-                const active = i === deployStep;
-                return (
-                  <div key={i} className="flex items-center gap-3">
-                    {/* Status icon */}
-                    <div className="w-5 h-5 flex items-center justify-center shrink-0">
-                      {done ? (
-                        <CheckCircle size={14} style={{ color: "#DDEA4D" }} />
-                      ) : active ? (
-                        <div
-                          className="w-3 h-3 rounded-full animate-pulse"
-                          style={{ background: "#DDEA4D" }}
-                        />
-                      ) : (
-                        <div
-                          className="w-3 h-3 rounded-full"
-                          style={{ background: "#2a2a2a" }}
-                        />
-                      )}
-                    </div>
-                    <span
-                      className="font-mono-gmi text-sm"
-                      style={{
-                        color: done ? "#888" : active ? "#fff" : "#777",
-                        textDecoration: done ? "line-through" : "none",
-                      }}
-                    >
-                      {s.label}
-                      {active && (
-                        <span style={{ color: "#DDEA4D" }}>
-                          {" "}...
-                        </span>
-                      )}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Footer note */}
-            <p className="font-mono-gmi text-xs text-gray-300 mt-10">
-              Do not close this window. You will be redirected automatically.
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Published success screen ────────────────────────────────────────────
-  if (deployed) {
-    const templateId = "tpl_" + Math.random().toString(36).slice(2, 14);
-    const slug = projectName.toLowerCase().replace(/\s+/g, "-") || "my-claw";
-    const listUrl = `/list-claw?from=deploy&templateId=${encodeURIComponent(templateId)}&projectName=${encodeURIComponent(projectName || slug)}&useMaaS=${useMaaS}`;
-
-    const codeSnippet = `# Step 1: Provision a container
-curl -X POST https://console.gmicloud.ai/api/v1/containers \\
-  -H "Authorization: Bearer {your_api_key}" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "name": "${slug}-instance",
-    "templateId": "${templateId}",
-    "product": "{cpu_tier}",
-    "idc": "{data_center}",
-    "count": 1
-  }'
-
-# Step 2: Poll for running status + endpoint
-curl https://console.gmicloud.ai/api/v1/containers/{container_id} \\
-  -H "Authorization: Bearer {your_api_key}"
-# Wait until status = "running", then use publicIP + port
-
-# Step 3: Terminate when done
-curl -X DELETE https://console.gmicloud.ai/api/v1/containers/{container_id} \\
-  -H "Authorization: Bearer {your_api_key}"`;
-
-    return (
-      <div className="min-h-screen flex bg-black text-white">
-        <Topbar />
-      <Navbar />
-        <div className="flex-1" style={{ marginLeft: "210px", paddingTop: "40px" }}>
-          <div className="pt-12 pb-20 px-8 max-w-2xl">
-            {/* Status header */}
-            <div className="flex items-center gap-3 mb-8">
-              <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: "#DDEA4D" }} />
-              <span className="font-mono-gmi text-xs uppercase tracking-widest" style={{ color: "#DDEA4D" }}>
-                Template Published ✓
-              </span>
-            </div>
-
-            <h1 className="font-display text-3xl text-white mb-1" style={{ letterSpacing: "-0.03em" }}>
-              {projectName || "Your Claw"} is ready to provision
-            </h1>
-            <p className="text-gray-300 text-sm font-mono-gmi mb-8">
-              Your template is published on GMI Cluster Engine. Enterprise callers can now provision user instances via the API.
-              No containers are running yet — they are provisioned on demand.
-            </p>
-
-            {/* Template ID */}
-            <div className="p-4 mb-4" style={{ background: "#0a0a0a", border: "1px solid rgba(221,234,77,0.3)" }}>
-              <div className="font-mono-gmi text-xs uppercase tracking-widest mb-2" style={{ color: "#DDEA4D" }}>Template ID</div>
-              <div className="flex items-center justify-between gap-4">
-                <code className="font-mono-gmi text-sm text-white break-all">{templateId}</code>
-                <button onClick={() => { navigator.clipboard.writeText(templateId); toast.success("Copied"); }}
-                  className="shrink-0 font-mono-gmi text-xs px-3 py-1.5 transition-all"
-                  style={{ border: "1px solid #DDEA4D", color: "#DDEA4D" }}>
-                  Copy
-                </button>
-              </div>
-            </div>
-
-            {/* Status cards */}
-            <div className="grid grid-cols-2 gap-3 mb-6">
-              {[
-                { label: "Template State", value: "Active", color: "#DDEA4D" },
-                { label: "Marketplace State", value: "Not Listed", color: "#888" },
-                { label: "Containers Running", value: "0 (on demand)", color: "#fff" },
-                { label: "Billing", value: "Pay per provisioning", color: "#fff" },
-              ].map((item) => (
-                <div key={item.label} className="p-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                  <div className="font-mono-gmi text-xs text-gray-400 mb-1">{item.label}</div>
-                  <div className="font-mono-gmi text-sm font-bold" style={{ color: item.color }}>{item.value}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Provisioning code */}
-            <div className="mb-6">
-              <div className="font-mono-gmi text-xs text-gray-400 uppercase tracking-widest mb-2">
-                How to provision user instances via API
-              </div>
-              <div className="relative" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                <button
-                  onClick={() => { navigator.clipboard.writeText(codeSnippet); toast.success("Code copied"); }}
-                  className="absolute top-3 right-3 font-mono-gmi text-xs px-2.5 py-1 transition-all"
-                  style={{ border: "1px solid #2a2a2a", color: "#999", background: "#0a0a0a" }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#fff"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#999"; }}
-                >
-                  Copy
-                </button>
-                <pre className="p-4 font-mono-gmi text-xs text-gray-400 overflow-x-auto" style={{ lineHeight: 1.7, whiteSpace: "pre" }}>
-                  {codeSnippet}
-                </pre>
-              </div>
-            </div>
-
-            {/* Next step banner */}
-            <div className="p-5 mb-6" style={{ background: "rgba(221,234,77,0.04)", border: "1px solid rgba(221,234,77,0.2)" }}>
-              <div className="font-mono-gmi text-xs uppercase tracking-widest mb-2" style={{ color: "#DDEA4D" }}>
-                Next Step
-              </div>
-              <p className="text-sm text-gray-400 font-mono-gmi leading-relaxed">
-                Integrate the provisioning API into your own system using the template_id above.
-                When you're ready for broader distribution, list this Claw on the Marketplace.
-              </p>
-            </div>
-
-            <div className="flex gap-3">
-              <button onClick={() => setLocation(listUrl)}
-                className="btn-primary-lime px-6 py-2.5 text-sm font-bold flex items-center gap-2">
-                List this Claw <ArrowRight size={14} />
-              </button>
-              <button onClick={() => setLocation("/dashboard")}
-                className="btn-outline-dashed px-6 py-2.5 text-sm">
-                Go to Dashboard
-              </button>
-            </div>
-          </div>
-          <Footer />
-        </div>
-      </div>
-    );
-  }
-
-
-
-  // ── Tab 2 submitted screen ────────────────────────────────────────────────
-  if (tab2Submitted) {
-    return (
-      <div className="min-h-screen flex bg-black text-white">
-        <Topbar />
-        <Navbar />
-        <div className="flex-1" style={{ marginLeft: "210px", paddingTop: "40px" }}>
-          <div className="pt-12 pb-20 px-8 max-w-2xl">
-            <div className="flex items-center gap-3 mb-8">
-              <div className="w-2 h-2 rounded-full" style={{ background: "#DDEA4D" }} />
-              <span className="font-mono-gmi text-xs uppercase tracking-widest" style={{ color: "#DDEA4D" }}>Listing Submitted ✓</span>
-            </div>
-            <h1 className="font-display text-3xl text-white mb-2" style={{ letterSpacing: "-0.03em" }}>Your Claw is under review</h1>
-            <p className="text-gray-300 text-sm font-mono-gmi mb-8">
-              We’ve received your self-hosted Claw submission. GMI will verify your MaaS key and endpoint before listing goes live.
-            </p>
-            <div className="grid grid-cols-2 gap-3 mb-8">
-              {[
-                { label: "Deployment Type", value: "Self-hosted + GMI MaaS", color: "#fff" },
-                { label: "Badge", value: "Powered by GMI MaaS", color: "#60a5fa" },
-                { label: "Marketplace State", value: "Pending Review", color: "#f59e0b" },
-                { label: "Endpoint", value: tab2Endpoint || "—", color: "#fff" },
-              ].map((item) => (
-                <div key={item.label} className="p-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                  <div className="font-mono-gmi text-xs text-gray-400 mb-1">{item.label}</div>
-                  <div className="font-mono-gmi text-sm font-bold break-all" style={{ color: item.color }}>{item.value}</div>
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-3">
-              <button onClick={() => setLocation("/dashboard")}
-                className="btn-primary-lime px-6 py-2.5 text-sm font-bold flex items-center gap-2">
-                Go to My Claws <ArrowRight size={14} />
-              </button>
-              <button onClick={() => setLocation("/marketplace")}
-                className="btn-outline-dashed px-6 py-2.5 text-sm">Browse Marketplace</button>
-            </div>
-          </div>
-          <Footer />
-        </div>
-      </div>
-    );
-  }
-
-  // ── Wizard ──────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen flex bg-black text-white">
-      <Topbar />
-      <Navbar />
+    <button
+      onClick={onClick}
+      style={{
+        display: "flex", alignItems: "center", gap: 12,
+        background: "transparent", border: "none",
+        padding: "10px 0",
+        cursor: "pointer",
+        textAlign: "left",
+        width: "100%",
+      }}
+    >
+      <span
+        style={{
+          width: 22, height: 22,
+          borderRadius: 4,
+          background: numberBg,
+          color: numberFg,
+          border: `1px solid ${numberBorder}`,
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          fontFamily: FONT, fontSize: 12, fontWeight: 600, lineHeight: "16px",
+          flexShrink: 0,
+        }}
+      >
+        {state === "done" ? <IconCheck size={12} /> : step}
+      </span>
+      <span style={{ fontFamily: FONT, fontSize: 15, fontWeight: titleWeight, lineHeight: "20px", color: titleColor }}>
+        {title}
+      </span>
+    </button>
+  );
+}
 
-      {/* Nudge modal */}
-      {showNudge && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.8)" }}>
-          <div className="w-full max-w-md p-8" style={{ background: "#111", border: "1px solid #2a2a2a" }}>
-            <div className="font-mono-gmi text-xs uppercase tracking-widest mb-3" style={{ color: "#f59e0b" }}>⚠ Before you switch</div>
-            <h3 className="font-display text-xl text-white mb-3" style={{ letterSpacing: "-0.02em" }}>You’ll miss out on bundle pricing</h3>
-            <p className="text-sm text-gray-300 font-mono-gmi leading-relaxed mb-6">
-              By switching to self-hosted, you lose access to GMI’s CE + MaaS bundle pricing and the <span style={{ color: "#DDEA4D" }}>Verified</span> badge.
-              Self-hosted Claws receive the <span style={{ color: "#60a5fa" }}>Powered by GMI MaaS</span> badge only.
-            </p>
-            <div className="flex gap-3">
-              <button onClick={() => setShowNudge(false)}
-                className="flex-1 btn-primary-lime py-2.5 text-sm font-bold">
-                Stay on GMI Full Stack
-              </button>
-              <button
-                onClick={() => { setShowNudge(false); setNudgeShownThisSession(true); setActiveTab("selfhosted"); setTab2Step(0); }}
-                className="flex-1 py-2.5 text-sm font-mono-gmi transition-all"
-                style={{ border: "1px solid #2a2a2a", color: "#888" }}>
-                Continue to self-hosted
-              </button>
-            </div>
-          </div>
+// ─── Live Cost Estimate sticky panel ──────────────────────────────────────
+function LiveCostPanel({
+  computeRate, tip, onBack, onContinue, continueLabel = "Continue", continueDisabled,
+}: {
+  computeRate: number; // $/hr
+  tip?: string;
+  onBack: () => void;
+  onContinue: () => void;
+  continueLabel?: string;
+  continueDisabled?: boolean;
+}) {
+  return (
+    <aside style={{ display: "flex", flexDirection: "column", gap: 12, position: "sticky", top: 56 }}>
+      <div
+        style={{
+          background: C.card,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          padding: "18px 20px",
+          display: "flex", flexDirection: "column", gap: 6,
+        }}
+      >
+        <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Live Cost Estimate</div>
+        <div style={{ fontFamily: FONT, fontSize: 30, fontWeight: 700, lineHeight: "36px", color: C.fg, letterSpacing: "-0.02em" }}>
+          ${computeRate.toFixed(4)}<span style={{ fontSize: 16, fontWeight: 500, color: C.muted }}>/hr</span>
+        </div>
+        <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>
+          {computeRate === 0 ? "Select a compute tier · per active instance" : "Container tier · per active instance"}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, paddingTop: 10, borderTop: `1px solid ${C.borderSoft}` }}>
+          <span style={{ width: 6, height: 6, background: C.muted, borderRadius: 2 }} />
+          <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted }}>MaaS: pay per token used</span>
+        </div>
+      </div>
+
+      {tip && (
+        <div
+          style={{
+            background: C.cardSolid,
+            border: `1px solid ${C.border}`,
+            borderRadius: 10,
+            padding: "12px 14px",
+            fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px",
+            display: "flex", gap: 8, alignItems: "flex-start",
+          }}
+        >
+          <span style={{ color: C.muted, marginTop: 1 }}><IconInfo size={12} /></span>
+          <span>{tip}</span>
         </div>
       )}
 
-      <div className="flex-1" style={{ marginLeft: "210px", paddingTop: "40px" }}>
-        <div className="pt-8 pb-20">
-          <div className="px-8 max-w-3xl">
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button
+          onClick={onBack}
+          style={{
+            fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
+            background: "transparent", color: C.fg,
+            border: `1px solid ${C.border}`,
+            padding: "8px 18px", borderRadius: 8, cursor: "pointer",
+          }}
+        >
+          Back
+        </button>
+        <button
+          onClick={onContinue}
+          disabled={continueDisabled}
+          style={{
+            fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
+            background: continueDisabled ? "#3a3a1f" : C.lime,
+            color: continueDisabled ? "#666" : C.limeText,
+            border: "none",
+            padding: "8px 18px", borderRadius: 8,
+            cursor: continueDisabled ? "not-allowed" : "pointer",
+          }}
+        >
+          {continueLabel}
+        </button>
+      </div>
+    </aside>
+  );
+}
 
-            {/* Back */}
-            <button onClick={() => setLocation("/dashboard")}
-              className="flex items-center gap-2 text-gray-300 hover:text-white transition-colors font-mono-gmi text-xs mb-10">
-              <ArrowLeft size={13} /> Back to Console
-            </button>
+// ─── Section header for single-page wizard layout ─────────────────────────
+function SectionHeader({
+  number, title,
+}: { number: number; title: string; subtitle?: string | null }) {
+  // "Pre-configured" subtitle pill was removed — the collapsed chip-row + Customize link
+  // inside the section already communicate "default applied"; keep the header clean.
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <span
+        style={{
+          width: 22, height: 22,
+          borderRadius: 6,
+          background: C.lime,
+          color: C.limeText,
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          fontFamily: FONT, fontSize: 12, fontWeight: 700, lineHeight: "16px",
+          flexShrink: 0,
+        }}
+      >
+        {number}
+      </span>
+      <h2 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "22px", color: C.fg, margin: 0 }}>
+        {title}
+      </h2>
+    </div>
+  );
+}
 
-            {/* Header */}
-            <div className="mb-8">
-              <div className="gmi-label mb-2">Developer Console · New Claw Project</div>
-              <h1 className="font-display text-4xl text-white mb-2" style={{ letterSpacing: "-0.03em" }}>
-                Register a Claw
-              </h1>
-              <p className="text-gray-300 text-sm font-mono-gmi">
-                Configure infrastructure and register your Claw. List it on the Marketplace after testing.
-              </p>
+// ─── Right sticky panel — cost + Register CTA (single-page mode) ──────────
+function RegisterPanel({
+  computeRate, canRegister, onCancel, onRegister, ctaLabel = "Register Agent", hideComputeCost = false,
+}: {
+  computeRate: number;
+  canRegister: boolean;
+  onCancel: () => void;
+  onRegister: () => void;
+  ctaLabel?: string;
+  hideComputeCost?: boolean;
+}) {
+  return (
+    <aside style={{ display: "flex", flexDirection: "column", gap: 8, position: "sticky", top: 48 }}>
+      {!hideComputeCost && (
+        <div
+          style={{
+            background: C.card,
+            border: `1px solid ${C.border}`,
+            borderRadius: 8,
+            padding: "10px 14px",
+            display: "flex", flexDirection: "column", gap: 2,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+            <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>Live Cost</span>
+            <span style={{ fontFamily: FONT, fontSize: 20, fontWeight: 700, lineHeight: "24px", color: C.fg, letterSpacing: "-0.02em" }}>
+              ${computeRate.toFixed(4)}<span style={{ fontSize: 12, fontWeight: 500, color: C.muted }}>/hr</span>
+            </span>
+          </div>
+          <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>Container · per active instance · MaaS pay-per-token</div>
+        </div>
+      )}
+
+      <div
+        style={{
+          background: C.cardSolid,
+          border: `1px solid ${C.border}`,
+          borderRadius: 8,
+          padding: "8px 12px",
+          fontFamily: FONT, fontSize: 11, fontWeight: 400, color: C.muted, lineHeight: "14px",
+          display: "flex", gap: 6, alignItems: "flex-start",
+        }}
+      >
+        <span style={{ color: C.muted, marginTop: 1 }}><IconInfo size={11} /></span>
+        <span>
+          {hideComputeCost
+            ? <><span style={{ color: C.fg, fontWeight: 600 }}>Self-hosted</span> — you own compute & uptime. GMI auto-checks URL + key, then lists.</>
+            : <><span style={{ color: C.fg, fontWeight: 600 }}>Registration ≠ Listing</span> — list publicly later from Dashboard.</>
+          }
+        </span>
+      </div>
+
+      <button
+        onClick={onRegister}
+        disabled={!canRegister}
+        style={{
+          width: "100%",
+          fontFamily: FONT, fontSize: 13, fontWeight: 600, lineHeight: "18px",
+          background: canRegister ? C.lime : "#3a3a1f",
+          color: canRegister ? C.limeText : "#666",
+          border: "none",
+          padding: "8px 14px",
+          borderRadius: 8,
+          cursor: canRegister ? "pointer" : "not-allowed",
+        }}
+      >
+        {ctaLabel}
+      </button>
+      <button
+        onClick={onCancel}
+        style={{
+          width: "100%",
+          fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
+          background: "transparent",
+          color: C.muted,
+          border: "none",
+          padding: "2px 0",
+          cursor: "pointer",
+        }}
+      >
+        Cancel
+      </button>
+    </aside>
+  );
+}
+
+// ─── Step 1: Basics & Template ───────────────────────────────────────────
+function StepBasics({
+  projectName, setProjectName, onCancel, onContinue, showEnvWarning = true,
+}: {
+  projectName: string;
+  setProjectName: (v: string) => void;
+  onCancel?: () => void;
+  onContinue?: () => void;
+  showEnvWarning?: boolean;
+}) {
+  const canContinue = projectName.trim().length > 1;
+  const showFooter = !!(onCancel && onContinue);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <FieldLabel required>Internal Project Name</FieldLabel>
+        <TextInput value={projectName} onChange={setProjectName} placeholder="e.g. contract-review-v2" />
+        <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted }}>
+          This is your internal identifier — not shown publicly on the Agentbox
+        </span>
+      </div>
+
+      {/* GMI-injected env vars notice */}
+      {showEnvWarning && (
+        <div
+          style={{
+            background: C.warnBg,
+            border: `1px solid ${C.border}`,
+            borderRadius: 8,
+            padding: "8px 12px",
+            display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
+            fontFamily: FONT, fontSize: 12, lineHeight: "18px",
+          }}
+        >
+          <span style={{ color: C.warn, flexShrink: 0, display: "inline-flex" }}><IconWarn size={12} /></span>
+          <span style={{ color: C.fg, fontWeight: 600 }}>Your container must read</span>
+          <code style={{ fontFamily: MONO, fontSize: 11, color: C.fg, background: "rgba(255,255,255,0.04)", padding: "1px 6px", borderRadius: 4 }}>GMI_MAAS_API_KEY</code>
+          <code style={{ fontFamily: MONO, fontSize: 11, color: C.fg, background: "rgba(255,255,255,0.04)", padding: "1px 6px", borderRadius: 4 }}>GMI_MAAS_BASE_URL</code>
+          <span style={{ color: C.muted }}>— injected at deploy.</span>
+          <a href="#" style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.link, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 2, marginLeft: "auto" }}>
+            Setup guide <IconArrowExternal size={10} />
+          </a>
+        </div>
+      )}
+
+      {showFooter && (
+        <FooterButtons leftLabel="Cancel" onLeft={onCancel!} rightLabel="Continue" onRight={onContinue!} rightDisabled={!canContinue} />
+      )}
+    </div>
+  );
+}
+
+// ─── Step 2: Infrastructure ───────────────────────────────────────────────
+function StepInfrastructure({
+  dockerSource, setDockerSource,
+  dockerImage, setDockerImage,
+  enableCreds, setEnableCreds,
+  region, setRegion,
+  computeTier, setComputeTier,
+  maxLifetime, setMaxLifetime,
+  idleTimeout, setIdleTimeout,
+  addModels, setAddModels,
+  selectedModel, setSelectedModel,
+  forkedFromTemplate = false,
+}: {
+  dockerSource: "registry" | "upload";
+  setDockerSource: (v: "registry" | "upload") => void;
+  dockerImage: string;
+  setDockerImage: (v: string) => void;
+  enableCreds: boolean;
+  setEnableCreds: (v: boolean) => void;
+  region: string;
+  setRegion: (v: string) => void;
+  computeTier: string;
+  setComputeTier: (v: string) => void;
+  maxLifetime: string;
+  setMaxLifetime: (v: string) => void;
+  idleTimeout: string;
+  setIdleTimeout: (v: string) => void;
+  addModels: boolean;
+  setAddModels: (v: boolean) => void;
+  selectedModel: string;
+  setSelectedModel: (v: string) => void;
+  forkedFromTemplate?: boolean;
+}) {
+  // Collapse step when everything is at its GMI default; expand on user click
+  // or as soon as any field drifts from default. When forked from a template,
+  // start collapsed regardless of values — user explicitly opts into editing.
+  const allDefault =
+    dockerSource  === "registry" &&
+    dockerImage   === "gmi/starter-agent:latest" &&
+    enableCreds   === false &&
+    region        === "us-ia-iowa-1" &&
+    computeTier   === "container" &&
+    maxLifetime   === "1h" &&
+    idleTimeout   === "5min" &&
+    addModels     === true &&
+    selectedModel === "";
+  const [userExpanded, setUserExpanded] = useState(false);
+  const collapsed = !userExpanded && (allDefault || forkedFromTemplate);
+
+  if (collapsed) {
+    const chips: string[] = forkedFromTemplate
+      ? ["Pre-filled from template"]
+      : [
+          "Starter image",
+          "Container tier",
+          "IOWA IDC-1",
+          "Max 1h · idle 5min",
+          "GMI Models on",
+        ];
+    return (
+      <div
+        style={{
+          background: C.card,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          padding: "12px 16px",
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+        }}
+      >
+        {chips.map((c) => (
+          <span
+            key={c}
+            style={{
+              fontFamily: FONT, fontSize: 11, fontWeight: 500, lineHeight: "14px",
+              color: C.fg,
+              background: "rgba(255,255,255,0.04)",
+              border: `1px solid ${C.border}`,
+              padding: "1px 8px",
+              borderRadius: 999,
+            }}
+          >
+            {c}
+          </span>
+        ))}
+        <button
+          onClick={() => setUserExpanded(true)}
+          style={{
+            marginLeft: "auto",
+            display: "inline-flex", alignItems: "center", gap: 3,
+            fontFamily: FONT, fontSize: 11, fontWeight: 500,
+            background: "transparent", color: "#7dd3fc",
+            border: "none", padding: 0, cursor: "pointer",
+          }}
+        >
+          Customize <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 5l7 7-7 7" /></svg>
+        </button>
+      </div>
+    );
+  }
+
+  const resetToDefaults = () => {
+    setDockerSource("registry");
+    setDockerImage("gmi/starter-agent:latest");
+    setEnableCreds(false);
+    setRegion("us-ia-iowa-1");
+    setComputeTier("container");
+    setMaxLifetime("1h");
+    setIdleTimeout("5min");
+    setAddModels(true);
+    setSelectedModel("");
+    setUserExpanded(false);
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* Collapse-back link — only when nothing has drifted from default */}
+      {allDefault && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button
+            onClick={() => setUserExpanded(false)}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
+              background: "transparent", color: C.muted,
+              border: "none", padding: 0, cursor: "pointer",
+            }}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m18 15-6-6-6 6" />
+            </svg>
+            Collapse · use GMI defaults
+          </button>
+        </div>
+      )}
+      {!allDefault && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button
+            onClick={resetToDefaults}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
+              background: "transparent", color: "#7dd3fc",
+              border: "none", padding: 0, cursor: "pointer",
+            }}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" />
+            </svg>
+            Reset to GMI defaults
+          </button>
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
+      {/* Top section */}
+      <div
+        style={{
+          background: C.card,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          padding: "16px 20px",
+          display: "flex", flexDirection: "column", gap: 12,
+        }}
+      >
+        {/* Docker Image Source */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <FieldLabel required>Docker Image Source</FieldLabel>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <SourceCard
+              selected={dockerSource === "registry"}
+              title="Registry URL"
+              description="Pull from Docker Hub, GHCR, ECR, etc"
+              onClick={() => setDockerSource("registry")}
+              icon={<IconGlobe />}
+            />
+            <SourceCard
+              selected={false}
+              disabled
+              title="Upload Image"
+              description="Coming soon"
+              onClick={() => {}}
+              icon={<IconUpload />}
+            />
+          </div>
+          {dockerSource === "registry" && (
+            <TextInput value={dockerImage} onChange={setDockerImage} placeholder="docker.io/acme/agent:1.0.0" mono />
+          )}
+        </div>
+
+        {/* Enable Credentials */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, lineHeight: "20px", color: C.fg }}>
+              Enable Credentials
             </div>
-
-
-
-            {/* ── Tab switcher ─────────────────────────────────────────── */}
-            <div className="flex mb-8" style={{ borderBottom: "1px solid #1e1e1e" }}>
-              <button
-                onClick={() => { setActiveTab("ce"); setStep(0); }}
-                className="px-5 py-3 font-mono-gmi text-sm font-bold transition-all"
-                style={{
-                  borderBottom: activeTab === "ce" ? "2px solid #DDEA4D" : "2px solid transparent",
-                  color: activeTab === "ce" ? "#DDEA4D" : "#888",
-                  marginBottom: "-1px",
-                }}>
-                GMI CE Deployment
-              </button>
-              <button
-                onClick={switchToSelfHosted}
-                className="px-5 py-3 font-mono-gmi text-sm font-bold transition-all"
-                style={{
-                  borderBottom: activeTab === "selfhosted" ? "2px solid #60a5fa" : "2px solid transparent",
-                  color: activeTab === "selfhosted" ? "#60a5fa" : "#888",
-                  marginBottom: "-1px",
-                }}>
-                Self-hosted + MaaS
-              </button>
+            <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, marginTop: 2 }}>
+              Enable credentials if your Docker registry requires authentication for pulling images.
             </div>
+            {enableCreds && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+                <TextInput value="" onChange={() => {}} placeholder="Registry username" />
+                <TextInput value="" onChange={() => {}} placeholder="Registry password / token" />
+              </div>
+            )}
+          </div>
+          <Toggle on={enableCreds} onChange={setEnableCreds} />
+        </div>
 
-            {/* ── SELF-HOSTED CONTENT ────────────────────────────────────── */}
-            {activeTab === "selfhosted" && (
-              <div>
-                <div className="flex items-center gap-0 mb-10">
-                  {STEPS_TAB2.map((s, i) => (
-                    <div key={s.id} className="flex items-center shrink-0">
-                      <div className="flex items-center gap-2">
-                        <div className="w-6 h-6 flex items-center justify-center text-xs font-mono-gmi font-bold shrink-0"
-                          style={{ background: i <= tab2Step ? "#60a5fa" : "#111", color: i <= tab2Step ? "#000" : "#999", border: i <= tab2Step ? "none" : "1px solid #2a2a2a" }}>
-                          {i < tab2Step ? "✓" : i + 1}
-                        </div>
-                        <span className="text-xs font-mono-gmi hidden sm:inline whitespace-nowrap"
-                          style={{ color: i === tab2Step ? "#fff" : "#999" }}>
-                          {s.label}
-                        </span>
-                      </div>
-                      {i < STEPS_TAB2.length - 1 && (
-                        <div className="w-8 h-px mx-3 shrink-0" style={{ background: i < tab2Step ? "#60a5fa" : "#2a2a2a" }} />
-                      )}
-                    </div>
-                  ))}
-                </div>
+        {/* Region */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <FieldLabel required>Data Center Region</FieldLabel>
+          <Select
+            value={region}
+            onChange={setRegion}
+            placeholder="Select a data center region"
+            options={REGIONS.map((r) => ({ value: r.id, label: `${r.name} — ${r.sub}` }))}
+          />
 
-                {/* Badge notice */}
-                <div className="flex items-start gap-3 p-4 mb-6 font-mono-gmi text-xs"
-                  style={{ background: "rgba(96,165,250,0.06)", border: "1px solid rgba(96,165,250,0.25)" }}>
-                  <Info size={13} className="shrink-0 mt-0.5" style={{ color: "#60a5fa" }} />
-                  <span style={{ color: "#93c5fd" }}>
-                    Self-hosted Claws receive the <strong>Powered by GMI MaaS</strong> badge. You host the compute; GMI provides the model layer only.
-                  </span>
-                </div>
-
-                {/* Step 0: MaaS Key */}
-                {tab2Step === 0 && (
-                  <div className="space-y-6">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Zap size={15} style={{ color: "#60a5fa" }} />
-                      <h2 className="font-display text-lg text-white">GMI MaaS API Key</h2>
-                    </div>
-                    <p className="text-xs text-gray-300 font-mono-gmi -mt-2">
-                      Provide a project-scoped MaaS API key. GMI will validate it before your listing goes live.
-                    </p>
-                    <TextInput
-                      label="MaaS API Key *"
-                      placeholder="gmi_sk_..."
-                      value={tab2MaasKey}
-                      onChange={setTab2MaasKey}
-                      mono
-                      hint="Create a project-scoped key in Console → Settings → API Keys."
-                    />
-                    <div className="flex items-start gap-3 p-4 font-mono-gmi text-xs"
-                      style={{ background: "rgba(221,234,77,0.04)", border: "1px solid rgba(221,234,77,0.15)", color: "#DDEA4D" }}>
-                      <Info size={13} className="shrink-0 mt-0.5" />
-                      <span>
-                        Your Claw must reference <code className="bg-black px-1">GMI_MAAS_API_KEY</code> in its code to call models.
-                        GMI validates this key is active and project-scoped before approving your listing.
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Step 1: External Endpoint */}
-                {tab2Step === 1 && (
-                  <div className="space-y-6">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Server size={15} style={{ color: "#60a5fa" }} />
-                      <h2 className="font-display text-lg text-white">External Endpoint URL</h2>
-                    </div>
-                    <p className="text-xs text-gray-300 font-mono-gmi -mt-2">
-                      Provide the public URL where your Claw is hosted. This is what Enterprise callers will use to access your Claw.
-                    </p>
-                    <TextInput
-                      label="Endpoint URL *"
-                      placeholder="https://your-claw.yourdomain.com"
-                      value={tab2Endpoint}
-                      onChange={setTab2Endpoint}
-                      mono
-                      hint="Must be publicly reachable over HTTPS. GMI will run a health check before approving."
-                    />
-                    <div className="flex items-start gap-3 p-4 font-mono-gmi text-xs"
-                      style={{ background: "rgba(255,80,80,0.06)", border: "1px solid rgba(255,80,80,0.2)", color: "#ff8080" }}>
-                      <Info size={13} className="shrink-0 mt-0.5" />
-                      <span>
-                        You are solely responsible for uptime and availability of this endpoint.
-                        If your endpoint goes down, your Marketplace listing will be marked Unavailable automatically.
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Step 2: Review & Submit */}
-                {tab2Step === 2 && (
-                  <div className="space-y-6">
-                    <div className="flex items-center gap-2 mb-2">
-                      <CheckCircle size={15} style={{ color: "#60a5fa" }} />
-                      <h2 className="font-display text-lg text-white">Review & Submit</h2>
-                    </div>
-                    <div className="p-5 space-y-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                      <p className="font-mono-gmi text-xs text-gray-300 uppercase tracking-widest border-b border-gray-800 pb-3">Configuration Summary</p>
-                      {[
-                        { label: "Deployment Type", value: "Self-hosted + GMI MaaS" },
-                        { label: "MaaS API Key", value: tab2MaasKey ? tab2MaasKey.slice(0, 12) + "..." : "Not set" },
-                        { label: "Endpoint URL", value: tab2Endpoint || "Not set" },
-                        { label: "Badge", value: "Powered by GMI MaaS" },
-                      ].map(({ label, value }) => (
-                        <div key={label} className="grid grid-cols-3 gap-4">
-                          <div className="gmi-label text-gray-400">{label}</div>
-                          <div className="col-span-2 font-mono-gmi text-sm text-gray-300 break-all">{value}</div>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="p-4 font-mono-gmi text-xs" style={{ background: "rgba(221,234,77,0.04)", border: "1px solid rgba(221,234,77,0.2)" }}>
-                      <div className="font-bold mb-1" style={{ color: "#DDEA4D" }}>Submission ≠ Listing</div>
-                      <p className="text-gray-400 leading-relaxed">
-                        Submitting does <strong>not</strong> immediately publish your Claw. GMI will verify your MaaS key and endpoint health before the listing goes live.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Tab 2 navigation */}
-                <div className="flex items-center justify-between mt-10">
+          <div style={{ marginTop: 6 }}>
+            <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted, marginBottom: 6 }}>Popular regions</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8 }}>
+              {REGIONS.filter((r) => r.popular).map((r) => {
+                const isActive = region === r.id;
+                return (
                   <button
-                    onClick={() => (tab2Step === 0 ? setActiveTab("ce") : setTab2Step(tab2Step - 1))}
-                    className="btn-outline-dashed px-6 py-2.5 text-sm flex items-center gap-2">
-                    <ArrowLeft size={14} />
-                    {tab2Step === 0 ? "Switch to CE" : "Back"}
-                  </button>
-                  {tab2Step < STEPS_TAB2.length - 1 ? (
-                    <button
-                      onClick={() => {
-                        if (tab2Step === 0 && !tab2MaasKey.trim()) { toast.error("Please enter your MaaS API key."); return; }
-                        if (tab2Step === 1 && !tab2Endpoint.trim()) { toast.error("Please enter your endpoint URL."); return; }
-                        setTab2Step(tab2Step + 1);
+                    key={r.id}
+                    onClick={() => setRegion(r.id)}
+                    style={{
+                      background: isActive ? C.selectedYel : C.cardSolid,
+                      border: `1px solid ${isActive ? C.selectedYelB : C.border}`,
+                      borderRadius: 8,
+                      padding: "10px 14px",
+                      textAlign: "left",
+                      display: "flex", alignItems: "center", gap: 10,
+                      cursor: "pointer",
+                      fontFamily: FONT,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 12, height: 12, borderRadius: 999,
+                        border: `1.5px solid ${isActive ? C.lime : C.border}`,
+                        background: isActive ? C.lime : "transparent",
+                        flexShrink: 0,
                       }}
-                      className="px-8 py-2.5 text-sm font-bold flex items-center gap-2 transition-all"
-                      style={{ background: "#60a5fa", color: "#000" }}>
-                      Continue <ArrowRight size={14} />
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        if (!tab2MaasKey.trim() || !tab2Endpoint.trim()) { toast.error("MaaS key and endpoint are required."); return; }
-                        setTab2Submitting(true);
-                        setTimeout(() => { setTab2Submitting(false); setTab2Submitted(true); toast.success("Submission received"); }, 2000);
-                      }}
-                      disabled={tab2Submitting}
-                      className="px-8 py-2.5 text-sm font-bold flex items-center gap-2 transition-all"
-                      style={{ background: tab2Submitting ? "#2a2a2a" : "#60a5fa", color: tab2Submitting ? "#888" : "#000" }}>
-                      {tab2Submitting ? "Submitting..." : "Submit"} {!tab2Submitting && <Zap size={14} />}
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* ── CE WIZARD CONTENT ─────────────────────────────────── */}
-            {activeTab === "ce" && (
-            <div>
-            {/* Step indicator */}
-            <div className="flex items-center gap-0 mb-10">
-              {STEPS.map((s, i) => (
-                <div key={s.id} className="flex items-center shrink-0">
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 flex items-center justify-center text-xs font-mono-gmi font-bold shrink-0"
-                      style={{ background: i <= step ? "#DDEA4D" : "#111", color: i <= step ? "#000" : "#999", border: i <= step ? "none" : "1px solid #2a2a2a" }}>
-                      {i < step ? "✓" : i + 1}
+                    />
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.fg, lineHeight: "18px" }}>{r.name}</div>
+                      <div style={{ fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>{r.sub}</div>
                     </div>
-                    <span className="text-xs font-mono-gmi hidden sm:inline whitespace-nowrap"
-                      style={{ color: i === step ? "#fff" : "#999" }}>
-                      {s.label}
-                    </span>
-                  </div>
-                  {i < STEPS.length - 1 && (
-                    <div className="w-8 h-px mx-3 shrink-0" style={{ background: i < step ? "#DDEA4D" : "#2a2a2a" }} />
-                  )}
-                </div>
-              ))}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Compute Tier */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <FieldLabel required>Compute Tier</FieldLabel>
+          {!region ? (
+            <div
+              style={{
+                fontFamily: FONT, fontSize: 13, fontWeight: 400, color: C.muted,
+                background: C.cardSolid,
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+                padding: "12px 14px",
+              }}
+            >
+              Select a region first
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8 }}>
+              {COMPUTE_TIERS.map((t) => {
+                const isActive = computeTier === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => setComputeTier(t.id)}
+                    style={{
+                      background: isActive ? C.selectedYel : C.cardSolid,
+                      border: `1px solid ${isActive ? C.selectedYelB : C.border}`,
+                      borderRadius: 8,
+                      padding: "12px 14px",
+                      textAlign: "left",
+                      display: "flex", flexDirection: "column", gap: 4,
+                      cursor: "pointer",
+                      fontFamily: FONT,
+                    }}
+                  >
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.fg, lineHeight: "18px" }}>{t.name}</div>
+                    <div style={{ fontSize: 11, fontWeight: 400, color: C.muted, lineHeight: "14px" }}>{t.cpu} · {t.ram}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: C.lime, marginTop: 4 }}>${t.pricePerHr.toFixed(4)}/hr</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* PRD F-09 — Lifecycle defaults (template-level; per-task override via SDK at task create) */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <FieldLabel>Lifecycle defaults</FieldLabel>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>Default task lifetime</span>
+              <Select
+                value={maxLifetime}
+                onChange={setMaxLifetime}
+                options={[
+                  { value: "30min", label: "30 min" },
+                  { value: "1h",    label: "1 hour" },
+                  { value: "2h",    label: "2 hours" },
+                  { value: "4h",    label: "4 hours" },
+                  { value: "8h",    label: "8 hours" },
+                  { value: "24h",   label: "24 hours" },
+                  { value: "off",   label: "No limit" },
+                ]}
+              />
+              <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>
+                Hard cap — task auto-stops after this duration.
+              </span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>Idle auto-stop</span>
+              <Select
+                value={idleTimeout}
+                onChange={setIdleTimeout}
+                options={[
+                  { value: "1min",  label: "1 min" },
+                  { value: "5min",  label: "5 min" },
+                  { value: "15min", label: "15 min" },
+                  { value: "30min", label: "30 min" },
+                  { value: "1h",    label: "1 hour" },
+                  { value: "off",   label: "Off" },
+                ]}
+              />
+              <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>
+                Auto-stop after N seconds of inactivity.
+              </span>
+            </div>
+          </div>
+          <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px", marginTop: 2 }}>
+            Callers can override these per-task via the SDK at task create.
+          </span>
+        </div>
+      </div>
+
+      {/* Add GMI Models */}
+      <div
+        style={{
+          background: C.card,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          padding: "16px 20px",
+          display: "flex", flexDirection: "column", gap: 16,
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+          <div>
+            <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: 0 }}>
+              Add GMI Models
+            </h3>
+            <p style={{ fontFamily: FONT, fontSize: 13, fontWeight: 400, lineHeight: "20px", color: C.muted, margin: "4px 0 0" }}>
+              Access 200+ frontier models from inside your container.
+            </p>
+          </div>
+          <Toggle on={addModels} onChange={setAddModels} />
+        </div>
+
+        {addModels && (
+          <>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <FieldLabel>Select Model</FieldLabel>
+              <Select
+                value={selectedModel}
+                onChange={setSelectedModel}
+                placeholder="Select an option"
+                options={MODELS.map((m) => ({ value: m.id, label: m.name }))}
+              />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
+              {MODELS.map((m) => {
+                const isActive = selectedModel === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => setSelectedModel(m.id)}
+                    style={{
+                      background: isActive ? C.selectedYel : C.cardSolid,
+                      border: `1px solid ${isActive ? C.selectedYelB : C.border}`,
+                      borderRadius: 10,
+                      padding: "14px 16px",
+                      textAlign: "left",
+                      display: "flex", flexDirection: "column", gap: 6,
+                      cursor: "pointer",
+                      fontFamily: FONT,
+                    }}
+                  >
+                    <div style={{ fontSize: 14, fontWeight: 600, color: C.fg, lineHeight: "20px" }}>{m.name}</div>
+                    <div
+                      style={{
+                        display: "inline-flex", alignSelf: "flex-start",
+                        fontSize: 11, fontWeight: 600, color: C.fg,
+                        background: "rgba(125,211,252,0.10)",
+                        border: "1px solid rgba(125,211,252,0.35)",
+                        padding: "1px 7px", borderRadius: 999,
+                      }}
+                    >
+                      {m.ctx}
+                    </div>
+                    <div style={{ fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "18px", marginTop: 2 }}>
+                      Input {m.inPrice}
+                    </div>
+                    {m.outPrice && (
+                      <div style={{ fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "18px" }}>
+                        Output {m.outPrice}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+      </div>
+    </div>
+  );
+}
+
+function SourceCard({
+  selected, disabled, title, description, icon, onClick,
+}: {
+  selected: boolean;
+  disabled?: boolean;
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      style={{
+        background: selected ? C.selectedYel : C.cardSolid,
+        border: `1px solid ${selected ? C.selectedYelB : C.border}`,
+        borderRadius: 10,
+        padding: "14px 16px",
+        textAlign: "left",
+        display: "flex", flexDirection: "column", gap: 4,
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.6 : 1,
+        fontFamily: FONT,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span
+          style={{
+            width: 14, height: 14, borderRadius: 999,
+            border: `1.5px solid ${selected ? C.lime : C.border}`,
+            background: selected ? C.lime : "transparent",
+            flexShrink: 0,
+          }}
+        />
+        <span style={{ color: selected ? C.lime : C.muted, display: "inline-flex" }}>{icon}</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: C.fg, lineHeight: "20px" }}>{title}</span>
+      </div>
+      <div style={{ fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px", marginLeft: 30 }}>{description}</div>
+    </button>
+  );
+}
+
+// ─── Step 3: Networking ───────────────────────────────────────────────────
+function StepNetworking({
+  ports, setPorts,
+  webhookEnabled, setWebhookEnabled,
+  webhookPort, setWebhookPort,
+  webhookSecret, setWebhookSecret,
+  projectName,
+  forkedFromTemplate = false,
+}: {
+  ports: PortMap[];
+  setPorts: (v: PortMap[]) => void;
+  webhookEnabled: boolean;
+  setWebhookEnabled: (v: boolean) => void;
+  webhookPort: string;
+  setWebhookPort: (v: string) => void;
+  webhookSecret: string;
+  setWebhookSecret: (v: string) => void;
+  projectName: string;
+  forkedFromTemplate?: boolean;
+}) {
+  const updatePort = (id: string, patch: Partial<PortMap>) => {
+    setPorts(ports.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  };
+  const removePort = (id: string) => setPorts(ports.filter((p) => p.id !== id));
+  const addPort = () => setPorts([...ports, { id: `p${Date.now()}`, protocol: "HTTPS/2", listening: "", internal: "", name: "" }]);
+  const slug = projectName.trim() ? projectName.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") : "your-agent";
+  const webhookUrl = `https://hooks.gmi.cloud/${slug}`;
+
+  const allDefault =
+    ports.length === 1 &&
+    ports[0].protocol === "HTTPS/2" &&
+    ports[0].internal === "8080" &&
+    ports[0].name === "web" &&
+    !ports[0].listening &&
+    !webhookEnabled;
+  const [userExpanded, setUserExpanded] = useState(false);
+  const collapsed = !userExpanded && (allDefault || forkedFromTemplate);
+  const resetToDefaults = () => {
+    setPorts([{ id: "p1", protocol: "HTTPS/2", listening: "", internal: "8080", name: "web" }]);
+    setWebhookEnabled(false);
+    setWebhookPort("8080");
+    setWebhookSecret("");
+    setUserExpanded(false);
+  };
+
+  if (collapsed) {
+    const chipLabels = forkedFromTemplate
+      ? ["Pre-filled from template"]
+      : ["Public IP auto-allocated", "HTTPS/2 :8080 (web)"];
+    return (
+      <div
+        style={{
+          background: C.card,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          padding: "12px 16px",
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+        }}
+      >
+        {chipLabels.map((c) => (
+          <span
+            key={c}
+            style={{
+              fontFamily: FONT, fontSize: 11, fontWeight: 500, lineHeight: "14px",
+              color: C.fg,
+              background: "rgba(255,255,255,0.04)",
+              border: `1px solid ${C.border}`,
+              padding: "1px 8px",
+              borderRadius: 999,
+            }}
+          >
+            {c}
+          </span>
+        ))}
+        <button
+          onClick={() => setUserExpanded(true)}
+          style={{
+            marginLeft: "auto",
+            display: "inline-flex", alignItems: "center", gap: 3,
+            fontFamily: FONT, fontSize: 11, fontWeight: 500,
+            background: "transparent", color: "#7dd3fc",
+            border: "none", padding: 0, cursor: "pointer",
+          }}
+        >
+          Customize <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 5l7 7-7 7" /></svg>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+      <button
+        onClick={allDefault ? () => setUserExpanded(false) : resetToDefaults}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 4,
+          fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
+          background: "transparent",
+          color: allDefault ? C.muted : "#7dd3fc",
+          border: "none", padding: 0, cursor: "pointer",
+        }}
+      >
+        {allDefault ? (
+          <>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m18 15-6-6-6 6" />
+            </svg>
+            Collapse · use GMI defaults
+          </>
+        ) : (
+          <>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" />
+            </svg>
+            Reset to GMI defaults
+          </>
+        )}
+      </button>
+    </div>
+    <div
+      style={{
+        background: C.card,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: "16px 20px",
+        display: "flex", flexDirection: "column", gap: 20,
+      }}
+    >
+      {/* Public IP */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <FieldLabel>Public IP address</FieldLabel>
+        <div
+          style={{
+            display: "flex", alignItems: "center", gap: 8,
+            background: "rgba(40,40,40,0.5)",
+            border: `1px dashed ${C.border}`,
+            borderRadius: 8,
+            padding: "10px 14px",
+            color: C.muted,
+            fontFamily: FONT, fontSize: 13,
+          }}
+        >
+          <IconInfo size={13} />
+          <span>Public IP address will be allocated automatically by the platform.</span>
+        </div>
+      </div>
+
+      {/* Port Mapping */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <FieldLabel>Port Mapping</FieldLabel>
+        <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, marginTop: -4 }}>
+          Change below if your app listens on a different port.
+        </span>
+        <div
+          style={{
+            background: C.cardSolid,
+            border: `1px solid ${C.border}`,
+            borderRadius: 10,
+            overflow: "hidden",
+            marginTop: 8,
+          }}
+        >
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "140px 1fr 1fr 1fr 32px",
+              gap: 12,
+              padding: "10px 16px",
+              fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted, lineHeight: "16px",
+              borderBottom: `1px solid ${C.borderSoft}`,
+              background: "rgba(255,255,255,0.02)",
+            }}
+          >
+            <div>Protocol</div>
+            <div>Listening Port</div>
+            <div>Internal Port</div>
+            <div>Port name</div>
+            <div />
+          </div>
+          {ports.map((p) => (
+            <div
+              key={p.id}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "140px 1fr 1fr 1fr 32px",
+                gap: 12,
+                padding: "10px 16px",
+                alignItems: "center",
+                borderTop: `1px solid ${C.borderSoft}`,
+              }}
+            >
+              <Select
+                value={p.protocol}
+                onChange={(v) => updatePort(p.id, { protocol: v })}
+                options={["HTTPS/2", "HTTPS/1.1", "HTTP", "TCP", "gRPC"].map((x) => ({ value: x, label: x }))}
+              />
+              <TextInput value={p.listening} onChange={(v) => updatePort(p.id, { listening: v })} placeholder="443" />
+              <TextInput value={p.internal}  onChange={(v) => updatePort(p.id, { internal: v })}  placeholder="8080" />
+              <TextInput value={p.name}      onChange={(v) => updatePort(p.id, { name: v })}      placeholder="web" />
+              <button
+                onClick={() => removePort(p.id)}
+                style={{ background: "transparent", border: "none", cursor: "pointer", color: "#ef4444", padding: 4, display: "inline-flex" }}
+                aria-label="Remove port"
+              >
+                <IconX color="#ef4444" />
+              </button>
+            </div>
+          ))}
+          <div style={{ padding: "10px 16px", borderTop: `1px solid ${C.borderSoft}` }}>
+            <button
+              onClick={addPort}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                background: "transparent", color: C.fg,
+                border: `1px solid ${C.border}`,
+                padding: "6px 12px", borderRadius: 8,
+                fontFamily: FONT, fontSize: 13, fontWeight: 500,
+                cursor: "pointer",
+              }}
+            >
+              <IconPlus size={12} /> Add port mapping
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Public webhook receiver — opt-in public HTTPS ingress for 3rd-party webhooks */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <FieldLabel>Public webhook receiver</FieldLabel>
+          <Toggle on={webhookEnabled} onChange={setWebhookEnabled} />
+        </div>
+        <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "18px", color: C.muted, marginTop: -4 }}>
+          Expose a stable public HTTPS URL so third-party services (Stripe, GitHub, Slack, etc.) can POST events to your Agent.
+        </span>
+
+        {webhookEnabled && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 4 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>Webhook URL</span>
+              <div
+                style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  background: C.pillBg,
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 8,
+                  padding: "8px 12px",
+                }}
+              >
+                <code style={{ flex: 1, fontFamily: MONO, fontSize: 13, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {webhookUrl}
+                </code>
+                <CopyInline value={webhookUrl} />
+              </div>
+              <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>
+                Stable across redeploys. GMI proxies POSTs to your container on the port below.
+              </span>
             </div>
 
-            {/* ── STEP 0: Basic Info ──────────────────────────────────── */}
-            {step === 0 && (
-              <div className="space-y-6">
-                <div className="flex items-center gap-2 mb-2">
-                  <Server size={15} style={{ color: "#DDEA4D" }} />
-                  <h2 className="font-display text-lg text-white">Basic Info</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 12 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>Forward to internal port</span>
+                <TextInput value={webhookPort} onChange={setWebhookPort} placeholder="8080" />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>HMAC signing secret · optional</span>
+                  <button
+                    onClick={() => {
+                      const r = () => Math.random().toString(36).slice(2, 12);
+                      setWebhookSecret(`whsec_${r()}${r()}${r()}`);
+                    }}
+                    style={{
+                      fontFamily: FONT, fontSize: 11, fontWeight: 500,
+                      color: "#7dd3fc",
+                      background: "rgba(125,211,252,0.08)",
+                      border: "1px solid rgba(125,211,252,0.30)",
+                      padding: "1px 8px",
+                      borderRadius: 999,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Generate
+                  </button>
                 </div>
-                <TextInput
-                  label="Internal Project Name *"
-                  placeholder="e.g. contract-review-v2"
-                  value={projectName}
-                  onChange={setProjectName}
-                  mono
-                  hint="This is your internal identifier — not shown publicly on the Marketplace."
-                />
-                <div className="flex items-start gap-3 p-4 font-mono-gmi text-xs"
-                  style={{ background: "rgba(221,234,77,0.04)", border: "1px solid rgba(221,234,77,0.15)", color: "#DDEA4D" }}>
-                  <Info size={13} className="shrink-0 mt-0.5" />
-                  <span>
-                    Your Marketplace listing name and description are configured separately after deployment.
-                    This keeps your internal project name private.
-                  </span>
+                <TextInput value={webhookSecret} onChange={setWebhookSecret} placeholder="whsec_…" mono />
+              </div>
+            </div>
+            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>
+              If set, GMI signs each forwarded request with{" "}
+              <code style={{ fontFamily: MONO, color: C.fg, background: "rgba(255,255,255,0.04)", padding: "1px 5px", borderRadius: 3 }}>X-GMI-Signature</code>
+              {" "}so your code can verify authenticity.
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+    </div>
+  );
+}
+
+// ─── Step 4: Env Variables ───────────────────────────────────────────────
+function StepEnvVars({
+  customEnvs, setCustomEnvs,
+  forkedFromTemplate = false,
+}: {
+  customEnvs: CustomEnv[];
+  setCustomEnvs: (v: CustomEnv[]) => void;
+  forkedFromTemplate?: boolean;
+}) {
+  const update = (id: string, patch: Partial<CustomEnv>) =>
+    setCustomEnvs(customEnvs.map((e) => (e.id === id ? { ...e, ...patch } : e)));
+  const remove = (id: string) => setCustomEnvs(customEnvs.filter((e) => e.id !== id));
+  const add = () => setCustomEnvs([...customEnvs, { id: `env${Date.now()}`, key: "", value: "", secret: false }]);
+
+  const allDefault = customEnvs.length === 0;
+  const [userExpanded, setUserExpanded] = useState(false);
+  const collapsed = !userExpanded && (allDefault || forkedFromTemplate);
+  const resetToDefaults = () => { setCustomEnvs([]); setUserExpanded(false); };
+
+  if (collapsed) {
+    const chipList = forkedFromTemplate
+      ? [{ l: "Pre-filled from template", mono: false }]
+      : [
+          { l: "GMI_MAAS_API_KEY",  mono: true },
+          { l: "GMI_MAAS_BASE_URL", mono: true },
+          { l: "No custom vars",    mono: false },
+        ];
+    return (
+      <div
+        style={{
+          background: C.card,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          padding: "12px 16px",
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+        }}
+      >
+        {chipList.map((c) => (
+          <span
+            key={c.l}
+            style={{
+              fontFamily: c.mono ? "'GeistMono', monospace" : FONT,
+              fontSize: 11, fontWeight: 500, lineHeight: "14px",
+              color: C.fg,
+              background: "rgba(255,255,255,0.04)",
+              border: `1px solid ${C.border}`,
+              padding: "1px 8px",
+              borderRadius: 999,
+            }}
+          >
+            {c.l}
+          </span>
+        ))}
+        <button
+          onClick={() => setUserExpanded(true)}
+          style={{
+            marginLeft: "auto",
+            display: "inline-flex", alignItems: "center", gap: 3,
+            fontFamily: FONT, fontSize: 11, fontWeight: 500,
+            background: "transparent", color: "#7dd3fc",
+            border: "none", padding: 0, cursor: "pointer",
+          }}
+        >
+          Customize <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 5l7 7-7 7" /></svg>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+      <button
+        onClick={allDefault ? () => setUserExpanded(false) : resetToDefaults}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 4,
+          fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
+          background: "transparent",
+          color: allDefault ? C.muted : "#7dd3fc",
+          border: "none", padding: 0, cursor: "pointer",
+        }}
+      >
+        {allDefault ? (
+          <>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m18 15-6-6-6 6" />
+            </svg>
+            Collapse · use GMI defaults
+          </>
+        ) : (
+          <>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" />
+            </svg>
+            Reset to GMI defaults
+          </>
+        )}
+      </button>
+    </div>
+    <div
+      style={{
+        background: C.card,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: "16px 20px",
+        display: "flex", flexDirection: "column", gap: 20,
+      }}
+    >
+      {/* Auto-injected */}
+      <section
+        style={{
+          background: C.cardSolid,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            padding: "16px 20px",
+            fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg,
+            borderBottom: `1px solid ${C.borderSoft}`,
+          }}
+        >
+          Auto-Injected by GMI
+        </div>
+        <div
+          style={{
+            display: "grid", gridTemplateColumns: "1.2fr 1.4fr 90px",
+            gap: 12, padding: "10px 16px",
+            fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted, lineHeight: "16px",
+            borderBottom: `1px solid ${C.borderSoft}`,
+            background: "rgba(255,255,255,0.02)",
+          }}
+        >
+          <div>Key</div><div>Value</div><div style={{ textAlign: "right" }}>Type</div>
+        </div>
+        {[
+          { key: "GMI_MAAS_API_KEY",  value: "Auto-generated on deploy" },
+          { key: "GMI_MAAS_BASE_URL", value: "https://api.gmi-serving.com" },
+        ].map((row, i) => (
+          <div
+            key={row.key}
+            style={{
+              display: "grid", gridTemplateColumns: "1.2fr 1.4fr 90px",
+              gap: 12, padding: "12px 16px",
+              borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`,
+              alignItems: "center",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 500, color: C.fg }}>{row.key}</span>
+              <span style={{ color: C.muted }}><IconLock size={12} /></span>
+            </div>
+            <div style={{ fontFamily: row.value.startsWith("http") ? MONO : FONT, fontSize: 13, color: C.fg }}>{row.value}</div>
+            <div style={{ textAlign: "right" }}>
+              <span
+                style={{
+                  fontSize: 11, fontWeight: 600, lineHeight: "16px",
+                  color: C.fg,
+                  background: "rgba(255,255,255,0.06)",
+                  border: `1px solid ${C.border}`,
+                  padding: "1px 7px", borderRadius: 4,
+                  letterSpacing: "0.04em",
+                }}
+              >
+                AUTO
+              </span>
+            </div>
+          </div>
+        ))}
+        <div style={{ padding: "10px 16px", borderTop: `1px solid ${C.borderSoft}`, fontFamily: FONT, fontSize: 12, color: C.muted }}>
+          Locked. These are managed by GMI and cannot be overridden.
+        </div>
+      </section>
+
+      {/* Custom Variables */}
+      <section
+        style={{
+          background: C.cardSolid,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          padding: "16px",
+          display: "flex", flexDirection: "column", gap: 12,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Custom Variables</div>
+          <button
+            onClick={add}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              background: C.lime, color: C.limeText,
+              border: "none",
+              padding: "6px 12px", borderRadius: 8,
+              fontFamily: FONT, fontSize: 13, fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            <IconPlus size={12} /> Add variable
+          </button>
+        </div>
+
+        {customEnvs.length === 0 ? (
+          <div style={{ fontFamily: FONT, fontSize: 13, color: C.muted, padding: "8px 0" }}>
+            No custom variables yet.
+          </div>
+        ) : (
+          customEnvs.map((env) => (
+            <div
+              key={env.id}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1.4fr 110px 32px",
+                gap: 8,
+                alignItems: "center",
+              }}
+            >
+              <TextInput value={env.key}   onChange={(v) => update(env.id, { key: v })}   placeholder="MY_API_KEY" mono />
+              <TextInput value={env.value} onChange={(v) => update(env.id, { value: v })} placeholder={env.secret ? "••••••••" : "value"} mono />
+              <button
+                onClick={() => update(env.id, { secret: !env.secret })}
+                style={{
+                  fontFamily: FONT, fontSize: 12, fontWeight: 500,
+                  background: env.secret ? "rgba(199,167,255,0.12)" : "transparent",
+                  color: env.secret ? "#c7a7ff" : C.muted,
+                  border: `1px solid ${env.secret ? "rgba(199,167,255,0.35)" : C.border}`,
+                  padding: "6px 10px", borderRadius: 999,
+                  cursor: "pointer",
+                }}
+              >
+                {env.secret ? "Secret" : "Plain"}
+              </button>
+              <button
+                onClick={() => remove(env.id)}
+                style={{ background: "transparent", border: "none", cursor: "pointer", color: "#ef4444", padding: 4, display: "inline-flex" }}
+              >
+                <IconX color="#ef4444" />
+              </button>
+            </div>
+          ))
+        )}
+      </section>
+
+      <div
+        style={{
+          background: C.cardSolid,
+          border: `1px solid ${C.borderSoft}`,
+          borderRadius: 8,
+          padding: "10px 14px",
+          fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted,
+          display: "flex", gap: 8, alignItems: "flex-start",
+        }}
+      >
+        <span style={{ color: C.muted, marginTop: 2 }}><IconInfo size={12} /></span>
+        <span>Reminder — Secrets are encrypted at rest with AES-256. Plaintext values are never written to logs or audit history.</span>
+      </div>
+    </div>
+    </div>
+  );
+}
+
+// ─── Connect-your-agent flow: MaaS Key step ──────────────────────────────
+function StepMaasKey({
+  maasKey, setMaasKey,
+}: {
+  maasKey: string;
+  setMaasKey: (v: string) => void;
+}) {
+  return (
+    <div
+      style={{
+        background: C.card,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: "16px 20px",
+        display: "flex", flexDirection: "column", gap: 18,
+      }}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <FieldLabel>
+            MaaS API Key
+            <span style={{ color: C.muted, fontWeight: 400, marginLeft: 6 }}>· optional</span>
+          </FieldLabel>
+          <button
+            onClick={() => setMaasKey(genMaasKey())}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              fontFamily: FONT, fontSize: 12, fontWeight: 500,
+              color: "#7dd3fc",
+              background: "rgba(125,211,252,0.08)",
+              border: "1px solid rgba(125,211,252,0.30)",
+              padding: "2px 10px",
+              borderRadius: 999,
+              cursor: "pointer",
+            }}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16" />
+            </svg>
+            Generate one
+          </button>
+        </div>
+        <TextInput value={maasKey} onChange={setMaasKey} placeholder="Paste an existing key, or click Generate" mono />
+        <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "18px", color: C.muted, margin: "2px 0 0" }}>
+          Leave blank and we auto-issue one at deploy. Your code must read{" "}
+          <code style={{ fontFamily: MONO, fontSize: 11, color: C.fg, background: "rgba(255,255,255,0.04)", padding: "1px 5px", borderRadius: 3 }}>GMI_MAAS_API_KEY</code>
+          {" "}at runtime — self-hosted Agents get the{" "}
+          <span style={{ fontFamily: FONT, fontSize: 10, fontWeight: 600, color: C.fg, background: "rgba(255,255,255,0.06)", border: `1px solid ${C.border}`, padding: "1px 6px", borderRadius: 3, letterSpacing: "0.04em" }}>POWERED BY GMI MODELS</span>
+          {" "}badge.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Connect-your-agent flow: Endpoint step ──────────────────────────────
+function StepEndpoint({
+  accessUrl, setAccessUrl,
+}: {
+  accessUrl: string;
+  setAccessUrl: (v: string) => void;
+}) {
+  return (
+    <div
+      style={{
+        background: C.card,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: "16px 20px",
+        display: "flex", flexDirection: "column", gap: 18,
+      }}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <FieldLabel required>Access URL</FieldLabel>
+        <TextInput value={accessUrl} onChange={setAccessUrl} placeholder="https://your-agent.yourdomain.com" mono />
+        <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "18px", color: C.muted, margin: "2px 0 0" }}>
+          Public HTTPS URL (GMI checks HTTP 200 before listing).
+          <span style={{ color: C.warn }}> ⚠</span>{" "}
+          <span style={{ color: C.fg, fontWeight: 600 }}>You own uptime</span> — if it goes down, the listing is hidden. No SLA on self-hosted Agents.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Connect-your-agent flow: Review & Submit step ───────────────────────
+function StepConnectReview({
+  projectName, maasKey, accessUrl,
+}: {
+  projectName: string;
+  maasKey: string;
+  accessUrl: string;
+}) {
+  const rows = [
+    { label: "Project Name", value: projectName || "—" },
+    { label: "Deployment Type", value: "Self-hosted + GMI MaaS" },
+    { label: "MaaS API Key", value: maasKey ? `${maasKey.slice(0, 6)}…${maasKey.slice(-4)}` : "Auto-issued at deploy time" },
+    { label: "Access URL", value: accessUrl || "—" },
+    { label: "Badge", value: "POWERED BY GMI MODELS", badge: true as const },
+  ];
+
+  return (
+    <div
+      style={{
+        background: C.card,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: "16px 20px",
+        display: "flex", flexDirection: "column", gap: 16,
+      }}
+    >
+      <section
+        style={{
+          background: C.cardSolid,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            padding: "16px 20px",
+            fontFamily: FONT, fontSize: 12, fontWeight: 600,
+            color: C.muted, letterSpacing: "0.08em", textTransform: "uppercase",
+            borderBottom: `1px solid ${C.borderSoft}`,
+          }}
+        >
+          Configuration Summary
+        </div>
+        {rows.map((row, i) => (
+          <div
+            key={row.label}
+            style={{
+              display: "grid", gridTemplateColumns: "200px 1fr",
+              padding: "16px 20px",
+              borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`,
+              alignItems: "center",
+            }}
+          >
+            <div style={{ fontFamily: FONT, fontSize: 13, fontWeight: 400, color: C.muted }}>{row.label}</div>
+            <div>
+              {row.badge ? (
+                <span
+                  style={{
+                    fontFamily: FONT, fontSize: 11, fontWeight: 600,
+                    color: C.fg,
+                    background: "rgba(255,255,255,0.06)",
+                    border: `1px solid ${C.border}`,
+                    padding: "2px 8px",
+                    borderRadius: 4,
+                    letterSpacing: "0.04em",
+                  }}
+                >
+                  {row.value}
+                </span>
+              ) : (
+                <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>{row.value}</span>
+              )}
+            </div>
+          </div>
+        ))}
+      </section>
+
+      <div
+        style={{
+          background: "rgba(125,211,252,0.06)",
+          border: `1px solid rgba(125,211,252,0.30)`,
+          borderRadius: 10,
+          padding: "16px 20px",
+          fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "18px",
+          display: "flex", gap: 8, alignItems: "flex-start",
+        }}
+      >
+        <span style={{ color: "#7dd3fc", marginTop: 2 }}><IconInfo size={13} /></span>
+        <span>
+          <span style={{ color: C.fg, fontWeight: 600 }}>Auto-approval on submit</span>
+          {" "}— GMI probes your Access URL and, if a MaaS key was provided, re-runs the key check. If all checks pass, your listing goes live immediately.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Post-submit Success view (Connect-your-agent flow) ──────────────────
+function SuccessView({
+  projectName, accessUrl, maasKey, onViewAgents, onListOnAgentbox,
+}: {
+  projectName: string;
+  accessUrl: string;
+  maasKey: string;
+  onViewAgents: () => void;
+  onListOnAgentbox: () => void;
+}) {
+  const displayedKey = maasKey || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ImRhMDc2ZTY3LWY1N2YtNDYyNS05ZDJiLTcwODRhMjY4Y2Y5MiIsInNjb3BlIjoiaW5mZXJlbmNlIn0.demo-auto-issued";
+  const curl = [
+    "# 1. Verify your GMI MaaS API key",
+    "# Run in your terminal — same check GMI ran during registration",
+    "curl https://api.gmi-serving.com/v1/models \\",
+    "  -H \"Authorization: Bearer $GMI_MAAS_API_KEY\"",
+  ].join("\n");
+
+  return (
+    <section style={{ padding: "32px 32px 48px", display: "flex", flexDirection: "column", gap: 18 }}>
+      {/* Status pill */}
+      <span
+        style={{
+          alignSelf: "flex-start",
+          display: "inline-flex", alignItems: "center", gap: 6,
+          fontFamily: FONT, fontSize: 12, fontWeight: 600, lineHeight: "16px",
+          color: "#86efac",
+          background: "rgba(134,239,172,0.10)",
+          border: "1px solid rgba(134,239,172,0.35)",
+          padding: "3px 10px",
+          borderRadius: 999,
+        }}
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+        Registration Successful
+      </span>
+
+      <div>
+        <h1 style={{ fontFamily: FONT, fontSize: 28, fontWeight: 700, lineHeight: "36px", color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>
+          Your Agent {projectName ? `"${projectName}" ` : ""}is registered. Call GMI MaaS from your code anytime.
+        </h1>
+        <p style={{ fontFamily: FONT, fontSize: 14, fontWeight: 400, lineHeight: "20px", color: C.muted, margin: "8px 0 0", maxWidth: 880 }}>
+          Auto-approved — your MaaS key is active (Inference-scoped) and your external endpoint is reachable. Not yet listed on the Agentbox; only your account is linked to this Agent until you publish.
+        </p>
+      </div>
+
+      {/* Deployment Type / Badge cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div
+          style={{
+            background: C.card,
+            border: `1px solid ${C.border}`,
+            borderRadius: 10,
+            padding: "14px 18px",
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+          }}
+        >
+          <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>Deployment Type</span>
+          <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Self-hosted + GMI MaaS</span>
+        </div>
+        <div
+          style={{
+            background: C.card,
+            border: `1px solid ${C.border}`,
+            borderRadius: 10,
+            padding: "14px 18px",
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+          }}
+        >
+          <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>Badge</span>
+          <span
+            style={{
+              fontFamily: FONT, fontSize: 11, fontWeight: 600,
+              color: C.fg,
+              background: "rgba(255,255,255,0.06)",
+              border: `1px solid ${C.border}`,
+              padding: "2px 8px",
+              borderRadius: 4,
+              letterSpacing: "0.04em",
+            }}
+          >
+            POWERED BY GMI MODELS
+          </span>
+        </div>
+      </div>
+
+      {/* External Endpoint URL */}
+      <div
+        style={{
+          background: C.card,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          padding: "14px 18px",
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+        }}
+      >
+        <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>External Endpoint URL</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span style={{ fontFamily: MONO, fontSize: 13, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {accessUrl || "https://your-agent.yourdomain.com"}
+          </span>
+          <CopyInline value={accessUrl || "https://your-agent.yourdomain.com"} />
+        </div>
+      </div>
+
+      {/* Verify your key — curl snippet */}
+      <div
+        style={{
+          background: C.card,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "16px 20px",
+            borderBottom: `1px solid ${C.border}`,
+          }}
+        >
+          <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Verify your registered key in 5 seconds</span>
+          <CopyInline value={curl} />
+        </div>
+        <pre
+          style={{
+            margin: 0, padding: "14px 16px",
+            fontFamily: MONO, fontSize: 13, lineHeight: "22px",
+            color: C.fg,
+            whiteSpace: "pre",
+            overflowX: "auto",
+          }}
+        >
+          {curl.split("\n").map((line, i) => (
+            <div key={i} style={{ color: line.startsWith("#") ? C.muted : C.fg }}>
+              <span style={{ color: C.muted, marginRight: 12, userSelect: "none" }}>{String(i + 1).padStart(2, " ")}</span>
+              {line}
+            </div>
+          ))}
+        </pre>
+      </div>
+
+      {/* Key display */}
+      <div
+        style={{
+          background: C.card,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "10px 16px",
+            borderBottom: `1px solid ${C.border}`,
+          }}
+        >
+          <code style={{ fontFamily: MONO, fontSize: 12, fontWeight: 500, color: C.muted, letterSpacing: "0.04em" }}>GMI_MAAS_API_KEY</code>
+          <CopyInline value={displayedKey} />
+        </div>
+        <pre
+          style={{
+            margin: 0, padding: "12px 16px",
+            fontFamily: MONO, fontSize: 12, lineHeight: "18px",
+            color: C.fg,
+            whiteSpace: "nowrap",
+            overflowX: "auto",
+          }}
+        >
+          <span style={{ color: C.muted, marginRight: 12, userSelect: "none" }}>1</span>
+          {displayedKey}
+        </pre>
+      </div>
+
+      <div style={{ fontFamily: FONT, fontSize: 13, lineHeight: "20px", color: C.muted }}>
+        Browse available models in{" "}
+        <a href="#" style={{ color: "#7dd3fc", textDecoration: "none" }}>Models Hub →</a>{" "}
+        · SDK examples and integration patterns in{" "}
+        <a href="#" style={{ color: "#7dd3fc", textDecoration: "none" }}>Docs →</a>{" "}
+        · Manage keys in{" "}
+        <a href="#" style={{ color: "#7dd3fc", textDecoration: "none" }}>Console → API Keys →</a>
+      </div>
+
+      <div
+        style={{
+          fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "18px", color: C.muted,
+          background: C.cardSolid,
+          border: `1px solid ${C.borderSoft}`,
+          borderRadius: 8,
+          padding: "10px 14px",
+        }}
+      >
+        <span style={{ color: C.fg, fontWeight: 600 }}>Reminder:</span>{" "}
+        GMI does not host your Agent. Keep{" "}
+        <span style={{ fontFamily: MONO, color: C.fg }}>{accessUrl || "your access URL"}</span>{" "}
+        reachable at all times — if it goes down, moves, or changes auth, users will receive errors when calling your Agent.
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+        <button
+          onClick={onViewAgents}
+          style={{
+            fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
+            background: "transparent", color: C.fg,
+            border: `1px solid ${C.border}`,
+            padding: "8px 18px", borderRadius: 8, cursor: "pointer",
+          }}
+        >
+          View My Agents
+        </button>
+        <button
+          onClick={onListOnAgentbox}
+          style={{
+            fontFamily: FONT, fontSize: 14, fontWeight: 600, lineHeight: "20px",
+            background: C.lime, color: C.limeText,
+            border: "none",
+            padding: "8px 18px", borderRadius: 8, cursor: "pointer",
+          }}
+        >
+          List on Agentbox
+        </button>
+      </div>
+    </section>
+  );
+}
+
+// Lightweight inline copy button (no state in component tree)
+function CopyInline({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => { navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 4,
+        background: "transparent", border: "none",
+        color: copied ? C.lime : C.muted,
+        fontFamily: FONT, fontSize: 12, fontWeight: 500,
+        cursor: "pointer", padding: 2,
+      }}
+    >
+      {copied ? (
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+      ) : (
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+// ─── Step 5: Review & Register ────────────────────────────────────────────
+function StepReview({
+  summary,
+}: {
+  summary: { label: string; value: string; highlight?: boolean }[];
+  computeRate: number;
+  modelInfo: ModelSpec | null;
+}) {
+  return (
+    <div
+      style={{
+        background: C.cardSolid,
+        border: `1px solid ${C.border}`,
+        borderRadius: 8,
+        overflow: "hidden",
+      }}
+    >
+      {summary.map((row, i) => (
+        <div
+          key={row.label}
+          style={{
+            display: "grid", gridTemplateColumns: "160px 1fr",
+            padding: "8px 16px",
+            borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`,
+            background: row.highlight ? "rgba(99,105,35,0.18)" : "transparent",
+            alignItems: "center",
+          }}
+        >
+          <div style={{ fontFamily: FONT, fontSize: 11, fontWeight: 400, color: C.muted }}>{row.label}</div>
+          <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Footer (Cancel/Back + Continue) ──────────────────────────────────────
+function FooterButtons({
+  leftLabel, onLeft, rightLabel, onRight, rightDisabled,
+}: {
+  leftLabel: string;
+  onLeft: () => void;
+  rightLabel: string;
+  onRight: () => void;
+  rightDisabled?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
+        paddingTop: 16, marginTop: 8, borderTop: `1px solid ${C.borderSoft}`,
+      }}
+    >
+      <button
+        onClick={onLeft}
+        style={{
+          fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
+          background: "transparent", color: C.fg,
+          border: `1px solid ${C.border}`,
+          padding: "8px 18px", borderRadius: 8, cursor: "pointer",
+        }}
+      >
+        {leftLabel}
+      </button>
+      <button
+        onClick={onRight}
+        disabled={rightDisabled}
+        style={{
+          fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
+          background: rightDisabled ? "#3a3a1f" : C.lime,
+          color: rightDisabled ? "#666" : C.limeText,
+          border: "none",
+          padding: "8px 18px", borderRadius: 8,
+          cursor: rightDisabled ? "not-allowed" : "pointer",
+        }}
+      >
+        {rightLabel}
+      </button>
+    </div>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────
+export default function DeployWizard() {
+  const [, setLocation] = useLocation();
+  const [hostMode, setHostMode] = useState<HostMode>("gmi");
+
+  // Step 1
+  const [projectName, setProjectName] = useState("");
+
+  // Step 2 — PRD F-06: starter image + region/tier defaulted
+  const [dockerSource, setDockerSource] = useState<"registry" | "upload">("registry");
+  const [dockerImage, setDockerImage] = useState("gmi/starter-agent:latest");
+  const [enableCreds, setEnableCreds] = useState(false);
+  const [region, setRegion] = useState("us-ia-iowa-1");
+  const [computeTier, setComputeTier] = useState("container");
+  const [addModels, setAddModels] = useState(true);
+  const [selectedModel, setSelectedModel] = useState("");
+
+  // Step 2 — PRD F-09: lifecycle TTL (template default; per-task override via SDK)
+  const [maxLifetime, setMaxLifetime] = useState("1h");
+  const [idleTimeout, setIdleTimeout] = useState("5min");
+
+  // Step 3
+  const [ports, setPorts] = useState<PortMap[]>(DEFAULT_PORTS);
+  // Webhook receiver — opt-in public HTTPS ingress for 3rd-party webhooks
+  const [webhookEnabled, setWebhookEnabled] = useState(false);
+  const [webhookPort, setWebhookPort] = useState("8080");
+  const [webhookSecret, setWebhookSecret] = useState("");
+
+  // Step 4
+  const [customEnvs, setCustomEnvs] = useState<CustomEnv[]>([]);
+
+  // Connect-your-agent flow (hostMode = "connect") — its own 4-section set
+  const [maasKey, setMaasKey] = useState("");
+  const [accessUrl, setAccessUrl] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+
+  // ?use=<id> — Use-this-agent fork. Wizard is pre-filled from a marketplace
+  // template; user lands on a collapsed view and expands to customize.
+  const [forkedFrom, setForkedFrom] = useState<string | null>(null);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const useId = params.get("use");
+    if (!useId) return;
+    const found = lookupTemplate(useId);
+    if (!found) return;
+    setHostMode("gmi");
+    setForkedFrom(found.name);
+    setProjectName(`${useId}-copy`);
+    setDockerSource("registry");
+    setDockerImage(found.template.image);
+    setRegion(found.template.region);
+    setComputeTier(found.template.tier);
+    setPorts(found.template.ports);
+    setCustomEnvs(found.template.envDeclarations);
+    setSelectedModel(found.template.model);
+  }, []);
+
+  const tierInfo = useMemo(() => COMPUTE_TIERS.find((t) => t.id === computeTier) || null, [computeTier]);
+  const modelInfo = useMemo(() => MODELS.find((m) => m.id === selectedModel) || null, [selectedModel]);
+  const regionInfo = useMemo(() => REGIONS.find((r) => r.id === region) || null, [region]);
+
+  const computeRate = tierInfo?.pricePerHr ?? 0;
+
+  const summary = useMemo(() => [
+    { label: "Project Name", value: projectName || "—" },
+    { label: "Docker Image", value: dockerImage || "—" },
+    { label: "Registry Credentials", value: enableCreds ? "Configured" : "Public image", highlight: !enableCreds },
+    { label: "Compute Tier",   value: tierInfo ? `${tierInfo.name} — ${tierInfo.cpu} · ${tierInfo.ram}` : "—" },
+    { label: "Region",         value: regionInfo ? `${regionInfo.name} · ${regionInfo.sub}` : "—" },
+    { label: "Lifetime",       value: `max ${maxLifetime} · idle ${idleTimeout}` },
+    { label: "Port Mappings",  value: ports.length > 0
+        ? ports.map((p) => `${p.protocol} ${p.internal || "?"} (${p.name || "port"})`).join(", ")
+        : "—" },
+    { label: "Webhook receiver",
+        value: webhookEnabled
+          ? `Public · forwards to :${webhookPort}${webhookSecret ? " · signed" : ""}`
+          : "Off" },
+    { label: "MaaS",           value: modelInfo ? modelInfo.name : "—" },
+    { label: "Custom Env Vars", value: customEnvs.length > 0 ? `${customEnvs.length} configured` : "—" },
+  ], [projectName, dockerImage, enableCreds, tierInfo, regionInfo, maxLifetime, idleTimeout, ports, webhookEnabled, webhookPort, webhookSecret, modelInfo, customEnvs]);
+
+  // "Pre-configured" subtitle in the section header — flips off the moment user customizes.
+  const step2AllDefault =
+    dockerSource === "registry" &&
+    dockerImage === "gmi/starter-agent:latest" &&
+    !enableCreds &&
+    region === "us-ia-iowa-1" &&
+    computeTier === "container" &&
+    maxLifetime === "1h" &&
+    idleTimeout === "5min" &&
+    addModels && selectedModel === "";
+
+  const step3AllDefault =
+    ports.length === 1 &&
+    ports[0].protocol === "HTTPS/2" &&
+    ports[0].internal === "8080" &&
+    ports[0].name === "web" &&
+    !ports[0].listening &&
+    !webhookEnabled;
+
+  const step4AllDefault = customEnvs.length === 0;
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.fg, fontFamily: FONT }}>
+      <Topbar />
+      <Navbar />
+
+      <div style={{ marginLeft: 210, paddingTop: 40 }}>
+
+        {/* Page header + host mode chooser — one tight row */}
+        <header style={{ padding: "14px 24px 6px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+          <div>
+            <h1
+              style={{
+                fontFamily: FONT, fontSize: 20, fontWeight: 700, lineHeight: "26px",
+                color: C.fg, margin: 0, letterSpacing: "-0.02em",
+              }}
+            >
+              Register an Agent
+            </h1>
+            <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, margin: "2px 0 0" }}>
+              Configure infrastructure and register your Agent. List on the Agentbox after testing.
+            </p>
+          </div>
+          {/* Host mode — compact segmented switch */}
+          <div
+            style={{
+              display: "inline-flex",
+              background: C.pillBg,
+              border: `1px solid ${C.border}`,
+              borderRadius: 999,
+              padding: 3,
+            }}
+          >
+            <button
+              onClick={() => setHostMode("gmi")}
+              style={{
+                fontFamily: FONT, fontSize: 13, fontWeight: 500, lineHeight: "18px",
+                background: hostMode === "gmi" ? "rgba(221,234,77,0.18)" : "transparent",
+                color: hostMode === "gmi" ? C.lime : C.muted,
+                border: "none",
+                padding: "4px 12px",
+                borderRadius: 999,
+                cursor: "pointer",
+                display: "inline-flex", alignItems: "center", gap: 6,
+              }}
+            >
+              <IconGlobe size={12} /> Host on GMI
+              {hostMode === "gmi" && (
+                <span style={{ fontSize: 10, fontWeight: 600, opacity: 0.7, marginLeft: 2 }}>DEFAULT</span>
+              )}
+            </button>
+            <button
+              onClick={() => setHostMode("connect")}
+              style={{
+                fontFamily: FONT, fontSize: 13, fontWeight: 500, lineHeight: "18px",
+                background: hostMode === "connect" ? "rgba(221,234,77,0.18)" : "transparent",
+                color: hostMode === "connect" ? C.lime : C.muted,
+                border: "none",
+                padding: "4px 12px",
+                borderRadius: 999,
+                cursor: "pointer",
+                display: "inline-flex", alignItems: "center", gap: 6,
+              }}
+            >
+              <IconUpload size={12} /> Connect your agent
+            </button>
+          </div>
+        </header>
+
+        {/* Pre-filled banner — visible when wizard was forked from a catalog template */}
+        {forkedFrom && (
+          <div
+            style={{
+              margin: "8px 24px 0",
+              padding: "10px 14px",
+              background: "rgba(125,211,252,0.06)",
+              border: "1px solid rgba(125,211,252,0.30)",
+              borderRadius: 8,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+              <span style={{ display: "inline-flex", color: "#7dd3fc" }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M8 17.929H6c-1.105 0-2-.912-2-2.036V5.036C4 3.91 4.895 3 6 3h8c1.105 0 2 .911 2 2.036v1.866m-6 .17h8c1.105 0 2 .91 2 2.035v10.857C20 21.09 19.105 22 18 22h-8c-1.105 0-2-.911-2-2.036V9.107c0-1.124.895-2.036 2-2.036z"/>
+                </svg>
+              </span>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg, lineHeight: "18px" }}>
+                  Pre-filled from <span style={{ color: "#7dd3fc" }}>{forkedFrom}</span>
+                </div>
+                <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "16px", marginTop: 1 }}>
+                  Image, env declarations, ports and defaults come from the template. Expand any section below to customize.
                 </div>
               </div>
-            )}
+            </div>
+            <button
+              onClick={() => setLocation("/marketplace")}
+              style={{
+                fontFamily: FONT, fontSize: 12, fontWeight: 500,
+                background: "transparent", color: C.muted,
+                border: `1px solid ${C.border}`,
+                padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
 
-            {/* ── STEP 1: Infrastructure ──────────────────────────────── */}
-            {step === 1 && (
-              <div className="space-y-8">
-                <div className="flex items-center gap-2 mb-2">
-                  <Cpu size={15} style={{ color: "#DDEA4D" }} />
-                  <h2 className="font-display text-lg text-white">Infrastructure</h2>
-                </div>
-                <p className="text-xs font-mono-gmi -mt-4" style={{ color: "#aaa" }}>
-                  Configure compute resources for your Claw. GMI CE will provision containers on demand.
-                </p>
-
-                {/* 2A: Compute — always shown, no toggle */}
-                <div className="space-y-5">
-                  {/* Docker image — kept here */}
-                    <div className="space-y-5">
-
-                      {/* Docker image */}
-                      <div>
-                        <FieldLabel>Docker Image Source</FieldLabel>
-                        <div className="grid grid-cols-2 gap-2 mb-3">
-                          {[
-                            { id: "registry" as const, icon: Github, label: "Registry URL" },
-                            { id: "upload" as const, icon: Upload, label: "Upload Image" },
-                          ].map((opt) => (
-                            <RadioCard key={opt.id} selected={dockerSource === opt.id} onClick={() => setDockerSource(opt.id)}>
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <opt.icon size={13} style={{ color: dockerSource === opt.id ? "#DDEA4D" : "#999" }} />
-                                  <span className="font-mono-gmi text-xs font-bold" style={{ color: dockerSource === opt.id ? "#DDEA4D" : "#888" }}>
-                                    {opt.label}
-                                  </span>
-                                </div>
-                                <RadioDot selected={dockerSource === opt.id} />
-                              </div>
-                            </RadioCard>
-                          ))}
-                        </div>
-                        {dockerSource === "registry" ? (
-                          <TextInput
-                            label="Registry URL"
-                            placeholder="registry.hub.docker.com/your-org/your-claw:latest"
-                            value={dockerUrl}
-                            onChange={setDockerUrl}
-                            mono
-                          />
-                        ) : (
-                          <div className="p-6 text-center font-mono-gmi text-xs text-gray-400 cursor-pointer transition-all"
-                            style={{ border: "1px dashed #2a2a2a" }}
-                            onClick={() => toast.info("File upload coming soon — use Registry URL for now.")}>
-                            <Upload size={18} className="mx-auto mb-2" style={{ color: "#888" }} />
-                            Click to upload Docker image (.tar.gz)
-                            <br /><span style={{ color: "#999" }}>Max 2 GB</span>
+        {/* Wizard area — branches on hostMode (GMI / Connect) and submitted (Success view) */}
+        {submitted && hostMode === "connect" ? (
+          <SuccessView
+            projectName={projectName}
+            accessUrl={accessUrl}
+            maasKey={maasKey}
+            onViewAgents={() => setLocation("/dashboard")}
+            onListOnAgentbox={() => setLocation("/marketplace")}
+          />
+        ) : (
+          <section
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(0, 1fr) 260px",
+              gap: 16,
+              padding: "8px 24px 16px",
+              alignItems: "start",
+            }}
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
+              {hostMode === "gmi" ? (
+                STEPS.map((s) => {
+                  const forkedSubtitle = "Pre-filled — expand to customize";
+                  const subtitle =
+                    s.id === 2 ? (forkedFrom ? forkedSubtitle : step2AllDefault ? "Pre-configured with GMI defaults" : null) :
+                    s.id === 3 ? (forkedFrom ? forkedSubtitle : step3AllDefault ? "Pre-configured with GMI defaults" : null) :
+                    s.id === 4 ? (forkedFrom ? forkedSubtitle : step4AllDefault ? "Pre-configured with GMI defaults" : null) : null;
+                  return (
+                    <div key={s.id} id={`step-${s.id}`}>
+                      <SectionHeader number={s.id} title={s.title} subtitle={subtitle} />
+                      <div style={{ marginTop: 12 }}>
+                        {s.id === 1 && (
+                          <div style={{
+                            background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
+                            padding: "16px 20px",
+                          }}>
+                            <StepBasics
+                              projectName={projectName} setProjectName={setProjectName}
+                            />
                           </div>
                         )}
-                      </div>
-
-                      {/* Compute tier — CPU-based */}
-                      <div>
-                        <FieldLabel>Compute Tier</FieldLabel>
-                        <div className="space-y-2">
-                          {COMPUTE_TIERS.map((t) => (
-                            <RadioCard key={t.id} selected={computeTier === t.id} onClick={() => setComputeTier(t.id)}>
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-3">
-                                  <span className="font-mono-gmi text-sm font-bold" style={{ color: computeTier === t.id ? "#DDEA4D" : "#ddd" }}>
-                                    {t.label}
-                                  </span>
-                                  {t.recommended && (
-                                    <span className="text-xs font-mono-gmi px-2 py-0.5" style={{ background: "rgba(221,234,77,0.15)", color: "#DDEA4D" }}>
-                                      Recommended
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="flex items-center gap-3">
-                                  <span className="font-mono-gmi text-sm font-bold" style={{ color: computeTier === t.id ? "#DDEA4D" : "#aaa" }}>
-                                    ${t.priceHr.toFixed(2)}/hr
-                                  </span>
-                                  <RadioDot selected={computeTier === t.id} />
-                                </div>
-                              </div>
-                              <div className="grid grid-cols-3 gap-3 font-mono-gmi text-xs" style={{ color: "#bbb" }}>
-                                <span><span style={{ color: "#888" }}>CPU </span>{t.cpu}</span>
-                                <span><span style={{ color: "#888" }}>RAM </span>{t.ram}</span>
-                                <span><span style={{ color: "#888" }}>NET </span>{t.net}</span>
-                              </div>
-                              <p className="font-mono-gmi text-xs mt-1.5" style={{ color: "#888" }}>{t.note}</p>
-                            </RadioCard>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* IDC Region */}
-                      <div>
-                        <FieldLabel>Data Center Region</FieldLabel>
-                        <div className="grid grid-cols-2 gap-2">
-                          {IDC_REGIONS.map((r) => (
-                            <RadioCard key={r.id} selected={idcRegion === r.id} onClick={() => setIdcRegion(r.id)}>
-                              <div className="flex items-center justify-between">
-                                <span className="font-mono-gmi text-sm" style={{ color: idcRegion === r.id ? "#DDEA4D" : "#ddd" }}>
-                                  {r.flag} {r.label}
-                                </span>
-                                <RadioDot selected={idcRegion === r.id} />
-                              </div>
-                            </RadioCard>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Scaling */}
-                      <div>
-                        <FieldLabel>Scaling</FieldLabel>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="block font-mono-gmi text-xs mb-1.5" style={{ color: "#aaa" }}>
-                              Min Instances <span style={{ color: "#888" }}>— 0 = serverless (cold start)</span>
-                            </label>
-                            <input type="number" min="0" value={minContainers}
-                              onChange={(e) => setMinContainers(e.target.value)}
-                              className="w-full px-4 py-3 text-sm text-white bg-transparent outline-none font-mono-gmi"
-                              style={{ border: "1px solid #2a2a2a" }}
-                              onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-                              onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")} />
-                          </div>
-                          <div>
-                            <label className="block font-mono-gmi text-xs mb-1.5" style={{ color: "#aaa" }}>Max Instances</label>
-                            <input type="number" min={minContainers} value={maxContainers}
-                              onChange={(e) => setMaxContainers(e.target.value)}
-                              className="w-full px-4 py-3 text-sm text-white bg-transparent outline-none font-mono-gmi"
-                              style={{ border: "1px solid #2a2a2a" }}
-                              onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-                              onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")} />
-                          </div>
-                        </div>
-                        <p className="font-mono-gmi text-xs mt-2" style={{ color: "#888" }}>
-                          Billed per instance·hr. Min instances are always running and always billed.
-                        </p>
+                        {s.id === 2 && (
+                          <StepInfrastructure
+                            dockerSource={dockerSource} setDockerSource={setDockerSource}
+                            dockerImage={dockerImage} setDockerImage={setDockerImage}
+                            enableCreds={enableCreds} setEnableCreds={setEnableCreds}
+                            region={region} setRegion={setRegion}
+                            computeTier={computeTier} setComputeTier={setComputeTier}
+                            maxLifetime={maxLifetime} setMaxLifetime={setMaxLifetime}
+                            idleTimeout={idleTimeout} setIdleTimeout={setIdleTimeout}
+                            addModels={addModels} setAddModels={setAddModels}
+                            selectedModel={selectedModel} setSelectedModel={setSelectedModel}
+                            forkedFromTemplate={!!forkedFrom}
+                          />
+                        )}
+                        {s.id === 3 && (
+                          <StepNetworking
+                            ports={ports} setPorts={setPorts}
+                            webhookEnabled={webhookEnabled} setWebhookEnabled={setWebhookEnabled}
+                            webhookPort={webhookPort} setWebhookPort={setWebhookPort}
+                            webhookSecret={webhookSecret} setWebhookSecret={setWebhookSecret}
+                            projectName={projectName}
+                            forkedFromTemplate={!!forkedFrom}
+                          />
+                        )}
+                        {s.id === 4 && <StepEnvVars customEnvs={customEnvs} setCustomEnvs={setCustomEnvs} forkedFromTemplate={!!forkedFrom} />}
+                        {s.id === 5 && (
+                          <StepReview
+                            summary={summary}
+                            computeRate={computeRate}
+                            modelInfo={modelInfo}
+                          />
+                        )}
                       </div>
                     </div>
-                  </div>
-
-                          {/* 2B: MaaS — optional add-on */}
-                <div>
-                  <Toggle
-                    on={useMaaS}
-                    onToggle={() => setUseMaaS((v) => !v)}
-                    label="Add GMI MaaS — Access 200+ frontier models"
-                    desc="Optional: GMI injects a MaaS API key into your container at startup. Enables Verified badge."
-                  />
-
-                  {useMaaS && (
-                    <div className="mt-4 space-y-3 pl-4" style={{ borderLeft: "2px solid rgba(221,234,77,0.2)" }}>
-                      <FieldLabel>Select Models</FieldLabel>
-                      <p className="text-xs text-gray-400 font-mono-gmi -mt-1">
-                        Select all models your Claw may call. You can change this later.
-                      </p>
-
-                      {/* Search box */}
-                      <div className="relative">
-                        <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#999" }} />
-                        <input
-                          type="text"
-                          placeholder="Search models..."
-                          value={modelSearch}
-                          onChange={(e) => setModelSearch(e.target.value)}
-                          className="w-full pl-8 pr-8 py-2 text-xs text-white bg-transparent outline-none font-mono-gmi"
-                          style={{ border: "1px solid #2a2a2a" }}
-                          onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-                          onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                        />
-                        {modelSearch && (
-                          <button
-                            onClick={() => setModelSearch("")}
-                            className="absolute right-3 top-1/2 -translate-y-1/2"
-                            style={{ color: "#999" }}
-                          >
-                            <X size={11} />
-                          </button>
-                        )}
-                      </div>
-
-                      {/* Selected chips */}
-                      {selectedModels.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5">
-                          {selectedModels.map((id) => {
-                            const m = MAAS_MODELS.find((x) => x.id === id);
-                            if (!m) return null;
-                            return (
-                              <span key={id}
-                                className="inline-flex items-center gap-1.5 px-2 py-1 font-mono-gmi text-xs"
-                                style={{ background: "rgba(221,234,77,0.1)", border: "1px solid rgba(221,234,77,0.3)", color: "#DDEA4D" }}
-                              >
-                                {m.name}
-                                <button onClick={() => toggleModel(id)} style={{ color: "#DDEA4D", opacity: 0.7 }}>
-                                  <X size={10} />
-                                </button>
-                              </span>
-                            );
-                          })}
+                  );
+                })
+              ) : (
+                // Connect-your-agent flow — 4 sections
+                CONNECT_STEPS.map((s) => (
+                  <div key={s.id} id={`connect-step-${s.id}`}>
+                    <SectionHeader number={s.id} title={s.title} subtitle={null} />
+                    <div style={{ marginTop: 12 }}>
+                      {s.id === 1 && (
+                        <div style={{
+                          background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
+                          padding: "16px 20px",
+                        }}>
+                          <StepBasics
+                            projectName={projectName} setProjectName={setProjectName}
+                            showEnvWarning={false}
+                          />
                         </div>
                       )}
-
-                      {/* Horizontal scroll cards */}
-                      <div
-                        className="flex gap-3 pb-2"
-                        style={{ overflowX: "auto", scrollbarWidth: "thin", scrollbarColor: "#2a2a2a #0a0a0a" }}
-                      >
-                        {MAAS_MODELS.filter((m) =>
-                          !modelSearch ||
-                          m.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
-                          m.id.toLowerCase().includes(modelSearch.toLowerCase())
-                        ).map((model) => {
-                          const sel = selectedModels.includes(model.id);
-                          return (
-                            <button
-                              key={model.id}
-                              onClick={() => toggleModel(model.id)}
-                              className="shrink-0 flex flex-col gap-2 p-3 transition-all text-left"
-                              style={{
-                                width: "140px",
-                                background: sel ? "rgba(221,234,77,0.08)" : "#0a0a0a",
-                                border: `1px solid ${sel ? "#DDEA4D" : "#2a2a2a"}`,
-                              }}
-                            >
-                              {/* Checkbox */}
-                              <div className="flex items-center justify-between">
-                                <div
-                                  className="w-3.5 h-3.5 flex items-center justify-center"
-                                  style={{
-                                    border: `1px solid ${sel ? "#DDEA4D" : "#888"}`,
-                                    background: sel ? "#DDEA4D" : "transparent",
-                                  }}
-                                >
-                                  {sel && <div className="w-2 h-2 bg-black" />}
-                                </div>
-                                <span
-                                  className="font-mono-gmi text-xs px-1.5 py-0.5"
-                                  style={{ background: "rgba(255,255,255,0.04)", color: "#999" }}
-                                >
-                                  {model.context}
-                                </span>
-                              </div>
-                              {/* Model name */}
-                              <div
-                                className="font-mono-gmi text-xs font-bold leading-tight"
-                                style={{ color: sel ? "#fff" : "#888" }}
-                              >
-                                {model.name}
-                              </div>
-                              {/* Tokens per dollar */}
-                              {model.tokensPerDollar && (
-                                <div className="font-mono-gmi text-xs" style={{ color: "#999" }}>
-                                  {model.tokensPerDollar} tok/$
-                                </div>
-                              )}
-                            </button>
-                          );
-                        })}
-                        {MAAS_MODELS.filter((m) =>
-                          !modelSearch ||
-                          m.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
-                          m.id.toLowerCase().includes(modelSearch.toLowerCase())
-                        ).length === 0 && (
-                          <div className="font-mono-gmi text-xs text-gray-300 py-4 px-2">
-                            No models match "{modelSearch}"
-                          </div>
-                        )}
-                      </div>
+                      {s.id === 2 && <StepMaasKey maasKey={maasKey} setMaasKey={setMaasKey} />}
+                      {s.id === 3 && <StepEndpoint accessUrl={accessUrl} setAccessUrl={setAccessUrl} />}
+                      {s.id === 4 && (
+                        <StepConnectReview
+                          projectName={projectName}
+                          maasKey={maasKey}
+                          accessUrl={accessUrl}
+                        />
+                      )}
                     </div>
-                  )}
-                </div>
-
-                {/* Prerequisite warning */}
-                {!useCompute && !useMaaS && (
-                  <div className="flex items-start gap-3 p-4 font-mono-gmi text-xs"
-                    style={{ background: "rgba(255,80,80,0.06)", border: "1px solid rgba(255,80,80,0.3)", color: "#ff8080" }}>
-                    <Info size={13} className="shrink-0 mt-0.5" />
-                    <span>
-                      At least one GMI infrastructure component (Compute or MaaS) is required to list on the Marketplace.
-                    </span>
                   </div>
-                )}
-              </div>
-            )}
-
-            {/* ── STEP 2: Environment Variables ──────────────────────── */}
-            {step === 2 && (
-              <div className="space-y-6">
-                <div className="flex items-center gap-2 mb-2">
-                  <Terminal size={15} style={{ color: "#DDEA4D" }} />
-                  <h2 className="font-display text-lg text-white">Environment Variables</h2>
-                </div>
-
-                {/* Auto-injected vars */}
-                <div>
-                  <FieldLabel>Auto-Injected by GMI</FieldLabel>
-                  <div className="space-y-2">
-                    {useMaaS && (
-                      <>
-                        <div className="flex items-center gap-3 px-4 py-3 font-mono-gmi text-xs"
-                          style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                          <Lock size={12} style={{ color: "#DDEA4D" }} />
-                          <span style={{ color: "#DDEA4D" }}>GMI_MAAS_API_KEY</span>
-                          <span className="text-gray-300 ml-auto">Auto-generated on deploy</span>
-                        </div>
-                        <div className="flex items-center gap-3 px-4 py-3 font-mono-gmi text-xs"
-                          style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                          <Lock size={12} style={{ color: "#DDEA4D" }} />
-                          <span style={{ color: "#DDEA4D" }}>GMI_MAAS_BASE_URL</span>
-                          <span className="text-gray-300 ml-auto">https://api.gmi.ai/v1</span>
-                        </div>
-                      </>
-                    )}
-                    {!useMaaS && (
-                      <p className="text-xs text-gray-400 font-mono-gmi px-1">
-                        No auto-injected variables — MaaS is disabled.
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Custom env vars */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <FieldLabel>Custom Variables</FieldLabel>
-                    <button onClick={addEnvVar}
-                      className="flex items-center gap-1.5 font-mono-gmi text-xs px-3 py-1.5 transition-all"
-                      style={{ border: "1px solid #2a2a2a", color: "#888" }}>
-                      <Plus size={12} /> Add Variable
-                    </button>
-                  </div>
-
-                  {envVars.length === 0 ? (
-                    <p className="text-xs text-gray-300 font-mono-gmi px-1">
-                      No custom variables. Click "Add Variable" to add database URIs, API keys, or other config.
-                    </p>
-                  ) : (
-                    <div className="space-y-2">
-                      {envVars.map((v, i) => (
-                        <div key={i} className="flex items-center gap-2">
-                          <input placeholder="KEY_NAME" value={v.key}
-                            onChange={(e) => updateEnvVar(i, "key", e.target.value)}
-                            className="w-40 px-3 py-2.5 text-xs text-white bg-transparent outline-none font-mono-gmi shrink-0"
-                            style={{ border: "1px solid #2a2a2a" }}
-                            onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-                            onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")} />
-                          <div className="flex-1 flex items-center gap-0">
-                            <input
-                              type={v.secret && !showSecrets[i] ? "password" : "text"}
-                              placeholder="value"
-                              value={v.value}
-                              onChange={(e) => updateEnvVar(i, "value", e.target.value)}
-                              className="flex-1 px-3 py-2.5 text-xs text-white bg-transparent outline-none font-mono-gmi"
-                              style={{ border: "1px solid #2a2a2a", borderRight: "none" }}
-                              onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-                              onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")} />
-                            <button onClick={() => setShowSecrets((s) => ({ ...s, [i]: !s[i] }))}
-                              className="px-3 py-2.5 transition-all"
-                              style={{ border: "1px solid #2a2a2a", borderLeft: "none", color: "#999" }}>
-                              {showSecrets[i] ? <EyeOff size={12} /> : <Eye size={12} />}
-                            </button>
-                          </div>
-                          <button onClick={() => updateEnvVar(i, "secret", !v.secret)}
-                            className="shrink-0 px-3 py-2.5 font-mono-gmi text-xs transition-all"
-                            style={{
-                              border: `1px solid ${v.secret ? "rgba(221,234,77,0.3)" : "#2a2a2a"}`,
-                              color: v.secret ? "#DDEA4D" : "#999",
-                              background: v.secret ? "rgba(221,234,77,0.06)" : "transparent",
-                            }}>
-                            Secret
-                          </button>
-                          <button onClick={() => removeEnvVar(i)}
-                            className="shrink-0 p-2.5 transition-all"
-                            style={{ border: "1px solid #2a2a2a", color: "#999" }}>
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* ── STEP 3: Review & Deploy ──────────────────────────────── */}
-            {step === 3 && (
-              <div className="space-y-6">
-                <div className="flex items-center gap-2 mb-2">
-                  <Zap size={15} style={{ color: "#DDEA4D" }} />
-                  <h2 className="font-display text-lg text-white">Review & Publish Template</h2>
-                </div>
-
-                {/* Config summary */}
-                <div className="p-5 space-y-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                  <p className="font-mono-gmi text-xs text-gray-300 uppercase tracking-widest border-b border-gray-800 pb-3">
-                    Configuration Summary
-                  </p>
-                  {[
-                    { label: "Project Name", value: projectName || "—" },
-                    ...(useCompute ? [
-                      { label: "Docker Image", value: dockerSource === "registry" ? (dockerUrl || "Not set") : "Uploaded file" },
-                      { label: "Compute Tier", value: `${tier.label} — ${tier.cpu} · ${tier.ram} · $${tier.priceHr.toFixed(2)}/hr` },
-                      { label: "Storage", value: storageMode === "shared" ? "Shared (data-isolated)" : "Dedicated" },
-                      { label: "Auto-Scaling", value: `Min ${minContainers} → Max ${maxContainers} containers` },
-                    ] : [{ label: "Compute", value: "Not used" }]),
-                    { label: "MaaS", value: useMaaS ? `${selectedModels.length} model(s) selected` : "Not used" },
-                    { label: "Custom Env Vars", value: envVars.length > 0 ? `${envVars.length} variable(s)` : "None" },
-                  ].map(({ label, value }) => (
-                    <div key={label} className="grid grid-cols-3 gap-4">
-                      <div className="gmi-label text-gray-400">{label}</div>
-                      <div className="col-span-2 font-mono-gmi text-sm text-gray-300 break-all">{value}</div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Cost estimate */}
-                {useCompute && (
-                  <div className="p-5 space-y-3" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                    <p className="font-mono-gmi text-xs text-gray-300 uppercase tracking-widest border-b border-gray-800 pb-3">
-                      Cost Estimate
-                    </p>
-                    <div className="grid grid-cols-3 gap-4 font-mono-gmi text-sm">
-                      <div>
-                        <div className="text-gray-400 text-xs mb-1">Base (Min containers)</div>
-                        <div className="text-white font-bold">${minCost.toFixed(2)}/hr</div>
-                        <div className="text-gray-400 text-xs mt-0.5">${(minCost * 24).toFixed(2)}/day</div>
-                      </div>
-                      <div>
-                        <div className="text-gray-400 text-xs mb-1">Max (Max containers)</div>
-                        <div className="text-white font-bold">${maxCost.toFixed(2)}/hr</div>
-                        <div className="text-gray-400 text-xs mt-0.5">${(maxCost * 24).toFixed(2)}/day</div>
-                      </div>
-                      <div>
-                        <div className="text-gray-400 text-xs mb-1">MaaS Tokens</div>
-                        <div className="text-gray-300 font-bold text-xs mt-1">Billed per token used</div>
-                      </div>
-                    </div>
-                    <div className="h-1.5 w-full" style={{ background: "#1a1a1a" }}>
-                      <div className="h-full" style={{ width: `${Math.min((minCost / maxCost) * 100, 100)}%`, background: "#DDEA4D" }} />
-                    </div>
-                    <p className="text-xs text-gray-300 font-mono-gmi">
-                      Billing begins immediately upon clicking "Deploy Privately". You can stop containers from the Developer Console.
-                    </p>
-                  </div>
-                )}
-
-                {/* Decoupled flow notice */}
-                <div className="p-4 font-mono-gmi text-xs" style={{ background: "rgba(221,234,77,0.04)", border: "1px solid rgba(221,234,77,0.2)" }}>
-                  <div className="font-bold mb-1" style={{ color: "#DDEA4D" }}>Registration ≠ Listing</div>
-                  <p className="text-gray-400 leading-relaxed">
-                    Clicking "Register &amp; Deploy" provisions your infrastructure and starts billing, but does <strong>not</strong> publish
-                    your Claw to the public Marketplace. After testing, list it from your Dashboard — listings go live instantly.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Navigation */}
-            <div className="flex items-center justify-between mt-10">
-              <button
-                onClick={() => (step === 0 ? setLocation("/dashboard") : setStep(step - 1))}
-                className="btn-outline-dashed px-6 py-2.5 text-sm flex items-center gap-2">
-                <ArrowLeft size={14} />
-                {step === 0 ? "Back to Console" : "Back"}
-              </button>
-
-              {step < STEPS.length - 1 ? (
-                <button
-                  onClick={() => {
-                    if (step === 1 && !useCompute && !useMaaS) {
-                      toast.error("Select at least one GMI infrastructure component.");
-                      return;
-                    }
-                    setStep(step + 1);
-                  }}
-                  className="btn-primary-lime px-8 py-2.5 text-sm font-bold flex items-center gap-2">
-                  Continue <ArrowRight size={14} />
-                </button>
-              ) : (
-                <button onClick={handleDeploy}
-                  className="px-8 py-2.5 text-sm font-bold flex items-center gap-2 transition-all"
-                  style={{ background: "#DDEA4D", color: "#000" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#e8f060")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "#DDEA4D")}>
-                  Publish Template <Zap size={14} />
-                </button>
+                ))
               )}
             </div>
 
-          </div>
-            )}
+            {/* Right: sticky cost + Register/Submit CTA */}
+            <RegisterPanel
+              computeRate={computeRate}
+              hideComputeCost={hostMode === "connect"}
+              canRegister={
+                hostMode === "gmi"
+                  ? projectName.trim().length > 1
+                  : projectName.trim().length > 1 && /^https:\/\//i.test(accessUrl.trim())
+              }
+              ctaLabel={hostMode === "connect" ? "Submit" : "Register Agent"}
+              onCancel={() => setLocation("/marketplace")}
+              onRegister={() => {
+                if (hostMode === "connect") {
+                  // Auto-issue a key if user left it blank (matches PRD: "system auto-issues")
+                  const effectiveKey = maasKey || genMaasKey();
+                  if (!maasKey) setMaasKey(effectiveKey);
+                  persistRegisteredAgent({
+                    id: `ag_${Date.now().toString(36)}`,
+                    name: projectName.trim() || "self-hosted-agent",
+                    templateId: `tpl_${Date.now().toString(36)}`,
+                    hostMode: "connect",
+                    maasKey: effectiveKey,
+                    accessUrl: accessUrl.trim(),
+                    category: "Code & Dev Tools",
+                    registeredAt: new Date().toISOString(),
+                  });
+                  setSubmitted(true);
+                } else {
+                  setLocation("/dashboard");
+                }
+              }}
+            />
+          </section>
+        )}
 
-          </div>
-        </div>
         <Footer />
       </div>
     </div>

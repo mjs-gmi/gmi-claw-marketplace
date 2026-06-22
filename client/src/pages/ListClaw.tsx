@@ -19,10 +19,11 @@ const MOCK_CE_TEMPLATES = [
 ];
 
 const TYPE_DESCRIPTIONS: Record<TypeLabel, string> = {
-  Developer:    "Tools for developers — code review, testing, data pipelines, benchmarks",
-  Productivity: "Personal & team productivity — daily tasks, scheduling, research, writing",
-  Business:     "Business process automation — support, HR, legal, finance, enterprise workflows",
-  Creative:     "Creative & media — music, content creation, design, marketing automation",
+  "Code & Dev Tools":     "Code review, testing, debugging, devtools, dev productivity",
+  "Data & Analytics":     "Data pipelines, ETL, SQL, BI, observability, monitoring",
+  "Customer Support":     "Ticket triage, response drafting, escalation, customer service automation",
+  "Content & Marketing":  "Brand voice, copywriting, campaigns, SEO/GEO, social media",
+  "Research & Knowledge": "RAG over documents, legal/policy review, meeting intelligence",
 };
 
 function resolveBadge(path: "A" | "B", useMaaS: boolean) {

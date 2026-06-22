@@ -4,11 +4,11 @@ import { useLocation } from "wouter";
 // Breadcrumb segments based on current route
 function useBreadcrumb(): string[] {
   const [location] = useLocation();
-  if (location.startsWith("/marketplace/")) return ["Home", "Claw Marketplace", "Claw Detail"];
-  if (location.startsWith("/marketplace")) return ["Home", "Claw Marketplace"];
-  if (location.startsWith("/dashboard")) return ["Home", "My Claws"];
+  if (location.startsWith("/marketplace/")) return ["Home", "Agentbox", "Agent Detail"];
+  if (location.startsWith("/marketplace")) return ["Home", "Agentbox"];
+  if (location.startsWith("/dashboard")) return ["Home", "My Agents"];
   if (location.startsWith("/deploy")) return ["Home", "Register & List"];
-  if (location.startsWith("/list-claw")) return ["Home", "Register & List", "List Claw"];
+  if (location.startsWith("/list-claw")) return ["Home", "Register & List", "List Agent"];
   return ["Home"];
 }
 
@@ -38,37 +38,39 @@ export default function Topbar() {
       style={{
         position: "fixed",
         top: 0,
-        left: "210px",
+        left: 210,
         right: 0,
-        height: "40px",
-        background: "#0d0d0d",
-        borderBottom: "1px solid #1a1a1a",
+        height: 40,
+        background: "#0a0a0a",
+        borderBottom: "1px solid #404040",
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        paddingLeft: "1rem",
-        paddingRight: "1rem",
+        paddingLeft: 16,
+        paddingRight: 16,
         zIndex: 60,
+        fontFamily: "'Geist', system-ui, sans-serif",
       }}
     >
       {/* Left: back arrow + breadcrumb */}
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <button
-          style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", padding: "0 0.25rem" }}
+          style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", padding: "2px 6px", borderRadius: 6, color: "#a3a3a3" }}
           onClick={() => window.history.back()}
         >
           <IcoBack />
         </button>
-        <div style={{ width: "1px", height: "14px", background: "#333" }} />
-        <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+        <div style={{ width: 1, height: 14, background: "#404040" }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {crumbs.map((crumb, i) => (
             <React.Fragment key={crumb}>
               {i > 0 && <IcoChevron />}
               <span style={{
-                fontFamily: "'GeistMono', monospace",
-                fontSize: "0.5625rem",
-                letterSpacing: "0.06em",
-                color: i === crumbs.length - 1 ? "#ffffff" : "#aaa",
+                fontFamily: "'Geist', system-ui, sans-serif",
+                fontSize: 13,
+                fontWeight: i === crumbs.length - 1 ? 500 : 400,
+                lineHeight: "20px",
+                color: i === crumbs.length - 1 ? "#fafafa" : "#a3a3a3",
               }}>
                 {crumb}
               </span>
@@ -78,49 +80,44 @@ export default function Topbar() {
       </div>
 
       {/* Right: Credits + Avatar + status dot */}
-      <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         {/* Credits chip */}
         <div style={{
           display: "flex",
           alignItems: "center",
-          gap: "0.375rem",
-          padding: "0.25rem 0.625rem",
-          border: "1px solid #3a3a3a",
-          background: "#111",
+          gap: 6,
+          padding: "4px 10px",
+          border: "1px solid #404040",
+          background: "rgba(82,82,82,0.3)",
+          borderRadius: 8,
           cursor: "pointer",
         }}
-          onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#555")}
-          onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#3a3a3a")}
         >
           <IcoCredits />
-          <span style={{ fontFamily: "'GeistMono', monospace", fontSize: "0.5625rem", letterSpacing: "0.06em", color: "#ffffff" }}>
+          <span style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: 13, fontWeight: 500, lineHeight: "20px", color: "#fafafa" }}>
             $0.00
           </span>
         </div>
 
         {/* Avatar */}
         <div style={{
-          width: "24px",
-          height: "24px",
-          background: "#333",
-          border: "1px solid #555",
+          width: 26,
+          height: 26,
+          background: "rgba(199,167,255,0.18)",
+          border: "1px solid rgba(199,167,255,0.4)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          fontFamily: "'GeistMono', monospace",
-          fontSize: "0.5625rem",
-          fontWeight: 700,
-          color: "#ffffff",
+          fontFamily: "'Geist', system-ui, sans-serif",
+          fontSize: 12,
+          fontWeight: 600,
+          color: "#c7a7ff",
           cursor: "pointer",
+          borderRadius: 999,
         }}
-          onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#888")}
-          onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#555")}
         >
-          A
+          M
         </div>
-
-        {/* Green status dot */}
-        <div style={{ width: "6px", height: "6px", background: "#DDEA4D" }} />
       </div>
     </div>
   );

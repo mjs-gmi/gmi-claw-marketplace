@@ -1,5 +1,5 @@
-import { useParams, Link } from "wouter";
-import { ArrowLeft, CheckCircle, ExternalLink, Tag, AlertCircle, Clock } from "lucide-react";
+import { useParams, Link, useLocation } from "wouter";
+import { ArrowLeft, CheckCircle, ExternalLink, Tag, AlertCircle, Clock, Copy } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
@@ -8,10 +8,11 @@ import { toast } from "sonner";
 import { ImageIcon } from "lucide-react";
 
 const TYPE_CONFIG: Record<string, { color: string; bg: string }> = {
-  Developer: { color: "#7ec8ff", bg: "rgba(126,200,255,0.08)" },
-  Productivity: { color: "#c084fc", bg: "rgba(192,132,252,0.08)" },
-  Business: { color: "#fb923c", bg: "rgba(251,146,60,0.08)" },
-  Creative: { color: "#DDEA4D", bg: "rgba(221,234,77,0.08)" },
+  "Code & Dev Tools":     { color: "#7ec8ff", bg: "rgba(126,200,255,0.08)" },
+  "Data & Analytics":     { color: "#DDEA4D", bg: "rgba(221,234,77,0.08)" },
+  "Customer Support":     { color: "#34d399", bg: "rgba(52,211,153,0.08)" },
+  "Content & Marketing":  { color: "#f9a8d4", bg: "rgba(249,168,212,0.08)" },
+  "Research & Knowledge": { color: "#c084fc", bg: "rgba(192,132,252,0.08)" },
 };
 
 // Extended descriptions for detail page
@@ -31,6 +32,7 @@ const FULL_DESCRIPTIONS: Record<string, string> = {
 
 export default function ClawDetail() {
   const { id } = useParams<{ id: string }>();
+  const [, setLocation] = useLocation();
   const claw = ALL_CLAWS.find((c) => c.id === id);
 
   if (!claw) {
@@ -216,17 +218,23 @@ export default function ClawDetail() {
                     )}
                   </div>
 
-                  {/* CTA */}
+                  {/* CTA — fork template into Register & List wizard */}
                   {claw.availability === "available" && (
-                    <button
-                      onClick={handleAccess}
-                      className="w-full py-3 font-bold text-sm flex items-center justify-center gap-2 transition-all"
-                      style={{ background: "#DDEA4D", color: "#000000" }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = "#e8f060")}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = "#DDEA4D")}
-                    >
-                      Access Claw <ExternalLink size={14} />
-                    </button>
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => setLocation(`/deploy?use=${claw.id}`)}
+                        className="w-full py-3 font-bold text-sm flex items-center justify-center gap-2 transition-all"
+                        style={{ background: "#DDEA4D", color: "#000000" }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = "#e8f060")}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = "#DDEA4D")}
+                      >
+                        <Copy size={13} />
+                        Use this agent
+                      </button>
+                      <p className="text-xs text-gray-500 font-mono-gmi text-center mt-1">
+                        Opens Register & List with image, env and ports pre-filled. Deploy your own copy.
+                      </p>
+                    </div>
                   )}
 
                   {claw.availability === "early_access" && (

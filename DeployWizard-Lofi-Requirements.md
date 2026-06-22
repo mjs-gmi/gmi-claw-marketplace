@@ -237,3 +237,73 @@ This path is for builders hosting their own compute infrastructure who only want
 - **Validation:** "Continue" buttons should validate required fields (e.g., Project Name, MaaS Key, Endpoint) and show toast errors if empty.
 - **State Persistence:** Switching between tabs should preserve the state of the inactive tab (e.g., returning to Tab 1 remembers the Project Name).
 - **Context Passing:** The "List this Claw" CTA on the Tab 1 Success screen must pass `templateId`, `projectName`, and `useMaaS` via URL query parameters to the `/list-claw` route to pre-fill the listing form.
+
+---
+
+## 8. Addendum — June 18, 2026
+
+### 8.1 New requirement: Public webhook receiver (Host on GMI · Networking)
+
+**Status:** 🔨 New (added to prototype, awaiting backend confirmation)
+**Surface:** Register Wizard → Tab 1 (Host on GMI) → Step "Networking"
+**Why:** Builders increasingly need their Agent to receive third-party webhooks (Stripe, GitHub, Slack, Linear, etc.). Today the wizard exposes Port Mapping for outbound-served traffic but does not provide a stable inbound URL for webhook callbacks. Without this, every Builder ends up rolling their own ngrok-style tunnel or registering raw IPs that change on redeploy.
+
+**UI spec (prototype shipped):**
+
+- **Section title:** "Public webhook receiver" (FieldLabel) with a right-aligned **Toggle Switch** (default `Off`).
+- **Helper text:** "Expose a stable public HTTPS URL so third-party services (Stripe, GitHub, Slack, etc.) can POST events to your Agent."
+- **When toggle is ON, reveal:**
+  - **Field: Webhook URL** — read-only, mono. Rendered as `https://hooks.gmi.cloud/<slug>` where `<slug>` is derived from the Internal Project Name (a-z0-9-, lowercased, hyphen-collapsed). Copy button to the right.
+    - Helper: "Stable across redeploys. GMI proxies POSTs to your container on the port below."
+  - **Field: Forward to internal port** — number text input, default `8080`.
+  - **Field: HMAC signing secret · optional** — mono text input with a `Generate` pill button on the right that fills `whsec_<random30>`. Helper: "If set, GMI signs each forwarded request with `X-GMI-Signature` so your code can verify authenticity."
+
+**Defaults / behavior:**
+- Off by default; turning ON does **not** require restart of the Agent at deploy time — GMI provisions the ingress at first deploy and rebinds on subsequent deploys to the same URL.
+- The webhook URL is **stable** for the lifetime of the deployment (template). Re-registering the same template yields the same URL.
+- Signature header is opt-in. When secret is set, every forwarded POST gets `X-GMI-Signature: t=<timestamp>,v1=<hmac_sha256>`.
+
+**Step 5 (Review & Register) summary row** (new):
+- Label: `Webhook receiver`
+- Value (when off): `Off`
+- Value (when on): `Public · forwards to :<port>[ · signed]`
+
+### 8.2 Tracker — open items
+
+| ID | Item | Owner | Status |
+| --- | --- | --- | --- |
+| WH-01 | Ingress contract — confirm GMI CE can route `hooks.gmi.cloud/<slug>` to a per-template container port without per-deploy reconfiguration | CaaS / eng | ⚠️ pending |
+| WH-02 | URL stability guarantee — slug must survive redeploys; collision policy on slug clash | CaaS / eng | ⚠️ pending |
+| WH-03 | HMAC signing scheme — pick exact format (`X-GMI-Signature: t=…,v1=…` proposed); document on the public docs site | DevRel / eng | 🔨 new |
+| WH-04 | Replay protection — timestamp tolerance window (proposed: ±5 minutes), document | eng | 🔨 new |
+| WH-05 | Rate-limit + abuse defaults — sensible per-template baseline (e.g. 100 rps), 413 on > 1 MB payloads | platform | 🔨 new |
+| WH-06 | Backend persistence — how `webhook_enabled` / `webhook_forward_port` / `webhook_secret` fields land in the deployment template payload (likely under `RunTaskRequest.networking.webhook` or similar) | eng | ⚠️ pending swagger update |
+| WH-07 | Update v1.1 PRD §7 (out of scope) — webhook receiver is **inbound** ingress (different from the existing F-07 outbound lifecycle webhooks); call out the distinction | PM | 🔨 new |
+
+### 8.3 Notes / decisions
+
+- **This is INBOUND, not OUTBOUND.** The PRD's existing F-07 ("Webhooks — lifecycle events") is GMI pushing `task.creating | running | error | deleted` events outbound to a Builder-registered callback URL. The 8.1 feature is the reverse direction: a public HTTPS URL **on the Agent side** that third parties POST to. These must be documented as two separate features in v1.1 PRD §7.
+- **Connect-your-agent flow does not get this.** Self-hosted Agents already own their public URL (`accessUrl`); they can wire any webhook receiver they want server-side. The wizard's webhook receiver only makes sense for Host on GMI mode (we own the ingress).
+- **Prototype scope:** UI is wired, state persists in the wizard. Backend wire-up is open per WH-01..WH-06.
+
+### 8.4 Per-task config UI — prototype extension to F-04 / F-09
+
+**Goal**: surface in **My Agents** the v1.1 PRD's per-task override surface (F-04 task-scoped env, F-09 lifetime/idle override) without conflating it with template-level defaults. The wizard sets the **template** defaults at register time; this surface lets a user override **just for this task** at provision time, and inspect what was actually applied per running instance.
+
+**Where it lives:**
+- **Provision modal** — opens when the user clicks `+ Provision instance` in the instance set panel, before the task is created. Two sections, both optional:
+  - **Environment overrides** — addable rows of `KEY` + `value`. Helper text: "Merged over template env at task start. Locked GMI keys (`GMI_MAAS_*`) cannot be overridden."
+  - **Lifecycle overrides** — `max_lifetime` and `idle_timeout` selects, prefilled with template defaults. Helper: "Hard caps for just this task. Leave at template defaults if not needed."
+- **Config panel** (per-instance) — appears as a 4th action on every instance row alongside `Metrics / Shell / Logs`. Read-only. Two states:
+  - *No overrides applied* → "Used template defaults — no per-task overrides."
+  - *Overrides applied* → grid of `max_lifetime` / `idle_timeout` (cyan if different from template) + list of env override pairs.
+
+**Out of scope (explicitly removed per design review June 21, 2026):**
+- Input payload editor (the runtime request body for the agent itself). Belongs in the Playground / agent's own UI, not in the provisioning surface.
+- API equivalent / SDK preview blocks. Cluttered the config view without adding value — devs needing the SDK call can read the docs.
+
+**Backend mapping (target):**
+- `POST /tasks` body: `{ deployment_id, env: { KEY: value, ... } | null, max_lifetime: "1h" | null, idle_timeout: "5min" | null, ... }`
+- Read paths (`GET /tasks/{id}`) include the resolved per-task config so the Config panel can display what the platform actually ran with (template default ∪ override).
+
+**Prototype scope**: UI + state wired. `Instance.config` captured client-side; backend wire-up follows F-04 / F-09 swagger when finalized.

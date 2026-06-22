@@ -40,8 +40,20 @@ export function getBadgeConfig(path: InfrastructurePath): BadgeConfig {
   }
 }
 
-export type TypeLabel = "Developer" | "Productivity" | "Business" | "Creative";
-export const TYPE_LABELS: TypeLabel[] = ["Developer", "Productivity", "Business", "Creative"];
+export type TypeLabel =
+  | "Code & Dev Tools"
+  | "Data & Analytics"
+  | "Customer Support"
+  | "Content & Marketing"
+  | "Research & Knowledge";
+
+export const TYPE_LABELS: TypeLabel[] = [
+  "Code & Dev Tools",
+  "Data & Analytics",
+  "Customer Support",
+  "Content & Marketing",
+  "Research & Knowledge",
+];
 
 export interface Claw {
   id: string;
@@ -62,7 +74,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "topify",
     description: "Topify Claw brings Topify's Generative Engine Optimization (GEO) platform to the GMI Claw ecosystem. It continuously monitors how your brand is mentioned, ranked, and described across the four major AI search engines: ChatGPT, Gemini, Perplexity, and Google AI Overview.",
     tags: ["seo", "geo", "ai-search", "brand", "marketing"],
-    typeLabel: "Business",
+    typeLabel: "Content & Marketing",
     infrastructurePath: "gmi_ce_maas",
     availability: "available",
     pricing: "Free",
@@ -73,7 +85,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "gmi",
     description: "Performs deep static analysis and semantic code review on pull requests. Identifies bugs, security vulnerabilities, and style issues. Integrates with GitHub, GitLab, and Bitbucket.",
     tags: ["code", "review", "github", "security", "devtools"],
-    typeLabel: "Developer",
+    typeLabel: "Code & Dev Tools",
     infrastructurePath: "gmi_ce_maas",
     availability: "available",
     pricing: "Free",
@@ -84,7 +96,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "gmi",
     description: "Enterprise RAG Pipeline ingests documents from S3, SharePoint, Confluence, and Notion, builds a retrieval index, and answers natural language queries with cited sources. Designed for compliance-sensitive environments.",
     tags: ["rag", "enterprise", "search", "documents", "compliance"],
-    typeLabel: "Business",
+    typeLabel: "Research & Knowledge",
     infrastructurePath: "gmi_ce_only",
     availability: "available",
     pricing: "Free",
@@ -95,7 +107,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "gmi",
     description: "Runs MMLU, HumanEval, GSM8K, and custom task-specific benchmarks across all models available in the GMI MaaS library. Generates comparative reports with accuracy, latency, and cost-per-token analysis.",
     tags: ["benchmark", "evaluation", "models", "testing"],
-    typeLabel: "Developer",
+    typeLabel: "Code & Dev Tools",
     infrastructurePath: "gmi_ce_maas",
     availability: "available",
     pricing: "Free",
@@ -106,7 +118,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "legaltech-labs",
     description: "Analyzes legal contracts for risk clauses, missing provisions, and compliance issues. Supports NDA, SaaS agreements, employment contracts, and vendor agreements.",
     tags: ["legal", "contracts", "compliance", "risk"],
-    typeLabel: "Business",
+    typeLabel: "Research & Knowledge",
     infrastructurePath: "gmi_ce_only",
     availability: "available",
     pricing: "Free",
@@ -117,7 +129,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "dataops-io",
     description: "Monitors and debugs ETL pipelines in real-time. Detects schema drift, null anomalies, and volume drops. Integrates with Airflow, dbt, and Spark.",
     tags: ["data", "etl", "debugging", "pipeline", "monitoring"],
-    typeLabel: "Developer",
+    typeLabel: "Data & Analytics",
     infrastructurePath: "self_hosted_maas",
     availability: "available",
     pricing: "Free",
@@ -128,7 +140,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "supportai",
     description: "Automatically classifies, prioritizes, and routes incoming support tickets. Drafts responses for tier-1 issues and escalates complex cases with context summaries.",
     tags: ["support", "tickets", "automation", "customer-service"],
-    typeLabel: "Productivity",
+    typeLabel: "Customer Support",
     infrastructurePath: "self_hosted_maas",
     availability: "available",
     pricing: "Free",
@@ -139,7 +151,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "meetingai",
     description: "Transcribes, summarizes, and extracts action items from meetings. Integrates with Zoom, Google Meet, and Microsoft Teams. Sends follow-up emails automatically.",
     tags: ["meetings", "transcription", "summary", "productivity"],
-    typeLabel: "Productivity",
+    typeLabel: "Research & Knowledge",
     infrastructurePath: "gmi_ce_only",
     availability: "available",
     pricing: "Free",
@@ -150,7 +162,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "creativeops",
     description: "Generates structured creative briefs from rough campaign ideas. Produces audience personas, messaging frameworks, and channel recommendations for marketing teams.",
     tags: ["creative", "marketing", "briefs", "campaigns"],
-    typeLabel: "Creative",
+    typeLabel: "Content & Marketing",
     infrastructurePath: "self_hosted_maas",
     availability: "early_access",
     pricing: "Free",
@@ -161,7 +173,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "querylab",
     description: "Analyzes slow SQL queries, suggests index strategies, and rewrites inefficient joins. Supports PostgreSQL, MySQL, BigQuery, and Snowflake.",
     tags: ["sql", "database", "optimization", "performance"],
-    typeLabel: "Developer",
+    typeLabel: "Data & Analytics",
     infrastructurePath: "gmi_ce_only",
     availability: "available",
     pricing: "Free",
@@ -172,7 +184,7 @@ export const ALL_CLAWS: Claw[] = [
     publisher: "contentops",
     description: "Generates on-brand copy for blogs, social media, and ad campaigns. Learns your brand voice from existing content and maintains consistency across all outputs.",
     tags: ["writing", "brand", "content", "social-media", "copy"],
-    typeLabel: "Creative",
+    typeLabel: "Content & Marketing",
     infrastructurePath: "gmi_ce_only",
     availability: "unavailable",
     pricing: "Free",

@@ -95,16 +95,16 @@ const IcoDocs = () => (
   </svg>
 );
 
-// ─── Section label ────────────────────────────────────────────────────────────
+// ─── Section label (per Figma: Geist 12 / 500 / 16, rgba(250,250,250,0.7)) ──
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <div style={{
-      padding: "0.875rem 1rem 0.3rem",
-      fontFamily: "'GeistMono', monospace",
-      fontSize: "0.5rem",
-      letterSpacing: "0.13em",
-      textTransform: "uppercase",
-      color: "#666",
+      padding: "14px 16px 4px",
+      fontFamily: "'Geist', system-ui, sans-serif",
+      fontSize: 12,
+      fontWeight: 500,
+      lineHeight: "16px",
+      color: "rgba(250,250,250,0.7)",
     }}>
       {children}
     </div>
@@ -130,22 +130,23 @@ function NavItem({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: "0.5rem",
-        padding: "0.3rem 1rem",
-        fontFamily: "'GeistMono', monospace",
-        fontSize: "0.6875rem",
-        letterSpacing: "0.01em",
-        color: active ? "#DDEA4D" : "#cccccc",
+        gap: 10,
+        padding: "6px 16px",
+        fontFamily: "'Geist', system-ui, sans-serif",
+        fontSize: 14,
+        fontWeight: active ? 500 : 400,
+        lineHeight: "20px",
+        color: active ? "#DDEA4D" : "#fafafa",
         cursor: "pointer",
-        transition: "color 0.1s",
-        background: active ? "rgba(221,234,77,0.04)" : "transparent",
+        transition: "color 0.12s, background 0.12s",
+        background: active ? "rgba(221,234,77,0.06)" : "transparent",
         borderLeft: active ? "2px solid #DDEA4D" : "2px solid transparent",
       }}
       onMouseEnter={(e) => {
-        if (!active) (e.currentTarget as HTMLDivElement).style.color = "#ffffff";
+        if (!active) (e.currentTarget as HTMLDivElement).style.background = "rgba(255,255,255,0.04)";
       }}
       onMouseLeave={(e) => {
-        if (!active) (e.currentTarget as HTMLDivElement).style.color = "#cccccc";
+        if (!active) (e.currentTarget as HTMLDivElement).style.background = "transparent";
       }}
     >
       <Icon />
@@ -174,9 +175,9 @@ export default function Navbar() {
         top: 0,
         left: 0,
         height: "100vh",
-        width: "210px",
-        background: "#0d0d0d",
-        borderRight: "1px solid #1a1a1a",
+        width: 210,
+        background: "#0a0a0a",
+        borderRight: "1px solid #404040",
         display: "flex",
         flexDirection: "column",
         zIndex: 50,
@@ -185,7 +186,7 @@ export default function Navbar() {
       }}
     >
       {/* Inference / Compute tab switcher */}
-      <div style={{ display: "flex", borderBottom: "1px solid #1a1a1a" }}>
+      <div style={{ display: "flex", borderBottom: "1px solid #404040" }}>
         {(["inference", "compute"] as const).map(t => (
           <button
             key={t}
@@ -195,22 +196,20 @@ export default function Navbar() {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              gap: "0.35rem",
-              padding: "0.5rem 0",
-              fontFamily: "'GeistMono', monospace",
-              fontSize: "0.5625rem",
-              letterSpacing: "0.08em",
-              textTransform: "capitalize",
+              gap: 8,
+              padding: "10px 0",
+              fontFamily: "'Geist', system-ui, sans-serif",
+              fontSize: 14,
+              fontWeight: 400,
+              lineHeight: "20px",
               background: "transparent",
               border: "none",
               borderBottom: tab === t ? "2px solid #DDEA4D" : "2px solid transparent",
-              color: tab === t ? "#DDEA4D" : "#555",
+              color: tab === t ? "#DDEA4D" : "#fafafa",
               cursor: "pointer",
-              transition: "color 0.1s",
+              transition: "color 0.12s",
               marginBottom: "-1px",
             }}
-            onMouseEnter={(e) => { if (tab !== t) (e.currentTarget as HTMLButtonElement).style.color = "#aaa"; }}
-            onMouseLeave={(e) => { if (tab !== t) (e.currentTarget as HTMLButtonElement).style.color = "#555"; }}
           >
             {t === "inference" ? <IcoInference /> : <IcoCompute />}
             {t.charAt(0).toUpperCase() + t.slice(1)}
@@ -243,10 +242,10 @@ export default function Navbar() {
         <NavItem href="https://console.gmicloud.ai/team" label="Team Space" icon={IcoTeamSpace} external />
         <NavItem href="https://console.gmicloud.ai/media" label="My Media" icon={IcoMyMedia} external />
 
-        {/* Claw Marketplace */}
-        <SectionLabel>Claw Marketplace</SectionLabel>
+        {/* Agentbox */}
+        <SectionLabel>Agentbox</SectionLabel>
         <NavItem href="/marketplace" label="Browse Agents" icon={IcoClawMarketplace} active={isActive("/marketplace")} />
-        <NavItem href="/dashboard" label="My Claws" icon={IcoDashboard} active={isActive("/dashboard")} />
+        <NavItem href="/dashboard" label="My Agents" icon={IcoDashboard} active={isActive("/dashboard")} />
         <NavItem href="/deploy" label="Register & List" icon={IcoDeployList} active={isActive("/deploy")} />
 
       </nav>
