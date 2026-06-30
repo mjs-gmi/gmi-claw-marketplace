@@ -5,7 +5,6 @@ import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
 import { ALL_CLAWS, getBadgeConfig } from "@/lib/clawData";
 import { toast } from "sonner";
-import { ImageIcon } from "lucide-react";
 
 const TYPE_CONFIG: Record<string, { color: string; bg: string }> = {
   "Code & Dev Tools":     { color: "#7ec8ff", bg: "rgba(126,200,255,0.08)" },
@@ -29,6 +28,119 @@ const FULL_DESCRIPTIONS: Record<string, string> = {
   "sql-query-optimizer": "Analyzes slow SQL queries, suggests index strategies, and rewrites inefficient joins. Supports PostgreSQL, MySQL, BigQuery, and Snowflake. Connects to your database via read-only credentials to analyze EXPLAIN plans. Tracks query performance over time and alerts on regressions.",
   "brand-voice-writer": "Generates on-brand copy for blogs, social media, and ad campaigns. Learns your brand voice from existing content and maintains consistency across all outputs. Supports 25+ output formats. Includes a tone calibration tool and a style guide compliance checker.",
 };
+
+// ─── Image pull pre-check (PRD M6.4 clone preflight) ────────────────────
+// Anonymous HEAD /v2/<name>/manifests/<ref>. Result governs whether the
+// "Deploy your own" path is offered as a real clone or downgraded to
+// "Try demo". The prototype maps each catalog claw to one of three
+// outcomes via a deterministic mock.
+type ImagePullState = "public" | "private" | "missing";
+function mockImagePullState(clawId: string): ImagePullState {
+  // Demo: one private, rest public. Easy to extend later.
+  if (clawId === "enterprise-rag-pipeline") return "private";
+  return "public";
+}
+
+function ImagePullStatus({ state }: { state: ImagePullState }) {
+  if (state === "public") {
+    // Public is the happy path — surface as a small inline chip, not a card.
+    return (
+      <div
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 6,
+          fontFamily: "'Geist', system-ui, sans-serif",
+          fontSize: 11, fontWeight: 500, lineHeight: "16px",
+          color: "#34d399",
+          background: "rgba(52,211,153,0.08)",
+          border: "1px solid rgba(52,211,153,0.30)",
+          padding: "3px 9px",
+          borderRadius: 999,
+        }}
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M20 6 9 17l-5-5"/>
+        </svg>
+        Cloneable · public image
+      </div>
+    );
+  }
+  if (state === "private") {
+    // Structured warning card: title, body, fallback path.
+    return (
+      <div
+        style={{
+          background: "rgba(251,191,36,0.06)",
+          border: "1px solid rgba(251,191,36,0.30)",
+          borderRadius: 8,
+          padding: "12px 14px",
+          display: "flex", gap: 10, alignItems: "flex-start",
+          fontFamily: "'Geist', system-ui, sans-serif",
+        }}
+      >
+        <span
+          style={{
+            width: 22, height: 22, borderRadius: 999, flexShrink: 0,
+            background: "rgba(251,191,36,0.14)",
+            border: "1px solid rgba(251,191,36,0.45)",
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            color: "#fbbf24",
+            marginTop: 1,
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+        </span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#fafafa", lineHeight: "18px" }}>
+            Private image
+          </div>
+          <div style={{ fontSize: 12, fontWeight: 400, color: "#a3a3a3", lineHeight: "17px", marginTop: 2 }}>
+            Image availability check returned 401/403 — only the publisher can pull this image.
+            Deploy-your-own won't work as a clone; you can still try the publisher's
+            running instance via <span style={{ color: "#fafafa" }}>Try demo</span> below.
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div
+      style={{
+        background: "rgba(248,113,113,0.06)",
+        border: "1px solid rgba(248,113,113,0.30)",
+        borderRadius: 8,
+        padding: "12px 14px",
+        display: "flex", gap: 10, alignItems: "flex-start",
+        fontFamily: "'Geist', system-ui, sans-serif",
+      }}
+    >
+      <span
+        style={{
+          width: 22, height: 22, borderRadius: 999, flexShrink: 0,
+          background: "rgba(248,113,113,0.14)",
+          border: "1px solid rgba(248,113,113,0.45)",
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          color: "#f87171",
+          marginTop: 1,
+        }}
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/>
+        </svg>
+      </span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#fafafa", lineHeight: "18px" }}>
+          Image not found
+        </div>
+        <div style={{ fontSize: 12, fontWeight: 400, color: "#a3a3a3", lineHeight: "17px", marginTop: 2 }}>
+          Image availability check returned 404 — the image reference is broken. Cloning is blocked
+          until the publisher fixes the listing.
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function ClawDetail() {
   const { id } = useParams<{ id: string }>();
@@ -119,8 +231,14 @@ export default function ClawDetail() {
                   </div>
 
                   <h1
-                    className="font-display text-4xl text-white mb-3"
-                    style={{ letterSpacing: "-0.03em" }}
+                    className="text-white mb-3"
+                    style={{
+                      fontFamily: "'Geist', system-ui, sans-serif",
+                      fontSize: 24,
+                      fontWeight: 700,
+                      lineHeight: "30px",
+                      letterSpacing: "-0.02em",
+                    }}
                   >
                     {claw.name}
                   </h1>
@@ -146,29 +264,58 @@ export default function ClawDetail() {
 
                 {/* Description */}
                 <div>
-                  <h2 className="font-display text-lg text-white mb-3">About this Claw</h2>
+                  <h2
+                    className="text-white mb-3"
+                    style={{
+                      fontFamily: "'Geist', system-ui, sans-serif",
+                      fontSize: 16, fontWeight: 600, lineHeight: "22px", letterSpacing: "-0.005em",
+                    }}
+                  >
+                    About this Claw
+                  </h2>
                   <p className="text-gray-400 leading-relaxed text-sm">{fullDescription}</p>
                 </div>
 
-                {/* Image placeholder */}
+                {/* Media — neutral empty state per M1; replaced with real media when uploaded */}
                 <div>
-                  <h2 className="font-display text-lg text-white mb-3">Preview</h2>
-                  <div
-                    className="w-full flex flex-col items-center justify-center gap-3"
+                  <h2
+                    className="text-white mb-3"
                     style={{
-                      background: "#0a0a0a",
-                      border: "1px solid #1e1e1e",
+                      fontFamily: "'Geist', system-ui, sans-serif",
+                      fontSize: 16, fontWeight: 600, lineHeight: "22px", letterSpacing: "-0.005em",
+                    }}
+                  >
+                    Media
+                  </h2>
+                  <div
+                    className="w-full flex items-center justify-center"
+                    style={{
+                      background: "rgba(255,255,255,0.02)",
+                      border: "1px dashed #2a2a2a",
+                      borderRadius: 8,
                       aspectRatio: "16/9",
                     }}
                   >
-                    <ImageIcon size={36} className="text-gray-700" />
-                    <span className="font-mono-gmi text-xs text-gray-600">Image / Demo coming soon</span>
+                    <span style={{
+                      fontFamily: "'Geist', system-ui, sans-serif",
+                      fontSize: 12, color: "#525252",
+                    }}>
+                      No media uploaded
+                    </span>
                   </div>
                 </div>
 
                 {/* Infrastructure info */}
                 <div>
-                  <h2 className="font-display text-lg text-white mb-3">Infrastructure</h2>
+                  <h2
+                    className="text-white mb-3"
+                    style={{
+                      fontFamily: "'Geist', system-ui, sans-serif",
+                      fontSize: 16, fontWeight: 600, lineHeight: "22px", letterSpacing: "-0.005em",
+                    }}
+                  >
+                    Infrastructure
+                  </h2>
                   <div
                     className="p-4 flex items-start gap-3"
                     style={{ background: "#0a0a0a", border: `1px solid ${badge.border}` }}
@@ -219,23 +366,37 @@ export default function ClawDetail() {
                   </div>
 
                   {/* CTA — fork template into Register & List wizard */}
-                  {claw.availability === "available" && (
-                    <div className="space-y-2">
-                      <button
-                        onClick={() => setLocation(`/deploy?use=${claw.id}`)}
-                        className="w-full py-3 font-bold text-sm flex items-center justify-center gap-2 transition-all"
-                        style={{ background: "#DDEA4D", color: "#000000" }}
-                        onMouseEnter={(e) => (e.currentTarget.style.background = "#e8f060")}
-                        onMouseLeave={(e) => (e.currentTarget.style.background = "#DDEA4D")}
-                      >
-                        <Copy size={13} />
-                        Use this agent
-                      </button>
-                      <p className="text-xs text-gray-500 font-mono-gmi text-center mt-1">
-                        Opens Register & List with image, env and ports pre-filled. Deploy your own copy.
-                      </p>
-                    </div>
-                  )}
+                  {claw.availability === "available" && (() => {
+                    const pullState = mockImagePullState(claw.id);
+                    const canClone = pullState !== "missing";
+                    return (
+                      <div className="space-y-3">
+                        <ImagePullStatus state={pullState} />
+                        <button
+                          disabled={!canClone}
+                          onClick={() => canClone && setLocation(`/deploy?use=${claw.id}`)}
+                          className="w-full py-3 font-bold text-sm flex items-center justify-center gap-2 transition-all"
+                          style={{
+                            background: canClone ? "#DDEA4D" : "#2a2a2a",
+                            color: canClone ? "#000000" : "#666",
+                            cursor: canClone ? "pointer" : "not-allowed",
+                          }}
+                          onMouseEnter={(e) => { if (canClone) (e.currentTarget as HTMLButtonElement).style.background = "#e8f060"; }}
+                          onMouseLeave={(e) => { if (canClone) (e.currentTarget as HTMLButtonElement).style.background = "#DDEA4D"; }}
+                        >
+                          <Copy size={13} />
+                          {pullState === "private" ? "Try demo ↗" : "Deploy your own ↗"}
+                        </button>
+                        <p className="text-xs text-gray-500 font-mono-gmi text-center mt-1">
+                          {pullState === "public"
+                            ? "Opens Register & List pre-filled with image, env declarations, and ports. You bring your own GMI key + billing."
+                            : pullState === "private"
+                              ? "Image is publisher-only — uses the publisher's running instance + their billing."
+                              : "Listing is broken; cloning is blocked until fixed."}
+                        </p>
+                      </div>
+                    );
+                  })()}
 
                   {claw.availability === "early_access" && (
                     <div className="space-y-3">

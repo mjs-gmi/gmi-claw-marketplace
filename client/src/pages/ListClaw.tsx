@@ -1,910 +1,1350 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
-import {
-  ArrowLeft, ArrowRight, CheckCircle, Info, Server,
-  ToggleLeft, ToggleRight, ChevronDown, Eye, EyeOff,
-  AlertTriangle, Loader2, Circle,
-} from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
-import { TypeLabel, TYPE_LABELS } from "@/lib/clawData";
-import { toast } from "sonner";
+import { TYPE_LABELS, type TypeLabel } from "@/lib/clawData";
 
-// ── Mock CE templates ─────────────────────────────────────────────────────────
-const MOCK_CE_TEMPLATES = [
-  { id: "tpl_9f3a-771e-contract", name: "contract-review-v2", runtime: "Node 20",      instances: 3 },
-  { id: "tpl_4b2c-code-review",   name: "code-review-agent",  runtime: "Python 3.11",  instances: 1 },
-  { id: "tpl_7d1e-rag-pipeline",  name: "rag-pipeline-v1",    runtime: "Python 3.11",  instances: 2 },
-];
+// ─── Tokens (kept in sync with DeployWizard / Dashboard / Marketplace) ──────
+const FONT = "'Geist', system-ui, sans-serif";
+const MONO = "'GeistMono', ui-monospace, monospace";
+const C = {
+  bg:         "#0a0a0a",
+  fg:         "#fafafa",
+  muted:      "#a3a3a3",
+  border:     "#404040",
+  borderSoft: "#262626",
+  card:       "rgba(23,23,23,0.95)",
+  cardSolid:  "#171717",
+  pillBg:     "rgba(82,82,82,0.3)",
+  lime:       "#DDEA4D",
+  limeText:   "#0a0a0a",
+  link:       "#5b94f0",
+  warn:       "#fbbf24",
+  ok:         "#34d399",
+  err:        "#f87171",
+} as const;
 
-const TYPE_DESCRIPTIONS: Record<TypeLabel, string> = {
-  "Code & Dev Tools":     "Code review, testing, debugging, devtools, dev productivity",
-  "Data & Analytics":     "Data pipelines, ETL, SQL, BI, observability, monitoring",
-  "Customer Support":     "Ticket triage, response drafting, escalation, customer service automation",
-  "Content & Marketing":  "Brand voice, copywriting, campaigns, SEO/GEO, social media",
-  "Research & Knowledge": "RAG over documents, legal/policy review, meeting intelligence",
+const TYPE_COLOR: Record<TypeLabel, string> = {
+  "Code & Dev Tools":     "#c7a7ff",
+  "Data & Analytics":     C.lime,
+  "Customer Support":     "#7dd3fc",
+  "Content & Marketing":  "#86efac",
+  "Research & Knowledge": "#f9a8d4",
 };
 
-function resolveBadge(path: "A" | "B", useMaaS: boolean) {
-  if (path === "B") return { label: "Powered by GMI MaaS", color: "#c084fc" };
-  if (useMaaS)      return { label: "Verified",             color: "#DDEA4D" };
-  return                   { label: "Powered by GMI CE",    color: "#7ec8ff" };
+// ─── Storage keys (shared with DeployWizard / Dashboard) ────────────────────
+const REGISTERED_AGENTS_KEY = "gmi:registered-agents";
+const LISTINGS_KEY          = "gmi:listings";
+
+// Stand-in for a real session — in production this comes from the auth/account
+// service. We auto-fill the Publisher field from this so the user doesn't have
+// to re-type their own org each time.
+function getCurrentUser() {
+  return { name: "Mingjun Sun", email: "mingjun.s@gmicloud.ai" };
 }
 
-function parseContext() {
-  const params = new URLSearchParams(window.location.search);
-  return {
-    from:        params.get("from") || "",
-    templateId:  params.get("templateId") || "",
-    projectName: params.get("projectName") || "",
-    projectId:   params.get("projectId") || "",
-    useMaaS:     params.get("useMaaS") === "true",
-  };
+type ListingState = "draft" | "pending_review" | "live" | "rejected";
+type HostMode     = "gmi" | "connect";
+
+interface RegisteredAgent {
+  id: string;
+  name: string;
+  templateId: string;
+  hostMode: HostMode;
+  maasKey: string;
+  accessUrl: string;
+  category: string;
+  registeredAt: string;
+  listingState?: ListingState;
+  // optional extras from DeployWizard
+  dockerImage?: string;
+  region?: string;
 }
 
-// ── Usage pre-check states ────────────────────────────────────────────────────
-type UsageCheckState = "idle" | "checking" | "pass" | "fail";
-
-// Simulate async usage check (in production: real API call)
-function simulateUsageCheck(key: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      // Keys ending in "0" or "fail" → no usage; everything else → pass
-      const noUsage = key.endsWith("0") || key.toLowerCase().includes("fail");
-      resolve(!noUsage);
-    }, 1200);
-  });
+interface ListingDraft {
+  agentId: string;
+  name: string;
+  publisher: string;
+  category: TypeLabel | "";
+  tags: string[];
+  shortDesc: string;
+  logoDataUrl: string;
+  fullDesc: string;
+  sampleOutputDataUrl: string;
+  // publicUrl: where marketplace browsers go to USE the agent (landing page,
+  // hosted demo, docs). Required for "connect" mode (no cloneable image, so
+  // this is the only way for users to access it). Optional for "gmi" mode
+  // (users can clone the image themselves via "Deploy your own").
+  publicUrl: string;
+  demoVideoUrl: string;
+  updatedAt: string;
 }
 
-const STEPS_A = ["Listing Info", "Review & Publish"];
-const STEPS_B = ["Infrastructure", "Listing Info", "Review & Publish"];
+const SHORT_DESC_MAX = 120;
+const TAG_MAX        = 5;
 
+// ─── localStorage helpers ───────────────────────────────────────────────────
+function loadAgent(): RegisteredAgent | null {
+  // Honor ?agentId=xxx to target a specific listing. Fall back to the latest
+  // registered agent (so the post-register success → "List on Agentbox" flow
+  // continues to Just Work without an explicit id).
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const wantedId = params.get("agentId");
+    const arr: RegisteredAgent[] = JSON.parse(localStorage.getItem(REGISTERED_AGENTS_KEY) || "[]");
+    if (!Array.isArray(arr) || arr.length === 0) return null;
+    if (wantedId) {
+      const match = arr.find((a) => a.id === wantedId);
+      if (match) return match;
+    }
+    return arr[0];
+  } catch { return null; }
+}
+
+function loadListing(agentId: string): ListingDraft | null {
+  try {
+    const obj = JSON.parse(localStorage.getItem(LISTINGS_KEY) || "{}");
+    return obj[agentId] || null;
+  } catch { return null; }
+}
+
+function saveListing(listing: ListingDraft) {
+  try {
+    const obj = JSON.parse(localStorage.getItem(LISTINGS_KEY) || "{}");
+    obj[listing.agentId] = listing;
+    localStorage.setItem(LISTINGS_KEY, JSON.stringify(obj));
+  } catch { /* ignore */ }
+}
+
+function flipAgentListingState(agentId: string, next: ListingState) {
+  try {
+    const arr: RegisteredAgent[] = JSON.parse(localStorage.getItem(REGISTERED_AGENTS_KEY) || "[]");
+    const idx = arr.findIndex((a) => a.id === agentId);
+    if (idx >= 0) {
+      arr[idx] = { ...arr[idx], listingState: next };
+      localStorage.setItem(REGISTERED_AGENTS_KEY, JSON.stringify(arr));
+    }
+  } catch { /* ignore */ }
+}
+
+// Same heuristic the wizard / ClawDetail uses — keeps probe truth consistent.
+type ImageProbe = "ok" | "private" | "missing" | "empty" | "n/a";
+function probeImage(image: string | undefined): ImageProbe {
+  if (image === undefined) return "n/a";
+  const v = image.trim().toLowerCase();
+  if (!v) return "empty";
+  if (v.includes("private") || v.includes("internal") || v.includes("ghcr.io/yourorg")) return "private";
+  if (v.includes("404") || v.includes("missing") || v.includes("does-not-exist")) return "missing";
+  return "ok";
+}
+
+// ─── Icons ──────────────────────────────────────────────────────────────────
+const Icon = {
+  back: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M19 12H5M12 19l-7-7 7-7"/>
+    </svg>
+  ),
+  check: () => (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 6 9 17l-5-5"/>
+    </svg>
+  ),
+  lock: () => (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+    </svg>
+  ),
+  ext: () => (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+    </svg>
+  ),
+  x: () => (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 6 6 18M6 6l12 12"/>
+    </svg>
+  ),
+  upload: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+    </svg>
+  ),
+};
+
+// ─── Page ───────────────────────────────────────────────────────────────────
 export default function ListClaw() {
   const [, setLocation] = useLocation();
-  const [ctx] = useState(parseContext);
 
-  const hasContext = ctx.from === "deploy" || ctx.from === "dashboard";
-  const path: "A" | "B" = ctx.from === "deploy" ? "A" : "B";
-  const STEPS = path === "A" ? STEPS_A : STEPS_B;
+  // Latest registered agent — pulled from localStorage on mount.
+  const [agent] = useState<RegisteredAgent | null>(loadAgent);
 
-  const [step,      setStep]      = useState(0);
-  const [submitted, setSubmitted] = useState(false);
-  const [useMaaS,   setUseMaaS]   = useState(ctx.useMaaS);
+  // Resolve initial listing values: existing draft → else prefill from agent.
+  // (Hooks must run unconditionally — guard is rendered below the hook block.)
+  const initial: ListingDraft = useMemo(() => {
+    if (!agent) {
+      return {
+        agentId: "", name: "", publisher: "", category: "",
+        tags: [], shortDesc: "", logoDataUrl: "", fullDesc: "",
+        sampleOutputDataUrl: "", publicUrl: "", demoVideoUrl: "",
+        updatedAt: "",
+      };
+    }
+    const existing = loadListing(agent.id);
+    if (existing) return { ...existing, publicUrl: existing.publicUrl ?? "" };
+    return {
+      agentId:             agent.id,
+      name:                agent.name || "",
+      publisher:           getCurrentUser().name, // auto-fill from account
+      category:            (agent.category as TypeLabel) || "",
+      tags:                [],
+      shortDesc:           "",
+      logoDataUrl:         "",
+      fullDesc:            "",
+      sampleOutputDataUrl: "",
+      publicUrl:           "",
+      demoVideoUrl:        "",
+      updatedAt:           "",
+    };
+  }, [agent]);
 
-  const [selectedTemplate, setSelectedTemplate] = useState(
-    ctx.templateId
-      ? MOCK_CE_TEMPLATES.find((t) => t.id === ctx.templateId) || MOCK_CE_TEMPLATES[0]
-      : MOCK_CE_TEMPLATES[0]
-  );
-  const [showTemplateDropdown, setShowTemplateDropdown] = useState(false);
+  const [draft, setDraft] = useState<ListingDraft>(initial);
+  const update = <K extends keyof ListingDraft>(k: K, v: ListingDraft[K]) =>
+    setDraft((p) => ({ ...p, [k]: v }));
 
-  // Path B infra fields
-  const [maasKey,     setMaasKey]     = useState("");
-  const [endpointUrl, setEndpointUrl] = useState("");
-  const [showKey,     setShowKey]     = useState(false);
-
-  // Usage pre-check state (Path B only)
-  const [usageCheck,     setUsageCheck]     = useState<UsageCheckState>("idle");
-  const [usageCheckDone, setUsageCheckDone] = useState(false); // true once checked at least once
-
-  const badge = resolveBadge(path, useMaaS);
-
-  const [form, setForm] = useState({
-    name:            ctx.projectName || "",
-    publisher:       "",
-    contact:         "",
-    typeLabel:       "" as TypeLabel | "",
-    description:     "",
-    fullDescription: "",
-    tags:            "",
-  });
-
-  const update = (field: string, value: string) =>
-    setForm((prev) => ({ ...prev, [field]: value }));
-
-  // Re-run usage check whenever maasKey changes (with debounce)
+  // Autosave — write to localStorage whenever draft changes. Replaces the
+  // explicit "Save draft" button so we can match production's single-CTA
+  // layout (only "Continue to Review →"). Skipped when draft.agentId is empty
+  // (no agent yet → NoAgentGuard handles it).
   useEffect(() => {
-    if (path !== "B") return;
-    if (!maasKey.trim()) {
-      setUsageCheck("idle");
-      setUsageCheckDone(false);
-      return;
-    }
-    const timer = setTimeout(async () => {
-      setUsageCheck("checking");
-      const pass = await simulateUsageCheck(maasKey);
-      setUsageCheck(pass ? "pass" : "fail");
-      setUsageCheckDone(true);
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [maasKey, path]);
+    if (!draft.agentId) return;
+    saveListing(draft);
+  }, [draft]);
 
-  const usageBlocked = path === "B" && usageCheckDone && usageCheck === "fail";
-
-  const canProceed = () => {
-    if (path === "B" && step === 0) {
-      if (usageBlocked) return false;
-      return (
-        maasKey.trim().length > 0 &&
-        endpointUrl.trim().startsWith("https://") &&
-        usageCheck === "pass"
-      );
-    }
-    const listingStep = path === "A" ? 0 : 1;
-    if (step === listingStep) {
-      return !!(
-        form.name.trim() &&
-        form.publisher.trim() &&
-        form.contact.trim() &&
-        form.typeLabel &&
-        form.description.trim() &&
-        form.fullDescription.trim()
-      );
-    }
-    return true;
-  };
-
-  const handleSubmit = () => {
-    if (usageBlocked) return; // extra guard
-    setSubmitted(true);
-    toast.success("Claw listed on Marketplace", {
-      description: "Your Claw is now live and discoverable.",
-    });
-  };
-
-  // ── Guard ─────────────────────────────────────────────────────────────────
-  if (!hasContext) {
-    return (
-      <div className="min-h-screen flex bg-black text-white">
-        <Topbar />
-        <Navbar />
-        <div className="flex-1 flex items-center justify-center" style={{ marginLeft: "210px", paddingTop: "40px" }}>
-          <div className="max-w-md px-8 text-center">
-            <div
-              className="w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-6"
-              style={{ background: "rgba(221,234,77,0.06)", border: "1px solid rgba(221,234,77,0.2)" }}
-            >
-              <Server size={22} style={{ color: "#DDEA4D" }} />
-            </div>
-            <h1 className="font-display text-2xl text-white mb-3" style={{ letterSpacing: "-0.03em" }}>
-              Register first, then list
-            </h1>
-            <p className="font-mono-gmi text-sm text-gray-400 leading-relaxed mb-8">
-              A Marketplace listing requires a deployed Claw on GMI infrastructure.
-              Register your Claw on Cluster Engine first — you'll be brought here automatically when it's ready.
-            </p>
-            <div className="flex flex-col gap-3 items-center">
-              <button
-                onClick={() => setLocation("/deploy")}
-                className="btn-primary-lime w-full px-6 py-3 text-sm font-bold flex items-center justify-center gap-2"
-              >
-                Register a Claw <ArrowRight size={14} />
-              </button>
-              <button
-                onClick={() => setLocation("/dashboard")}
-                className="btn-outline-dashed w-full px-6 py-2.5 text-sm"
-              >
-                Go to Dashboard
-              </button>
-            </div>
-            <p className="font-mono-gmi text-xs text-gray-600 mt-6">
-              Already deployed? Go to{" "}
-              <button className="underline" style={{ color: "#888" }} onClick={() => setLocation("/dashboard")}>
-                My Claws
-              </button>{" "}
-              and click "Create Listing" on any unlisted project.
-            </p>
-          </div>
-        </div>
-        <Footer />
-      </div>
-    );
+  // Empty state — no registered agent → show register-first guard.
+  if (!agent) {
+    return <NoAgentGuard onRegister={() => setLocation("/deploy")} onDashboard={() => setLocation("/dashboard")} />;
   }
 
-  // ── Success ───────────────────────────────────────────────────────────────
-  if (submitted) {
-    return (
-      <div className="min-h-screen flex bg-black text-white">
-        <Topbar />
-        <Navbar />
-        <div className="flex-1" style={{ marginLeft: "210px", paddingTop: "40px" }}>
-          <div className="pt-8 pb-20 flex items-center justify-center min-h-screen">
-            <div className="text-center max-w-md px-4">
-              <div
-                className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6"
-                style={{ background: "rgba(221,234,77,0.1)", border: "1px solid rgba(221,234,77,0.3)" }}
-              >
-                <CheckCircle size={28} style={{ color: "#DDEA4D" }} />
-              </div>
-              <h1 className="font-display text-3xl text-white mb-3">Claw Listed Successfully</h1>
-              <p className="text-gray-300 text-sm font-mono-gmi leading-relaxed mb-4">
-                <span className="text-white">{form.name || "Your Claw"}</span> is now live on the GMI Marketplace.
-                Confirmation sent to <span className="text-white">{form.contact}</span>.
-              </p>
-              <div
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 font-mono-gmi text-xs mb-8"
-                style={{ background: `${badge.color}12`, border: `1px solid ${badge.color}44`, color: badge.color }}
-              >
-                <CheckCircle size={10} />
-                {badge.label}
-              </div>
-              <div className="flex gap-3 justify-center">
-                <button
-                  onClick={() => setLocation("/dashboard")}
-                  className="btn-primary-lime px-6 py-2.5 text-sm font-bold flex items-center gap-2"
-                >
-                  Go to Dashboard <ArrowRight size={14} />
-                </button>
-                <button
-                  onClick={() => setLocation("/marketplace")}
-                  className="btn-outline-dashed px-6 py-2.5 text-sm"
-                >
-                  View Marketplace
-                </button>
-              </div>
-            </div>
-          </div>
-          <Footer />
-        </div>
-      </div>
-    );
-  }
+  const probe = probeImage(agent.dockerImage);
 
-  const listingInfoStep = path === "A" ? 0 : 1;
-  const reviewStep      = path === "A" ? 1 : 2;
+  // Agent Access URL — required ONLY for "Connect with GMI" listings (the
+  // publisher hosts the agent themselves, so they MUST provide a public URL
+  // for the "Try demo" CTA per M6 PRD §M6.2 / §M6.3). "Host on GMI" listings
+  // are cloneable via the "Deploy your own" CTA, so no Access URL is needed
+  // — we show no field at all.
+  const showPublicUrl = agent?.hostMode === "connect";
+
+  // Validation — minimum bar to submit for review.
+  const errors = useMemo(() => {
+    const e: Record<string, string> = {};
+    if (!draft.name.trim())               e.name      = "Agent name is required";
+    if (!draft.publisher.trim())          e.publisher = "Publisher name is required";
+    if (!draft.category)                  e.category  = "Pick a category";
+    if (!draft.shortDesc.trim())          e.shortDesc = "Add a short description for the card";
+    if (draft.shortDesc.length > SHORT_DESC_MAX) e.shortDesc = `Max ${SHORT_DESC_MAX} characters`;
+    // Full description is now optional — if blank, the detail page falls back
+    // to the short description plus auto-generated source info. Power users
+    // can expand "Add more details" and provide markdown.
+    if (showPublicUrl) {
+      if (!draft.publicUrl.trim()) e.publicUrl = "Required — users need a landing page to access your agent";
+      else if (!/^https?:\/\//i.test(draft.publicUrl.trim())) e.publicUrl = "Must start with https://";
+    }
+    return e;
+  }, [draft, showPublicUrl]);
+
+  const canSubmit = Object.keys(errors).length === 0;
+
+  const submitForReview = () => {
+    if (!canSubmit) return;
+    const finalDraft = { ...draft, updatedAt: new Date(2025, 0, 1).toISOString() };
+    saveListing(finalDraft);
+    flipAgentListingState(agent.id, "pending_review");
+    setLocation("/dashboard?listed=1");
+  };
+
+  const saveDraft = () => {
+    const finalDraft = { ...draft, updatedAt: new Date(2025, 0, 1).toISOString() };
+    saveListing(finalDraft);
+    // keep listingState as draft
+    setLocation("/dashboard?draft=1");
+  };
 
   return (
-    <div className="min-h-screen flex bg-black text-white">
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.fg, fontFamily: FONT }}>
       <Topbar />
       <Navbar />
 
-      <div className="flex-1" style={{ marginLeft: "210px", paddingTop: "40px" }}>
-        <div className="pt-8 pb-20">
-          <div className="px-8 max-w-3xl">
+      <div style={{ marginLeft: 210, paddingTop: 40, display: "flex", flexDirection: "column", minHeight: "100vh" }}>
 
-            {/* Back */}
-            <button
-              onClick={() =>
-                step === 0
-                  ? setLocation(ctx.from === "deploy" ? "/deploy" : "/dashboard")
-                  : setStep(step - 1)
-              }
-              className="flex items-center gap-2 text-gray-300 hover:text-white transition-colors font-mono-gmi text-xs mb-10"
-            >
-              <ArrowLeft size={13} />
-              {step === 0
-                ? ctx.from === "deploy" ? "Back to Register" : "Back to Dashboard"
-                : "Back"}
-            </button>
-
-            {/* Header */}
-            <div className="mb-6">
-              <div className="gmi-label mb-2">Marketplace · Create Listing</div>
-              <h1 className="font-display text-4xl text-white mb-2" style={{ letterSpacing: "-0.03em" }}>
-                List a Claw
+        {/* ── Header strip ─────────────────────────────────────────────── */}
+        <header style={{ padding: "20px 24px 16px", borderBottom: `1px solid ${C.borderSoft}` }}>
+          <button
+            onClick={() => setLocation("/dashboard")}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              background: "transparent", border: "none", color: C.muted, cursor: "pointer",
+              fontFamily: FONT, fontSize: 12, padding: 0, marginBottom: 10,
+            }}
+          >
+            <Icon.back /> My Agents
+          </button>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 32, flexWrap: "wrap" }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <h1 style={{ fontFamily: FONT, fontSize: 22, fontWeight: 600, letterSpacing: "-0.02em", margin: 0, lineHeight: "28px" }}>
+                List your Agent on the Marketplace
               </h1>
-              <p className="text-gray-300 text-sm font-mono-gmi">
-                Listings go live instantly — no review required.
+              <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, margin: "6px 0 0", lineHeight: "20px" }}>
+                Fill in what users will see, then submit for review. Your provisioned containers keep running either way.
               </p>
             </div>
+            <LifecycleStepper currentStep="list" />
+          </div>
+        </header>
 
-            {/* Path badge */}
-            <div className="flex items-center gap-3 mb-8">
-              <div
-                className="inline-flex items-center gap-1.5 px-3 py-1 font-mono-gmi text-xs"
-                style={
-                  path === "A"
-                    ? { background: "rgba(221,234,77,0.06)", border: "1px solid rgba(221,234,77,0.25)", color: "#DDEA4D" }
-                    : { background: "rgba(96,165,250,0.06)", border: "1px solid rgba(96,165,250,0.25)", color: "#60a5fa" }
-                }
-              >
-                {path === "A" ? "Path A · GMI CE Deployment" : "Path B · Self-hosted + MaaS"}
-              </div>
-              <span className="font-mono-gmi text-xs text-gray-600">
-                {path === "A"
-                  ? "CE template detected — linking your deployment to this listing"
-                  : "No CE template found — you'll provide your own endpoint + MaaS key"}
-              </span>
-            </div>
+        {/* ── Body: form + sticky live preview ─────────────────────────── */}
+        <section
+          style={{
+            flex: 1,
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1fr) 320px",
+            gap: 24,
+            padding: "16px 24px 96px",
+            alignItems: "start",
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
 
-            {/* Step indicator */}
-            <div className="flex items-center gap-0 mb-10">
-              {STEPS.map((s, i) => (
-                <div key={s} className="flex items-center">
-                  <div className="flex items-center gap-2">
-                    <div
-                      className="w-6 h-6 flex items-center justify-center text-xs font-mono-gmi font-bold"
-                      style={{
-                        background: i <= step ? (path === "A" ? "#DDEA4D" : "#60a5fa") : "#111",
-                        color: i <= step ? "#000" : "#999",
-                        border: i <= step ? "none" : "1px solid #2a2a2a",
-                      }}
-                    >
-                      {i < step ? "✓" : i + 1}
-                    </div>
-                    <span
-                      className="font-mono-gmi text-xs"
-                      style={{ color: i === step ? "#fff" : "#555" }}
-                    >
-                      {s}
-                    </span>
-                  </div>
-                  {i < STEPS.length - 1 && (
-                    <div
-                      className="w-8 h-px mx-3"
-                      style={{ background: i < step ? (path === "A" ? "#DDEA4D" : "#60a5fa") : "#2a2a2a" }}
-                    />
-                  )}
-                </div>
-              ))}
-            </div>
+            {/* 1) Link a Template — picks which registered agent this
+                 listing is for. Pre-selected from ?agentId or latest. After
+                 selection, shows the auto-detected hosting mode + image. */}
+            <TemplatePicker
+              agent={agent}
+              probe={probe}
+              onEditRegistration={() => setLocation("/deploy")}
+            />
 
-            {/* ── PATH B · Step 0: Infrastructure ── */}
-            {path === "B" && step === 0 && (
-              <div className="space-y-6">
-
-                {/* Context note */}
-                <div
-                  className="flex items-start gap-3 p-4 font-mono-gmi text-xs"
-                  style={{ background: "rgba(96,165,250,0.04)", border: "1px solid rgba(96,165,250,0.2)" }}
+            {/* 2) Essentials — the bare minimum needed to publish.
+                 Everything else lives in the collapsible "Add more details"
+                 block below — listings are living docs that can be polished
+                 later via Edit listing. */}
+            <FlatSection
+              title="The essentials"
+              subtitle="Five fields. Everything else is polish you can add later."
+            >
+              <Row>
+                <Field label="Agent name" required error={errors.name}>
+                  <TextInput
+                    value={draft.name}
+                    onChange={(v) => update("name", v)}
+                    placeholder="e.g. Contract Review Agent"
+                  />
+                </Field>
+                <Field
+                  label="Category"
+                  required
+                  error={errors.category}
+                  hint="Where users find you in Browse Agents."
                 >
-                  <Info size={13} className="shrink-0 mt-0.5" style={{ color: "#60a5fa" }} />
-                  <div style={{ color: "#93c5fd" }}>
-                    No GMI CE deployment was found for this project. To list on the Marketplace,
-                    provide a <strong>project-scoped GMI MaaS API key</strong> and your{" "}
-                    <strong>external HTTPS endpoint</strong>. GMI will proxy consumer requests to your endpoint.
-                  </div>
-                </div>
-
-                {/* ── Usage blocking banner (shown when check fails) ── */}
-                {usageBlocked && (
+                  <Select
+                    value={draft.category}
+                    onChange={(v) => update("category", v as TypeLabel | "")}
+                    options={TYPE_LABELS}
+                    placeholder="Pick a category"
+                  />
+                </Field>
+              </Row>
+              <Field
+                label="Publisher"
+                required
+                error={errors.publisher}
+              >
+                <TextInput
+                  value={draft.publisher}
+                  onChange={(v) => update("publisher", v)}
+                  placeholder="e.g. Acme Labs"
+                />
+              </Field>
+              <Field
+                label="Short description"
+                required
+                error={errors.shortDesc}
+                hint={`${draft.shortDesc.length}/${SHORT_DESC_MAX} characters — one tight sentence about what it does.`}
+                hintAlign="right"
+              >
+                <TextArea
+                  value={draft.shortDesc}
+                  onChange={(v) => update("shortDesc", v.slice(0, SHORT_DESC_MAX))}
+                  placeholder="Real-time document translation across 40+ languages, hosted on Acme infrastructure."
+                  rows={2}
+                />
+              </Field>
+              {showPublicUrl ? (
+                <>
+                  <Field
+                    label="Agent Access URL"
+                    required
+                    error={errors.publicUrl}
+                    hint="This link directs to your agent. Public landing page, demo, docs or another repo — anywhere users can interact with what you built. Pre-filled from your registration; override to a different URL if you want."
+                  >
+                    <TextInput
+                      value={draft.publicUrl || agent.accessUrl || ""}
+                      onChange={(v) => update("publicUrl", v)}
+                      placeholder="https://your-agent.yourdomain.com"
+                    />
+                  </Field>
+                  {/* Connect mode — light explainer of how the URL is used.
+                      Try demo just links out; nothing of the publisher is
+                      copied or exposed. */}
                   <div
-                    className="flex items-start gap-3 p-4 font-mono-gmi text-xs"
                     style={{
-                      background: "rgba(248,113,113,0.06)",
-                      border: "1px solid rgba(248,113,113,0.35)",
+                      background: "rgba(125,211,252,0.04)",
+                      border: `1px solid rgba(125,211,252,0.20)`,
+                      borderRadius: 8,
+                      padding: "8px 12px",
+                      display: "flex", alignItems: "center", gap: 8,
+                      fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "18px",
                     }}
                   >
-                    <AlertTriangle size={14} className="shrink-0 mt-0.5" style={{ color: "#f87171" }} />
-                    <div>
-                      <div className="font-bold mb-1" style={{ color: "#fca5a5" }}>
-                        MaaS Key has no usage
-                      </div>
-                      <div style={{ color: "#f87171" }} className="leading-relaxed">
-                        To list on the Marketplace, your GMI MaaS key must have at least one inference call recorded.
-                        This confirms your Claw is actively using GMI infrastructure.
-                        Make at least one inference call with this key, then try again.
-                      </div>
-                      <div className="mt-2 flex items-center gap-3">
-                        <a
-                          href="#"
-                          className="underline"
-                          style={{ color: "#fca5a5" }}
-                          onClick={(e) => e.preventDefault()}
-                        >
-                          View MaaS usage dashboard →
-                        </a>
-                        <span style={{ color: "#7f1d1d" }}>·</span>
-                        <a
-                          href="#"
-                          className="underline"
-                          style={{ color: "#fca5a5" }}
-                          onClick={(e) => e.preventDefault()}
-                        >
-                          API Quickstart →
-                        </a>
-                      </div>
-                    </div>
+                    <span style={{ color: "#7dd3fc", display: "inline-flex" }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                      </svg>
+                    </span>
+                    <span>
+                      <span style={{ color: C.fg, fontWeight: 500 }}>Users see a Try demo ↗ button</span> pointing to this URL. You host the agent and own uptime — nothing of yours is shared.
+                    </span>
                   </div>
-                )}
-
-                {/* MaaS API Key */}
-                <div>
-                  <label className="gmi-label block mb-2">GMI MaaS API Key *</label>
-                  <div className="relative">
-                    <input
-                      type={showKey ? "text" : "password"}
-                      value={maasKey}
-                      onChange={(e) => setMaasKey(e.target.value)}
-                      placeholder="gmi_maas_proj_••••••••••••••••"
-                      className="w-full bg-transparent px-4 py-3 pr-20 text-sm text-white font-mono-gmi outline-none"
-                      style={{
-                        border: `1px solid ${
-                          usageCheck === "fail" ? "rgba(248,113,113,0.5)" :
-                          usageCheck === "pass" ? "rgba(74,222,128,0.5)" :
-                          "#2a2a2a"
-                        }`,
-                      }}
-                      onFocus={(e) => {
-                        if (usageCheck !== "fail" && usageCheck !== "pass")
-                          e.currentTarget.style.borderColor = "#60a5fa";
-                      }}
-                      onBlur={(e) => {
-                        if (usageCheck !== "fail" && usageCheck !== "pass")
-                          e.currentTarget.style.borderColor = "#2a2a2a";
-                      }}
-                    />
-                    {/* Right side: show/hide + check status */}
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                      {usageCheck === "checking" && (
-                        <Loader2 size={13} className="animate-spin" style={{ color: "#60a5fa" }} />
-                      )}
-                      {usageCheck === "pass" && (
-                        <CheckCircle size={13} style={{ color: "#4ade80" }} />
-                      )}
-                      {usageCheck === "fail" && (
-                        <AlertTriangle size={13} style={{ color: "#f87171" }} />
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => setShowKey((v) => !v)}
-                        className="text-gray-500 hover:text-gray-300"
-                      >
-                        {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Inline status message below key field */}
-                  {usageCheck === "checking" && (
-                    <p className="text-xs font-mono-gmi mt-1.5 flex items-center gap-1.5" style={{ color: "#60a5fa" }}>
-                      <Loader2 size={10} className="animate-spin" />
-                      Checking MaaS usage…
-                    </p>
-                  )}
-                  {usageCheck === "pass" && (
-                    <p className="text-xs font-mono-gmi mt-1.5 flex items-center gap-1.5" style={{ color: "#4ade80" }}>
-                      <CheckCircle size={10} />
-                      Usage confirmed — key is eligible for listing.
-                    </p>
-                  )}
-                  {usageCheck === "fail" && (
-                    <p className="text-xs font-mono-gmi mt-1.5 flex items-center gap-1.5" style={{ color: "#f87171" }}>
-                      <AlertTriangle size={10} />
-                      No usage found. Listing is blocked.
-                    </p>
-                  )}
-                  {usageCheck === "idle" && (
-                    <p className="text-xs text-gray-600 font-mono-gmi mt-1">
-                      Must be a project-scoped key (prefix: <code className="text-gray-400">gmi_maas_proj_</code>).
-                      Generate one in{" "}
-                      <span className="underline cursor-pointer text-gray-400">Settings → API Keys</span>.
-                    </p>
-                  )}
-                </div>
-
-                {/* External Endpoint URL */}
-                <div>
-                  <label className="gmi-label block mb-2">External Endpoint URL *</label>
-                  <input
-                    type="url"
-                    value={endpointUrl}
-                    onChange={(e) => setEndpointUrl(e.target.value)}
-                    placeholder="https://your-agent.example.com/v1/invoke"
-                    className="w-full bg-transparent px-4 py-3 text-sm text-white font-mono-gmi outline-none"
-                    style={{ border: "1px solid #2a2a2a" }}
-                    onFocus={(e) => (e.currentTarget.style.borderColor = "#60a5fa")}
-                    onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                  />
-                  <p className="text-xs text-gray-600 font-mono-gmi mt-1">
-                    Must be HTTPS. GMI proxies consumer requests to this URL — your endpoint must be publicly reachable.
-                    You are responsible for uptime and latency.
-                  </p>
-                  {endpointUrl && !endpointUrl.startsWith("https://") && (
-                    <p className="text-xs font-mono-gmi mt-1" style={{ color: "#f87171" }}>
-                      Endpoint must start with https://
-                    </p>
-                  )}
-                </div>
-
-                {/* Badge preview */}
-                <div className="flex items-center gap-2 font-mono-gmi text-xs text-gray-500">
-                  <span>Badge on listing:</span>
-                  <span
-                    className="inline-flex items-center gap-1 px-2 py-0.5"
-                    style={{ background: "#c084fc12", border: "1px solid #c084fc44", color: "#c084fc" }}
-                  >
-                    <CheckCircle size={9} />
-                    Powered by GMI MaaS
-                  </span>
-                </div>
-
-                <div
-                  className="flex items-start gap-2 p-3 font-mono-gmi text-xs"
-                  style={{ background: "#0a0a0a", border: "1px solid #1e1e1e", color: "#666" }}
-                >
-                  <Info size={12} className="shrink-0 mt-0.5" />
-                  <span>
-                    Want the <span style={{ color: "#DDEA4D" }}>Verified</span> badge and GMI-managed infrastructure?{" "}
-                    <button
-                      className="underline"
-                      style={{ color: "#888" }}
-                      onClick={() => setLocation("/deploy")}
-                    >
-                      Register with GMI CE instead →
-                    </button>
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {/* ── PATH A · Step 0 / PATH B · Step 1: Listing Info ── */}
-            {step === listingInfoStep && (
-              <div className="space-y-6">
-
-                {/* Path A: CE Template selector + MaaS toggle */}
-                {path === "A" && (
-                  <div className="space-y-4 pb-2">
-                    <div>
-                      <label className="gmi-label block mb-2">CE Template *</label>
-                      <div className="relative">
-                        <button
-                          type="button"
-                          onClick={() => setShowTemplateDropdown((v) => !v)}
-                          className="w-full flex items-center justify-between px-4 py-3 text-sm font-mono-gmi text-white text-left"
-                          style={{ background: "#0a0a0a", border: "1px solid #2a2a2a" }}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="w-2 h-2 rounded-full" style={{ background: "#DDEA4D" }} />
-                            <span>{selectedTemplate.name}</span>
-                            <span className="text-gray-500 text-xs">{selectedTemplate.id}</span>
-                          </div>
-                          <ChevronDown size={14} className="text-gray-500" />
-                        </button>
-                        {showTemplateDropdown && (
-                          <div
-                            className="absolute top-full left-0 right-0 z-10 mt-1"
-                            style={{ background: "#111", border: "1px solid #2a2a2a" }}
-                          >
-                            {MOCK_CE_TEMPLATES.map((tpl) => (
-                              <button
-                                key={tpl.id}
-                                type="button"
-                                onClick={() => { setSelectedTemplate(tpl); setShowTemplateDropdown(false); }}
-                                className="w-full flex items-center justify-between px-4 py-3 text-sm font-mono-gmi text-left hover:bg-white/5 transition-colors"
-                              >
-                                <div className="flex items-center gap-3">
-                                  <div
-                                    className="w-2 h-2 rounded-full"
-                                    style={{ background: tpl.id === selectedTemplate.id ? "#DDEA4D" : "#333" }}
-                                  />
-                                  <span className="text-white">{tpl.name}</span>
-                                  <span className="text-gray-500 text-xs">{tpl.runtime}</span>
-                                </div>
-                                <span className="text-gray-600 text-xs">{tpl.instances} inst.</span>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      <p className="text-xs text-gray-600 font-mono-gmi mt-1">
-                        This CE template will be linked to the listing. Consumers access your Claw through GMI's infrastructure.
-                      </p>
-                    </div>
-
-                    {/* MaaS toggle */}
-                    <div
-                      className="flex items-center justify-between p-4"
-                      style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}
-                    >
-                      <div>
-                        <div className="font-mono-gmi text-sm text-white mb-0.5">Also using GMI MaaS?</div>
-                        <div className="font-mono-gmi text-xs text-gray-500">
-                          Enables the{" "}
-                          <span style={{ color: "#DDEA4D" }}>Verified</span> badge
-                          {" "}(vs{" "}
-                          <span style={{ color: "#7ec8ff" }}>Powered by GMI CE</span>)
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => setUseMaaS((v) => !v)}
-                        className="flex items-center gap-2 font-mono-gmi text-xs transition-colors"
-                      >
-                        {useMaaS
-                          ? <ToggleRight size={28} style={{ color: "#DDEA4D" }} />
-                          : <ToggleLeft size={28} style={{ color: "#444" }} />}
-                      </button>
-                    </div>
-
-                    {/* Live badge preview */}
-                    <div className="flex items-center gap-2 font-mono-gmi text-xs text-gray-500">
-                      <span>Badge preview:</span>
-                      <span
-                        className="inline-flex items-center gap-1 px-2 py-0.5"
-                        style={{
-                          background: `${badge.color}12`,
-                          border: `1px solid ${badge.color}44`,
-                          color: badge.color,
-                        }}
-                      >
-                        <CheckCircle size={9} />
-                        {badge.label}
-                      </span>
-                    </div>
-                    <div style={{ borderTop: "1px solid #1a1a1a" }} />
-                  </div>
-                )}
-
-                {/* Claw Name */}
-                <div>
-                  <label className="gmi-label block mb-2">Listing Name *</label>
-                  <input
-                    type="text"
-                    value={form.name}
-                    onChange={(e) => update("name", e.target.value)}
-                    placeholder="e.g. Contract Review Agent"
-                    className="w-full bg-transparent px-4 py-3 text-sm text-white font-mono-gmi outline-none"
-                    style={{ border: "1px solid #2a2a2a" }}
-                    onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-                    onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                  />
-                  <p className="text-xs text-gray-600 font-mono-gmi mt-1">
-                    Public-facing name on the Marketplace. Your internal project name stays private.
-                  </p>
-                </div>
-
-                {/* Publisher + Contact */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="gmi-label block mb-2">Publisher Name *</label>
-                    <input
-                      type="text"
-                      value={form.publisher}
-                      onChange={(e) => update("publisher", e.target.value)}
-                      placeholder="Your company or name"
-                      className="w-full bg-transparent px-4 py-3 text-sm text-white font-mono-gmi outline-none"
-                      style={{ border: "1px solid #2a2a2a" }}
-                      onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-                      onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                    />
-                  </div>
-                  <div>
-                    <label className="gmi-label block mb-2">Contact Email *</label>
-                    <input
-                      type="email"
-                      value={form.contact}
-                      onChange={(e) => update("contact", e.target.value)}
-                      placeholder="you@company.com"
-                      className="w-full bg-transparent px-4 py-3 text-sm text-white font-mono-gmi outline-none"
-                      style={{ border: "1px solid #2a2a2a" }}
-                      onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-                      onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                    />
-                  </div>
-                </div>
-
-                {/* Type Label */}
-                <div>
-                  <label className="gmi-label block mb-2">Claw Type *</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    {TYPE_LABELS.map((type) => (
-                      <button
-                        key={type}
-                        onClick={() => update("typeLabel", type)}
-                        className="text-left p-4 transition-all"
-                        style={{
-                          background: form.typeLabel === type ? "rgba(221,234,77,0.06)" : "#0a0a0a",
-                          border: `1px solid ${form.typeLabel === type ? "#DDEA4D" : "#2a2a2a"}`,
-                        }}
-                      >
-                        <div
-                          className="font-mono-gmi text-sm font-bold mb-1"
-                          style={{ color: form.typeLabel === type ? "#DDEA4D" : "#888" }}
-                        >
-                          {type}
-                        </div>
-                        <div className="text-xs text-gray-400 leading-relaxed">{TYPE_DESCRIPTIONS[type]}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Short description */}
-                <div>
-                  <label className="gmi-label block mb-2">
-                    Short Description * <span className="text-gray-500 normal-case">(shown on Marketplace card)</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={form.description}
-                    onChange={(e) => update("description", e.target.value)}
-                    placeholder="One sentence describing what this Claw does"
-                    maxLength={120}
-                    className="w-full bg-transparent px-4 py-3 text-sm text-white font-mono-gmi outline-none"
-                    style={{ border: "1px solid #2a2a2a" }}
-                    onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-                    onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                  />
-                  <div className="text-xs text-gray-500 font-mono-gmi mt-1 text-right">{form.description.length}/120</div>
-                </div>
-
-                {/* Full description */}
-                <div>
-                  <label className="gmi-label block mb-2">
-                    Full Description * <span className="text-gray-500 normal-case">(shown on detail page)</span>
-                  </label>
-                  <textarea
-                    value={form.fullDescription}
-                    onChange={(e) => update("fullDescription", e.target.value)}
-                    placeholder="Describe what your Claw does, who it's for, what inputs it accepts, and what outputs it produces."
-                    rows={5}
-                    className="w-full bg-transparent px-4 py-3 text-sm text-white font-mono-gmi outline-none resize-none"
-                    style={{ border: "1px solid #2a2a2a" }}
-                    onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-                    onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                  />
-                </div>
-
-                {/* Tags */}
-                <div>
-                  <label className="gmi-label block mb-2">
-                    Tags <span className="text-gray-500 normal-case">(comma-separated)</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={form.tags}
-                    onChange={(e) => update("tags", e.target.value)}
-                    placeholder="e.g. Security, Solidity, Audit"
-                    className="w-full bg-transparent px-4 py-3 text-sm text-white font-mono-gmi outline-none"
-                    style={{ border: "1px solid #2a2a2a" }}
-                    onFocus={(e) => (e.currentTarget.style.borderColor = "#DDEA4D")}
-                    onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                  />
-                </div>
-
-                <div className="flex items-start gap-2 font-mono-gmi text-xs text-gray-600">
-                  <Info size={12} className="shrink-0 mt-0.5" />
-                  <span>
-                    Listing is separate from deployment. Consumers access your Claw through GMI's infrastructure — your internal endpoint is never exposed.{" "}
-                    <span className="underline cursor-pointer">Learn more →</span>
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {/* ── Review step ── */}
-            {step === reviewStep && (
-              <div className="space-y-6">
-
-                {/* Two-column layout: listing summary + pre-submit checks */}
-                <div className="grid grid-cols-3 gap-6">
-
-                  {/* Left: listing summary (2/3 width) */}
-                  <div className="col-span-2 p-6 space-y-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                    <div className="flex items-center justify-between">
-                      <h2 className="font-display text-lg text-white">Review Listing</h2>
-                      <span
-                        className="inline-flex items-center gap-1 px-2.5 py-1 font-mono-gmi text-xs"
-                        style={{
-                          background: `${badge.color}12`,
-                          border: `1px solid ${badge.color}44`,
-                          color: badge.color,
-                        }}
-                      >
-                        <CheckCircle size={9} />
-                        {badge.label}
-                      </span>
-                    </div>
-
-                    {[
-                      { label: "Listing Name",     value: form.name },
-                      { label: "Publisher",         value: form.publisher },
-                      { label: "Contact",           value: form.contact },
-                      { label: "Type",              value: form.typeLabel },
-                      { label: "Short Description", value: form.description },
-                      { label: "Tags",              value: form.tags || "—" },
-                      path === "A"
-                        ? { label: "CE Template", value: `${selectedTemplate.name} · ${selectedTemplate.id}` }
-                        : { label: "Endpoint",    value: endpointUrl },
-                    ].map(({ label, value }) => (
-                      <div key={label} className="grid grid-cols-3 gap-4" style={{ borderTop: "1px solid #111", paddingTop: "0.75rem" }}>
-                        <div className="gmi-label text-gray-500">{label}</div>
-                        <div className="col-span-2 font-mono-gmi text-sm text-gray-300 break-all">{value}</div>
-                      </div>
-                    ))}
-
-                    <div style={{ borderTop: "1px solid #1e1e1e", paddingTop: "1rem" }}>
-                      <div className="gmi-label text-gray-500 mb-2">Full Description</div>
-                      <div className="font-mono-gmi text-sm text-gray-400 leading-relaxed">{form.fullDescription}</div>
-                    </div>
-                  </div>
-
-                  {/* Right: Pre-submit checks (1/3 width) */}
-                  <div className="p-5 space-y-4" style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}>
-                    <div className="gmi-label text-gray-400 mb-3">Pre-submit Checks</div>
-
-                    {/* Check 1: MaaS Key has usage — Path B only */}
-                    {path === "B" && (
-                      <div className="flex items-start gap-2 font-mono-gmi text-xs">
-                        <CheckCircle size={12} className="shrink-0 mt-0.5" style={{ color: "#4ade80" }} />
-                        <span style={{ color: "#86efac" }}>MaaS Key has usage</span>
-                      </div>
-                    )}
-
-                    {/* Check 2: Endpoint reachable — Path B only */}
-                    {path === "B" && (
-                      <div className="flex items-start gap-2 font-mono-gmi text-xs">
-                        <CheckCircle size={12} className="shrink-0 mt-0.5" style={{ color: "#4ade80" }} />
-                        <span style={{ color: "#86efac" }}>Endpoint reachable (HTTP 200)</span>
-                      </div>
-                    )}
-
-                    {/* Check 3: Listing review on submit */}
-                    <div className="flex items-start gap-2 font-mono-gmi text-xs">
-                      <Circle size={12} className="shrink-0 mt-0.5" style={{ color: "#555" }} />
-                      <span style={{ color: "#666" }}>Listing review on submit</span>
-                    </div>
-
-                    {/* Path A: CE template linked */}
-                    {path === "A" && (
-                      <div className="flex items-start gap-2 font-mono-gmi text-xs">
-                        <CheckCircle size={12} className="shrink-0 mt-0.5" style={{ color: "#4ade80" }} />
-                        <span style={{ color: "#86efac" }}>CE template linked</span>
-                      </div>
-                    )}
-
-                    <div style={{ borderTop: "1px solid #1a1a1a", paddingTop: "0.75rem" }}>
-                      <div className="font-mono-gmi text-xs" style={{ color: "#444" }}>
-                        Listings go live immediately after submission. No manual review required.
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div
-                  className="flex items-start gap-3 p-4 font-mono-gmi text-xs"
-                  style={{ background: "rgba(221,234,77,0.04)", border: "1px solid rgba(221,234,77,0.2)", color: "#DDEA4D" }}
-                >
-                  <CheckCircle size={14} className="shrink-0 mt-0.5" />
-                  <div>
-                    By publishing, you confirm this Claw complies with the{" "}
-                    <span className="underline cursor-pointer">GMI Marketplace Guidelines</span>.
-                    Your listing will go live immediately. Confirmation to {form.contact}.
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Navigation */}
-            <div className="flex items-center justify-between mt-10">
-              <button
-                onClick={() =>
-                  step === 0
-                    ? setLocation(ctx.from === "deploy" ? "/deploy" : "/dashboard")
-                    : setStep(step - 1)
-                }
-                className="btn-outline-dashed px-6 py-2.5 text-sm flex items-center gap-2"
-              >
-                <ArrowLeft size={14} />
-                {step === 0
-                  ? ctx.from === "deploy" ? "Back to Register" : "Back to Dashboard"
-                  : "Back"}
-              </button>
-
-              {step < STEPS.length - 1 ? (
-                <button
-                  onClick={() => setStep(step + 1)}
-                  disabled={!canProceed()}
-                  className="btn-primary-lime px-8 py-2.5 text-sm font-bold flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  Continue <ArrowRight size={14} />
-                </button>
+                </>
               ) : (
-                <button
-                  onClick={handleSubmit}
-                  disabled={usageBlocked}
-                  className="btn-primary-lime px-8 py-2.5 text-sm font-bold flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                // Host on GMI — M6.5 §"Consent at publish": one strong reminder
+                // that the publisher is opting into letting others clone their
+                // image + config. Definition-list layout — keeps the strong
+                // consent presence but drops the bullet/column visual noise.
+                <div
+                  style={{
+                    background: "rgba(221,234,77,0.06)",
+                    border: `1px solid rgba(221,234,77,0.35)`,
+                    borderRadius: 10,
+                    padding: "12px 14px",
+                    display: "flex", flexDirection: "column", gap: 8,
+                  }}
                 >
-                  Publish Claw <CheckCircle size={14} />
-                </button>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: C.lime, display: "inline-flex" }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20 6 9 17l-5-5"/>
+                      </svg>
+                    </span>
+                    <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>
+                      Deploy-your-own listing
+                    </span>
+                    <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>
+                      — others get a copy of your image
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "auto 1fr",
+                      columnGap: 14,
+                      rowGap: 4,
+                      fontFamily: FONT, fontSize: 12, lineHeight: "18px",
+                    }}
+                  >
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase", alignSelf: "center" }}>
+                      Copied
+                    </span>
+                    <span style={{ color: C.fg }}>
+                      image <span style={{ color: C.muted }}>·</span> env names + defaults <span style={{ color: C.muted }}>·</span> ports + infra config
+                    </span>
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase", alignSelf: "center" }}>
+                      Not copied
+                    </span>
+                    <span style={{ color: C.fg }}>
+                      your secrets <span style={{ color: C.muted }}>·</span> GMI Models key
+                    </span>
+                  </div>
+                </div>
+              )}
+            </FlatSection>
+
+            {/* 3) Add more details — collapsed by default. The fields here
+                 are all optional and polish the public detail page. */}
+            <CollapsibleSection
+              title="Add more details"
+              subtitle="Optional · all of these can be added now or later via Edit listing"
+              defaultOpen={false}
+              badge={countPolishFilled(draft)}
+            >
+              <Field
+                label="Full description"
+                hint="Markdown supported — use ## What it does and ## How it works. If blank, your short description appears on the detail page."
+              >
+                <TextArea
+                  value={draft.fullDesc}
+                  onChange={(v) => update("fullDesc", v)}
+                  placeholder={"## What it does\nAcme Translate runs glossary-aware document translation across 40+ language pairs.\n\n## How it works\nHosted on Acme infra with GMI Models as the underlying model layer."}
+                  rows={6}
+                  monospace
+                />
+              </Field>
+              <Row>
+                <Field label="Logo" hint="Square PNG/JPG up to 256×256. Auto-generated from name + category if blank.">
+                  <LogoUploader
+                    value={draft.logoDataUrl}
+                    onChange={(v) => update("logoDataUrl", v)}
+                    fallbackName={draft.name || agent.name}
+                    fallbackColor={draft.category ? TYPE_COLOR[draft.category as TypeLabel] : C.lime}
+                  />
+                </Field>
+                <Field label="Tags" hint={`Up to ${TAG_MAX}. Press Enter to add.`}>
+                  <TagInput
+                    tags={draft.tags}
+                    onChange={(t) => update("tags", t)}
+                    max={TAG_MAX}
+                  />
+                </Field>
+              </Row>
+              <Field label="Demo video URL" hint="YouTube / Loom / Vimeo — embedded above the description on the detail page.">
+                <TextInput
+                  value={draft.demoVideoUrl}
+                  onChange={(v) => update("demoVideoUrl", v)}
+                  placeholder="https://"
+                />
+              </Field>
+            </CollapsibleSection>
+          </div>
+
+          {/* ── Right column: live preview card + inline CTA (matches
+                production's Continue to Review pattern — no sticky bottom bar) */}
+          <aside style={{ position: "sticky", top: 88, display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+              Live Card Preview
+            </div>
+            <LivePreviewCard draft={draft} fallbackName={agent.name} />
+
+            {/* Detail-page CTA mock — surfaces the mode (Cloneable vs Try demo)
+                visually so the publisher sees what button users will see when
+                they click into the listing. Pairs with the inline outcome chip
+                in the Link a Template section. */}
+            <div
+              style={{
+                background: C.cardSolid,
+                border: `1px solid ${C.borderSoft}`,
+                borderRadius: 10,
+                padding: "10px 12px",
+                display: "flex", flexDirection: "column", gap: 8,
+              }}
+            >
+              <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                On detail page · users see
+              </div>
+              {agent.hostMode === "connect" ? (
+                <>
+                  <div
+                    style={{
+                      fontFamily: FONT, fontSize: 12, fontWeight: 700,
+                      background: C.lime, color: C.limeText,
+                      border: "none",
+                      padding: "8px 12px", borderRadius: 8,
+                      display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
+                      width: "100%",
+                    }}
+                  >
+                    Try demo <Icon.ext />
+                  </div>
+                  <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+                    Points to your URL — you host, you own uptime.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div
+                    style={{
+                      fontFamily: FONT, fontSize: 12, fontWeight: 700,
+                      background: C.lime, color: C.limeText,
+                      border: "none",
+                      padding: "8px 12px", borderRadius: 8,
+                      display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
+                      width: "100%",
+                    }}
+                  >
+                    Deploy your own <Icon.ext />
+                  </div>
+                  <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+                    Clones your image into the user's own account.
+                  </div>
+                </>
               )}
             </div>
 
-          </div>
-        </div>
+            <button
+              onClick={submitForReview}
+              disabled={!canSubmit}
+              style={{
+                marginTop: 4,
+                fontFamily: FONT, fontSize: 13, fontWeight: 700,
+                background: canSubmit ? C.lime : "rgba(221,234,77,0.25)",
+                color: canSubmit ? C.limeText : "rgba(10,10,10,0.5)",
+                border: "none",
+                padding: "10px 18px", borderRadius: 8,
+                cursor: canSubmit ? "pointer" : "not-allowed",
+                display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
+                width: "100%",
+              }}
+            >
+              Continue to Review <Icon.ext />
+            </button>
+
+            <p style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px", margin: 0, padding: "2px 2px" }}>
+              Listing review runs on submit · auto-approved if it passes. Unpublish anytime — provisioned containers unaffected.
+            </p>
+
+            {/* Image probe hint (only when Host on GMI + non-public image) */}
+            {agent.hostMode === "gmi" && (probe === "private" || probe === "missing") && (
+              <ProbeHint probe={probe} image={agent.dockerImage} />
+            )}
+          </aside>
+        </section>
+
         <Footer />
       </div>
     </div>
   );
 }
+
+// ─── Lifecycle stepper (4 phases) ───────────────────────────────────────────
+type LifecycleStep = "register" | "list" | "review" | "live";
+function LifecycleStepper({ currentStep }: { currentStep: LifecycleStep }) {
+  const steps: { id: LifecycleStep; label: string; subtitle?: string }[] = [
+    { id: "register", label: "Register" },
+    { id: "list",     label: "List" },
+    { id: "review",   label: "Review", subtitle: "~1 business day" },
+    { id: "live",     label: "Live" },
+  ];
+  const idx = steps.findIndex((s) => s.id === currentStep);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
+      {steps.map((s, i) => {
+        const isPast    = i < idx;
+        const isCurrent = i === idx;
+        const isFuture  = i > idx;
+        const fg =
+          isPast    ? C.ok
+          : isCurrent ? C.lime
+          : C.muted;
+        return (
+          <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 0 }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, minWidth: 64 }}>
+              <div
+                style={{
+                  width: 22, height: 22, borderRadius: "50%",
+                  background: isCurrent ? C.lime : isPast ? "rgba(52,211,153,0.15)" : "transparent",
+                  border: isFuture ? `1px dashed ${C.border}` : `1px solid ${fg}`,
+                  color: isCurrent ? C.limeText : fg,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontFamily: MONO, fontSize: 11, fontWeight: 700,
+                }}
+              >
+                {isPast ? <Icon.check /> : i + 1}
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontFamily: FONT, fontSize: 11, fontWeight: isCurrent ? 600 : 500, color: isCurrent ? C.fg : C.muted }}>
+                  {s.label}
+                </div>
+                {s.subtitle && (
+                  <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, marginTop: 1 }}>
+                    {s.subtitle}
+                  </div>
+                )}
+              </div>
+            </div>
+            {i < steps.length - 1 && (
+              <div
+                style={{
+                  width: 24, height: 1,
+                  background: i < idx ? C.ok : C.border,
+                  marginTop: -16,
+                  alignSelf: "center",
+                }}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Template picker — "Link a Template" section (matches production) ──────
+// Lets the publisher pick which registered Agent this listing is for. After
+// selection, shows the auto-detected hosting mode + image (read-only) so the
+// publisher confirms what's being listed. PRD: every listing links to exactly
+// one registered template.
+function TemplatePicker({
+  agent, probe, onEditRegistration,
+}: {
+  agent: RegisteredAgent;
+  probe: ImageProbe;
+  onEditRegistration: () => void;
+}) {
+  const [, setLocation] = useLocation();
+  const allAgents: RegisteredAgent[] = useMemo(() => {
+    try { return JSON.parse(localStorage.getItem(REGISTERED_AGENTS_KEY) || "[]"); }
+    catch { return []; }
+  }, []);
+
+  const isConnect = agent.hostMode === "connect";
+
+  return (
+    <FlatSection
+      title="Link a Template"
+      subtitle="Each listing links to exactly one registered Agent. Pick which one this listing represents."
+    >
+      <Field label="Linked Template" required>
+        <Select
+          value={agent.id}
+          onChange={(id) => setLocation(`/list-claw?agentId=${encodeURIComponent(id)}`)}
+          options={allAgents.map((a) => a.id)}
+          renderOption={(id) => {
+            const a = allAgents.find((x) => x.id === id);
+            return a ? `${a.name} · ${a.hostMode === "connect" ? "Connect with GMI" : "Host on GMI"}` : id;
+          }}
+          placeholder="Select a template"
+        />
+      </Field>
+
+      {/* Auto-detected info — confirms what user picked, lets them go modify */}
+      <div
+        style={{
+          display: "flex", alignItems: "center", gap: 8,
+          padding: "8px 10px",
+          background: "rgba(255,255,255,0.02)",
+          border: `1px solid ${C.borderSoft}`,
+          borderRadius: 6,
+          fontFamily: MONO, fontSize: 11,
+        }}
+      >
+        <span style={{ color: C.ok, display: "inline-flex" }}><Icon.check /></span>
+        <span
+          style={{
+            fontFamily: FONT, fontSize: 11, fontWeight: 500,
+            color: isConnect ? "#7dd3fc" : C.lime,
+            padding: "1px 6px", borderRadius: 4,
+            border: `1px solid ${isConnect ? "rgba(125,211,252,0.30)" : "rgba(221,234,77,0.30)"}`,
+            background: isConnect ? "rgba(125,211,252,0.06)" : "rgba(221,234,77,0.06)",
+          }}
+        >
+          {isConnect ? "Connect with GMI" : "Host on GMI"}
+        </span>
+        <span style={{ color: C.muted }}>·</span>
+        <span
+          style={{
+            color: C.muted, flex: 1, minWidth: 0,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}
+        >
+          {isConnect ? agent.accessUrl || "—" : agent.dockerImage || "—"}
+        </span>
+        <span
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 4,
+            fontFamily: FONT, fontSize: 10, fontWeight: 600,
+            letterSpacing: "0.06em", textTransform: "uppercase",
+            color: C.fg,
+            padding: "2px 8px", borderRadius: 4,
+            background: "rgba(255,255,255,0.06)",
+            border: `1px solid ${C.border}`,
+            whiteSpace: "nowrap",
+          }}
+        >
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 12h14M13 5l7 7-7 7"/>
+          </svg>
+          {isConnect ? "Try demo" : "Deploy your own"}
+        </span>
+      </div>
+
+      {/* Plain-language explainer of what the chip means — what the consumer
+          actually does, who pays, who hosts. Teaches the Cloneable vs Try-demo
+          concept right where the publisher first sees it, so they don't have
+          to scroll down to the consent callout to understand. */}
+      <div
+        style={{
+          display: "flex", alignItems: "flex-start", gap: 8,
+          fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "18px",
+          padding: "0 2px",
+        }}
+      >
+        <span style={{ color: C.muted, marginTop: 1 }}>↳</span>
+        {isConnect ? (
+          <div>
+            <span style={{ color: C.fg }}>Just a link.</span> Users click your <code style={{ fontFamily: MONO, fontSize: 11, color: C.fg }}>Try demo ↗</code> button and visit a URL you provide — your agent's endpoint, docs, or landing page.<br />
+            Nothing is cloned <span style={{ color: C.muted }}>·</span> you keep hosting <span style={{ color: C.muted }}>·</span> users don't get your image or config.
+          </div>
+        ) : (
+          <div>
+            <span style={{ color: C.fg }}>Cloneable recipe.</span> Users click <code style={{ fontFamily: MONO, fontSize: 11, color: C.fg }}>Deploy your own ↗</code> and GMI copies your image + config into their account.<br />
+            They pay for compute <span style={{ color: C.muted }}>·</span> they bring their own GMI Models key <span style={{ color: C.muted }}>·</span> your secrets aren't copied.
+          </div>
+        )}
+      </div>
+    </FlatSection>
+  );
+}
+
+// ─── Section wrapper ────────────────────────────────────────────────────────
+// FlatSection: lighter, less "boxy" feel — title + horizontal rule instead of
+// the previous card-in-card chrome. Used for the essentials block.
+function FlatSection({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ paddingBottom: 8, borderBottom: `1px solid ${C.borderSoft}` }}>
+        <h2 style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, margin: 0, color: C.fg, letterSpacing: "-0.005em" }}>
+          {title}
+        </h2>
+        {subtitle && (
+          <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "3px 0 0", lineHeight: "18px" }}>
+            {subtitle}
+          </p>
+        )}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// CollapsibleSection: optional polish block. Shows a "+N filled" badge so the
+// user knows what they've already optionally completed without expanding.
+function CollapsibleSection({
+  title, subtitle, defaultOpen = false, badge = 0, children,
+}: {
+  title: string; subtitle?: string; defaultOpen?: boolean; badge?: number; children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: open ? 14 : 0 }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          background: "transparent",
+          border: "none",
+          padding: "8px 0",
+          borderBottom: `1px solid ${C.borderSoft}`,
+          cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+          width: "100%", textAlign: "left",
+          color: C.fg,
+        }}
+      >
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <h2 style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, margin: 0, color: C.fg, letterSpacing: "-0.005em" }}>
+              {title}
+            </h2>
+            {badge > 0 && (
+              <span
+                style={{
+                  fontFamily: MONO, fontSize: 10, color: C.ok,
+                  padding: "1px 6px", borderRadius: 999,
+                  background: "rgba(52,211,153,0.08)",
+                  border: `1px solid rgba(52,211,153,0.3)`,
+                }}
+              >
+                {badge} filled
+              </span>
+            )}
+          </div>
+          {subtitle && (
+            <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "3px 0 0", lineHeight: "18px" }}>
+              {subtitle}
+            </p>
+          )}
+        </div>
+        <span style={{ color: C.muted, fontSize: 14, transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}>⌄</span>
+      </button>
+      {open && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function countPolishFilled(d: ListingDraft): number {
+  let n = 0;
+  if (d.fullDesc.trim())        n++;
+  if (d.logoDataUrl)            n++;
+  if (d.tags.length > 0)        n++;
+  if (d.demoVideoUrl.trim())    n++;
+  return n;
+}
+
+function Row({ children }: { children: React.ReactNode }) {
+  return <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>{children}</div>;
+}
+
+// ─── Field wrapper ──────────────────────────────────────────────────────────
+function Field({
+  label, required, error, hint, hintAlign, children,
+}: {
+  label: string;
+  required?: boolean;
+  error?: string;
+  hint?: string;
+  hintAlign?: "left" | "right";
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg }}>{label}</span>
+        {required && <span style={{ color: C.err, fontSize: 11, lineHeight: 1 }}>*</span>}
+      </div>
+      {children}
+      {(hint || error) && (
+        <div
+          style={{
+            fontFamily: FONT, fontSize: 11,
+            color: error ? C.err : C.muted,
+            textAlign: hintAlign || "left",
+          }}
+        >
+          {error || hint}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Inputs ─────────────────────────────────────────────────────────────────
+function TextInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      style={{
+        fontFamily: FONT, fontSize: 13,
+        background: C.bg, color: C.fg,
+        border: `1px solid ${C.border}`,
+        padding: "8px 10px", borderRadius: 6,
+        outline: "none",
+        width: "100%",
+      }}
+    />
+  );
+}
+
+function TextArea({
+  value, onChange, placeholder, rows, monospace,
+}: { value: string; onChange: (v: string) => void; placeholder?: string; rows?: number; monospace?: boolean }) {
+  return (
+    <textarea
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      rows={rows || 3}
+      style={{
+        fontFamily: monospace ? MONO : FONT,
+        fontSize: monospace ? 12 : 13,
+        background: C.bg, color: C.fg,
+        border: `1px solid ${C.border}`,
+        padding: "8px 10px", borderRadius: 6,
+        outline: "none",
+        width: "100%",
+        resize: "vertical",
+        lineHeight: "20px",
+      }}
+    />
+  );
+}
+
+function Select({
+  value, onChange, options, placeholder, renderOption,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: readonly string[];
+  placeholder?: string;
+  renderOption?: (v: string) => string;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      style={{
+        fontFamily: FONT, fontSize: 13,
+        background: C.bg, color: value ? C.fg : C.muted,
+        border: `1px solid ${C.border}`,
+        padding: "8px 10px", borderRadius: 6,
+        outline: "none",
+        width: "100%",
+        appearance: "none",
+        backgroundImage:
+          "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a3a3a3' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")",
+        backgroundRepeat: "no-repeat",
+        backgroundPosition: "right 10px center",
+        paddingRight: 28,
+      }}
+    >
+      <option value="" disabled>{placeholder || "Choose"}</option>
+      {options.map((o) => (
+        <option key={o} value={o}>{renderOption ? renderOption(o) : o}</option>
+      ))}
+    </select>
+  );
+}
+
+function TagInput({ tags, onChange, max }: { tags: string[]; onChange: (t: string[]) => void; max: number }) {
+  const [pending, setPending] = useState("");
+  const commit = () => {
+    const v = pending.trim();
+    if (!v) return;
+    if (tags.includes(v) || tags.length >= max) { setPending(""); return; }
+    onChange([...tags, v]);
+    setPending("");
+  };
+  return (
+    <div
+      style={{
+        display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap",
+        background: C.bg, color: C.fg,
+        border: `1px solid ${C.border}`,
+        padding: "6px 8px", borderRadius: 6,
+        minHeight: 36,
+      }}
+    >
+      {tags.map((t) => (
+        <span
+          key={t}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            background: C.pillBg,
+            color: C.fg,
+            fontFamily: FONT, fontSize: 12,
+            padding: "3px 4px 3px 8px", borderRadius: 4,
+          }}
+        >
+          {t}
+          <button
+            onClick={() => onChange(tags.filter((x) => x !== t))}
+            aria-label={`Remove ${t}`}
+            style={{
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              background: "transparent", border: "none", color: C.muted, cursor: "pointer",
+              padding: 2,
+            }}
+          >
+            <Icon.x />
+          </button>
+        </span>
+      ))}
+      {tags.length < max && (
+        <input
+          type="text"
+          value={pending}
+          onChange={(e) => setPending(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === ",") { e.preventDefault(); commit(); }
+            else if (e.key === "Backspace" && !pending && tags.length > 0) {
+              onChange(tags.slice(0, -1));
+            }
+          }}
+          onBlur={commit}
+          placeholder={tags.length === 0 ? "Translation, Multilingual…" : ""}
+          style={{
+            flex: 1, minWidth: 80,
+            fontFamily: FONT, fontSize: 12,
+            background: "transparent", color: C.fg, border: "none", outline: "none",
+            padding: "2px 0",
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function LogoUploader({
+  value, onChange, fallbackName, fallbackColor,
+}: { value: string; onChange: (v: string) => void; fallbackName: string; fallbackColor: string }) {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const pick = () => fileRef.current?.click();
+  const onFile = (f?: File | null) => {
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => onChange(typeof r.result === "string" ? r.result : "");
+    r.readAsDataURL(f);
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div
+        style={{
+          width: 56, height: 56, borderRadius: 8,
+          background: value ? "transparent" : `${fallbackColor}1a`,
+          border: `1px solid ${C.border}`,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          overflow: "hidden",
+          color: fallbackColor,
+          fontFamily: FONT, fontSize: 18, fontWeight: 700,
+        }}
+      >
+        {value
+          ? <img src={value} alt="logo" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          : (fallbackName?.[0]?.toUpperCase() || "A")
+        }
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button
+          onClick={pick}
+          style={{
+            fontFamily: FONT, fontSize: 12,
+            background: "transparent", color: C.fg,
+            border: `1px solid ${C.border}`,
+            padding: "6px 10px", borderRadius: 6, cursor: "pointer",
+            display: "inline-flex", alignItems: "center", gap: 6,
+          }}
+        >
+          <Icon.upload /> {value ? "Replace" : "Upload"}
+        </button>
+        {value && (
+          <button
+            onClick={() => onChange("")}
+            style={{
+              fontFamily: FONT, fontSize: 12, color: C.muted,
+              background: "transparent", border: "none", padding: "6px 4px", cursor: "pointer",
+            }}
+          >
+            Remove
+          </button>
+        )}
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/png,image/jpeg,image/svg+xml"
+          style={{ display: "none" }}
+          onChange={(e) => onFile(e.target.files?.[0])}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ─── Live preview card (mock of marketplace card) ───────────────────────────
+function LivePreviewCard({ draft, fallbackName }: { draft: ListingDraft; fallbackName: string }) {
+  const name      = draft.name || fallbackName || "Your agent name";
+  const publisher = draft.publisher || "Publisher name";
+  const desc      = draft.shortDesc || "A one-line description of what your agent does.";
+  const category  = draft.category || "Pick a category";
+  const color     = draft.category ? TYPE_COLOR[draft.category as TypeLabel] : C.muted;
+  const filledName    = !!draft.name;
+  const filledDesc    = !!draft.shortDesc;
+  const filledCat     = !!draft.category;
+
+  return (
+    <div
+      style={{
+        background: C.cardSolid,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: 14,
+        display: "flex", flexDirection: "column", gap: 10,
+        minHeight: 152,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <div
+          style={{
+            width: 32, height: 32, borderRadius: 6,
+            background: draft.logoDataUrl ? "transparent" : `${color}1f`,
+            border: `1px solid ${color}55`,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            color: color,
+            fontFamily: FONT, fontSize: 13, fontWeight: 700,
+            overflow: "hidden",
+            flexShrink: 0,
+          }}
+        >
+          {draft.logoDataUrl
+            ? <img src={draft.logoDataUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            : (name[0]?.toUpperCase() || "A")
+          }
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontFamily: FONT, fontSize: 14, fontWeight: 600, lineHeight: "20px",
+              color: filledName ? C.fg : C.muted,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            }}
+          >
+            {name}
+          </div>
+          <div
+            style={{
+              fontFamily: FONT, fontSize: 12, color: C.muted, marginTop: 1,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            }}
+          >
+            {publisher}
+          </div>
+        </div>
+      </div>
+      <p
+        style={{
+          fontFamily: FONT, fontSize: 12, lineHeight: "17px",
+          color: filledDesc ? C.muted : "#525252",
+          margin: 0,
+          display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
+          flex: 1,
+        }}
+      >
+        {desc}
+      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <span
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            fontFamily: FONT, fontSize: 11,
+            color: filledCat ? color : C.muted,
+            padding: "2px 8px", borderRadius: 4,
+            background: filledCat ? `${color}14` : "rgba(255,255,255,0.04)",
+            border: `1px solid ${filledCat ? `${color}40` : C.borderSoft}`,
+          }}
+        >
+          <span style={{ width: 6, height: 6, background: filledCat ? color : C.muted, borderRadius: 1 }} />
+          {category}
+        </span>
+        {draft.tags.slice(0, 2).map((t) => (
+          <span
+            key={t}
+            style={{
+              fontFamily: FONT, fontSize: 11, color: C.muted,
+              padding: "2px 6px", borderRadius: 4,
+              border: `1px solid ${C.borderSoft}`,
+            }}
+          >
+            {t}
+          </span>
+        ))}
+        {draft.tags.length > 2 && (
+          <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>+{draft.tags.length - 2}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ReassureLine({ text }: { text: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 12, color: C.muted }}>
+      <span style={{ color: C.ok, display: "inline-flex" }}><Icon.check /></span>
+      {text}
+    </div>
+  );
+}
+
+// ─── Probe hint (only when GMI-hosted with non-public image) ────────────────
+function ProbeHint({ probe, image }: { probe: ImageProbe; image?: string }) {
+  if (probe === "ok" || probe === "n/a") return null;
+  const isPrivate = probe === "private";
+  const isMissing = probe === "missing";
+  const accent = isMissing ? C.err : C.warn;
+  const title  = isMissing
+    ? "Image not reachable"
+    : isPrivate
+      ? "Private image detected"
+      : "No image set";
+  const body  = isMissing
+    ? "We couldn't pull this image. Submitting will fail review until it's reachable."
+    : isPrivate
+      ? "Cloners can't pull this image. Your listing will surface as Try demo instead of Deploy your own."
+      : "Without a public image, your listing will run as demo-only.";
+  return (
+    <div
+      style={{
+        background: C.cardSolid,
+        border: `1px solid ${accent}55`,
+        borderRadius: 10,
+        padding: "10px 12px",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 6, color: accent, fontFamily: FONT, fontSize: 12, fontWeight: 600 }}>
+        {title}
+      </div>
+      <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, marginTop: 4, lineHeight: "16px" }}>
+        {body}
+      </div>
+      {image && (
+        <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, marginTop: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {image}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Guard: no registered agent yet ─────────────────────────────────────────
+function NoAgentGuard({ onRegister, onDashboard }: { onRegister: () => void; onDashboard: () => void }) {
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.fg, fontFamily: FONT }}>
+      <Topbar />
+      <Navbar />
+      <div style={{ marginLeft: 210, paddingTop: 40, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ maxWidth: 440, textAlign: "center", padding: "0 24px" }}>
+          <div
+            style={{
+              width: 56, height: 56, borderRadius: "50%",
+              background: "rgba(221,234,77,0.08)",
+              border: "1px solid rgba(221,234,77,0.25)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              margin: "0 auto 16px",
+              color: C.lime,
+            }}
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/>
+            </svg>
+          </div>
+          <h1 style={{ fontFamily: FONT, fontSize: 22, fontWeight: 600, margin: 0, letterSpacing: "-0.02em" }}>
+            Register an Agent first
+          </h1>
+          <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "20px", margin: "8px 0 24px" }}>
+            A Marketplace listing needs a registered Agent — either hosted by GMI or connected to your endpoint. Register one and you'll be brought back here.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <button
+              onClick={onRegister}
+              style={{
+                fontFamily: FONT, fontSize: 13, fontWeight: 700,
+                background: C.lime, color: C.limeText,
+                border: "none", padding: "10px 16px", borderRadius: 8, cursor: "pointer",
+              }}
+            >
+              Register an Agent
+            </button>
+            <button
+              onClick={onDashboard}
+              style={{
+                fontFamily: FONT, fontSize: 13,
+                background: "transparent", color: C.muted,
+                border: `1px solid ${C.border}`,
+                padding: "9px 16px", borderRadius: 8, cursor: "pointer",
+              }}
+            >
+              Back to My Agents
+            </button>
+          </div>
+        </div>
+      </div>
+      <Footer />
+    </div>
+  );
+}
+

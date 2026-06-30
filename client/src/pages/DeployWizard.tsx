@@ -38,7 +38,7 @@ const STEPS = [
 // Connect-your-agent flow: a different 4-section path (no infra/networking/env — the user runs it themselves)
 const CONNECT_STEPS = [
   { id: 1, title: "Basic" },
-  { id: 2, title: "MaaS Key" },
+  { id: 2, title: "GMI Models key" },
   { id: 3, title: "Endpoint" },
   { id: 4, title: "Review & Submit" },
 ] as const;
@@ -59,6 +59,9 @@ export interface RegisteredAgent {
   accessUrl: string;
   category: string;
   registeredAt: string;
+  // M4 listing state: "draft" by default after Register; flips to "pending_review"
+  // when user clicks "List on Agentbox" from the success view.
+  listingState?: "draft" | "pending_review" | "live" | "rejected";
 }
 
 function genMaasKey(): string {
@@ -79,7 +82,7 @@ function persistRegisteredAgent(agent: RegisteredAgent) {
 // ─── Mock infra catalog ──────────────────────────────────────────────────
 interface Region { id: string; name: string; sub: string; popular?: boolean }
 const REGIONS: Region[] = [
-  { id: "us-ia-iowa-1",   name: "IOWA IDC-1",      sub: "US-IA, US",    popular: true },
+  { id: "us-ia-iowa-1",   name: "US Iowa data center", sub: "Iowa, USA",    popular: true },
   { id: "us-or-portland", name: "Portland IDC-1",  sub: "US-OR, US" },
   { id: "eu-de-frankfurt",name: "Frankfurt IDC-1", sub: "DE-HE, Germany" },
   { id: "ap-sg-singapore",name: "Singapore IDC-1", sub: "SG, Singapore" },
@@ -122,7 +125,12 @@ const DEFAULT_PORTS: PortMap[] = [
   { id: "p1", protocol: "HTTPS/2", listening: "", internal: "8080", name: "web" },
 ];
 
-interface CustomEnv { id: string; key: string; value: string; secret: boolean }
+// Env role per PRD M6.3:
+// - "config"               — default copied, editable (e.g. MODEL_NAME)
+// - "secret_user_supplied" — shown as required blank field on clone; masked input (e.g. OPENAI_API_KEY)
+// - "gmi_managed"          — auto-injected by platform per task; locked + masked (GMI_MAAS_*)
+type EnvRole = "config" | "secret_user_supplied" | "gmi_managed";
+interface CustomEnv { id: string; key: string; value: string; secret: boolean; role?: EnvRole }
 
 // ─── Template fork (Use this agent) ───────────────────────────────────────
 // Per-catalog template config consumed when wizard is loaded with ?use=<id>.
@@ -478,7 +486,7 @@ function LiveCostPanel({
           ${computeRate.toFixed(4)}<span style={{ fontSize: 16, fontWeight: 500, color: C.muted }}>/hr</span>
         </div>
         <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>
-          {computeRate === 0 ? "Select a compute tier · per active instance" : "Container tier · per active instance"}
+          {computeRate === 0 ? "Select a compute tier · per active instance" : "Compute size · per active instance"}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, paddingTop: 10, borderTop: `1px solid ${C.borderSoft}` }}>
           <span style={{ width: 6, height: 6, background: C.muted, borderRadius: 2 }} />
@@ -564,6 +572,7 @@ function SectionHeader({
 // ─── Right sticky panel — cost + Register CTA (single-page mode) ──────────
 function RegisterPanel({
   computeRate, canRegister, onCancel, onRegister, ctaLabel = "Register Agent", hideComputeCost = false,
+  maxLifetime, idleTimeout,
 }: {
   computeRate: number;
   canRegister: boolean;
@@ -571,6 +580,8 @@ function RegisterPanel({
   onRegister: () => void;
   ctaLabel?: string;
   hideComputeCost?: boolean;
+  maxLifetime?: string;
+  idleTimeout?: string;
 }) {
   return (
     <aside style={{ display: "flex", flexDirection: "column", gap: 8, position: "sticky", top: 48 }}>
@@ -591,6 +602,28 @@ function RegisterPanel({
             </span>
           </div>
           <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>Container · per active instance · MaaS pay-per-token</div>
+          {(maxLifetime || idleTimeout) && (
+            <div
+              style={{
+                marginTop: 8, paddingTop: 8,
+                borderTop: `1px solid ${C.borderSoft}`,
+                display: "flex", alignItems: "center", gap: 6,
+                fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px",
+              }}
+            >
+              <span style={{ color: C.muted, display: "inline-flex" }}>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+                </svg>
+              </span>
+              <span>
+                Auto-stop after{" "}
+                <span style={{ color: C.fg, fontFamily: MONO }}>{maxLifetime ?? "1h"}</span>
+                {" · "}
+                <span style={{ color: C.fg, fontFamily: MONO }}>{idleTimeout ?? "5min"}</span> idle
+              </span>
+            </div>
+          )}
         </div>
       )}
 
@@ -607,8 +640,8 @@ function RegisterPanel({
         <span style={{ color: C.muted, marginTop: 1 }}><IconInfo size={11} /></span>
         <span>
           {hideComputeCost
-            ? <><span style={{ color: C.fg, fontWeight: 600 }}>Self-hosted</span> — you own compute & uptime. GMI auto-checks URL + key, then lists.</>
-            : <><span style={{ color: C.fg, fontWeight: 600 }}>Registration ≠ Listing</span> — list publicly later from Dashboard.</>
+            ? <><span style={{ color: C.fg, fontWeight: 600 }}>Connect with GMI</span> — you own compute & uptime. GMI auto-checks URL + key, then lists.</>
+            : <><span style={{ color: C.fg, fontWeight: 600 }}>Registered, not yet listed</span> — list publicly later from Dashboard.</>
           }
         </span>
       </div>
@@ -670,25 +703,41 @@ function StepBasics({
         </span>
       </div>
 
-      {/* GMI-injected env vars notice */}
+      {/* Compressed pre-build notice — single line + mono chips for the two
+          required env var names + inline setup-guide link. Used to be a 4-line
+          callout with a 2-row table; same information, ~75% less vertical space. */}
       {showEnvWarning && (
         <div
           style={{
-            background: C.warnBg,
-            border: `1px solid ${C.border}`,
+            display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+            background: "rgba(255,255,255,0.02)",
+            border: `1px solid ${C.borderSoft}`,
             borderRadius: 8,
-            padding: "8px 12px",
-            display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
-            fontFamily: FONT, fontSize: 12, lineHeight: "18px",
+            padding: "6px 10px",
+            fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "18px",
           }}
         >
-          <span style={{ color: C.warn, flexShrink: 0, display: "inline-flex" }}><IconWarn size={12} /></span>
-          <span style={{ color: C.fg, fontWeight: 600 }}>Your container must read</span>
-          <code style={{ fontFamily: MONO, fontSize: 11, color: C.fg, background: "rgba(255,255,255,0.04)", padding: "1px 6px", borderRadius: 4 }}>GMI_MAAS_API_KEY</code>
-          <code style={{ fontFamily: MONO, fontSize: 11, color: C.fg, background: "rgba(255,255,255,0.04)", padding: "1px 6px", borderRadius: 4 }}>GMI_MAAS_BASE_URL</code>
-          <span style={{ color: C.muted }}>— injected at deploy.</span>
-          <a href="#" style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.link, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 2, marginLeft: "auto" }}>
-            Setup guide <IconArrowExternal size={10} />
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: C.warn, flexShrink: 0 }}>
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span>Image must read</span>
+          <code style={{ fontFamily: MONO, fontSize: 11, color: C.fg, background: "rgba(255,255,255,0.05)", border: `1px solid ${C.border}`, padding: "1px 6px", borderRadius: 4 }}>
+            GMI_MAAS_API_KEY
+          </code>
+          <span style={{ color: C.muted }}>+</span>
+          <code style={{ fontFamily: MONO, fontSize: 11, color: C.fg, background: "rgba(255,255,255,0.05)", border: `1px solid ${C.border}`, padding: "1px 6px", borderRadius: 4 }}>
+            GMI_MAAS_BASE_URL
+          </code>
+          <span>— required for Models calls.</span>
+          <a
+            href="#"
+            onClick={(e) => e.preventDefault()}
+            style={{ color: C.link, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 3, marginLeft: "auto" }}
+          >
+            Setup guide
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 12h14M13 5l7 7-7 7"/>
+            </svg>
           </a>
         </div>
       )}
@@ -733,12 +782,11 @@ function StepInfrastructure({
   setSelectedModel: (v: string) => void;
   forkedFromTemplate?: boolean;
 }) {
-  // Collapse step when everything is at its GMI default; expand on user click
-  // or as soon as any field drifts from default. When forked from a template,
-  // start collapsed regardless of values — user explicitly opts into editing.
+  // Collapse step when *infrastructure* defaults hold. Docker image is allowed
+  // to be blank — it's surfaced as the first chip in the strip with a clear
+  // "Set image →" prompt so the user can edit inline without expanding everything.
   const allDefault =
     dockerSource  === "registry" &&
-    dockerImage   === "gmi/starter-agent:latest" &&
     enableCreds   === false &&
     region        === "us-ia-iowa-1" &&
     computeTier   === "container" &&
@@ -750,12 +798,15 @@ function StepInfrastructure({
   const collapsed = !userExpanded && (allDefault || forkedFromTemplate);
 
   if (collapsed) {
+    const imageChip = dockerImage.trim().length === 0
+      ? "Image required"
+      : dockerImage.length > 28 ? dockerImage.slice(0, 26) + "…" : dockerImage;
     const chips: string[] = forkedFromTemplate
       ? ["Pre-filled from template"]
       : [
-          "Starter image",
-          "Container tier",
-          "IOWA IDC-1",
+          imageChip,
+          "Compute size",
+          "US Iowa",
           "Max 1h · idle 5min",
           "GMI Models on",
         ];
@@ -790,7 +841,7 @@ function StepInfrastructure({
             marginLeft: "auto",
             display: "inline-flex", alignItems: "center", gap: 3,
             fontFamily: FONT, fontSize: 11, fontWeight: 500,
-            background: "transparent", color: "#7dd3fc",
+            background: "transparent", color: C.muted,
             border: "none", padding: 0, cursor: "pointer",
           }}
         >
@@ -802,7 +853,7 @@ function StepInfrastructure({
 
   const resetToDefaults = () => {
     setDockerSource("registry");
-    setDockerImage("gmi/starter-agent:latest");
+    setDockerImage("");
     setEnableCreds(false);
     setRegion("us-ia-iowa-1");
     setComputeTier("container");
@@ -841,7 +892,7 @@ function StepInfrastructure({
             style={{
               display: "inline-flex", alignItems: "center", gap: 4,
               fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
-              background: "transparent", color: "#7dd3fc",
+              background: "transparent", color: C.muted,
               border: "none", padding: 0, cursor: "pointer",
             }}
           >
@@ -864,29 +915,13 @@ function StepInfrastructure({
           display: "flex", flexDirection: "column", gap: 12,
         }}
       >
-        {/* Docker Image Source */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <FieldLabel required>Docker Image Source</FieldLabel>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <SourceCard
-              selected={dockerSource === "registry"}
-              title="Registry URL"
-              description="Pull from Docker Hub, GHCR, ECR, etc"
-              onClick={() => setDockerSource("registry")}
-              icon={<IconGlobe />}
-            />
-            <SourceCard
-              selected={false}
-              disabled
-              title="Upload Image"
-              description="Coming soon"
-              onClick={() => {}}
-              icon={<IconUpload />}
-            />
-          </div>
-          {dockerSource === "registry" && (
-            <TextInput value={dockerImage} onChange={setDockerImage} placeholder="docker.io/acme/agent:1.0.0" mono />
-          )}
+        {/* Docker Image — registry URL is the only source for now; upload coming later */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <FieldLabel required>Docker Image</FieldLabel>
+          <TextInput value={dockerImage} onChange={setDockerImage} placeholder="docker.io/acme/agent:1.0.0" mono />
+          <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+            Pull from any registry — Docker Hub, GHCR, ECR. Upload-image flow coming later.
+          </span>
         </div>
 
         {/* Enable Credentials */}
@@ -959,7 +994,7 @@ function StepInfrastructure({
 
         {/* Compute Tier */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <FieldLabel required>Compute Tier</FieldLabel>
+          <FieldLabel required>Compute size</FieldLabel>
           {!region ? (
             <div
               style={{
@@ -1105,8 +1140,8 @@ function StepInfrastructure({
                       style={{
                         display: "inline-flex", alignSelf: "flex-start",
                         fontSize: 11, fontWeight: 600, color: C.fg,
-                        background: "rgba(125,211,252,0.10)",
-                        border: "1px solid rgba(125,211,252,0.35)",
+                        background: "rgba(255,255,255,0.04)",
+                        border: `1px solid ${C.border}`,
                         padding: "1px 7px", borderRadius: 999,
                       }}
                     >
@@ -1178,21 +1213,10 @@ function SourceCard({
 // ─── Step 3: Networking ───────────────────────────────────────────────────
 function StepNetworking({
   ports, setPorts,
-  webhookEnabled, setWebhookEnabled,
-  webhookPort, setWebhookPort,
-  webhookSecret, setWebhookSecret,
-  projectName,
   forkedFromTemplate = false,
 }: {
   ports: PortMap[];
   setPorts: (v: PortMap[]) => void;
-  webhookEnabled: boolean;
-  setWebhookEnabled: (v: boolean) => void;
-  webhookPort: string;
-  setWebhookPort: (v: string) => void;
-  webhookSecret: string;
-  setWebhookSecret: (v: string) => void;
-  projectName: string;
   forkedFromTemplate?: boolean;
 }) {
   const updatePort = (id: string, patch: Partial<PortMap>) => {
@@ -1200,30 +1224,24 @@ function StepNetworking({
   };
   const removePort = (id: string) => setPorts(ports.filter((p) => p.id !== id));
   const addPort = () => setPorts([...ports, { id: `p${Date.now()}`, protocol: "HTTPS/2", listening: "", internal: "", name: "" }]);
-  const slug = projectName.trim() ? projectName.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") : "your-agent";
-  const webhookUrl = `https://hooks.gmi.cloud/${slug}`;
 
   const allDefault =
     ports.length === 1 &&
     ports[0].protocol === "HTTPS/2" &&
     ports[0].internal === "8080" &&
     ports[0].name === "web" &&
-    !ports[0].listening &&
-    !webhookEnabled;
+    !ports[0].listening;
   const [userExpanded, setUserExpanded] = useState(false);
   const collapsed = !userExpanded && (allDefault || forkedFromTemplate);
   const resetToDefaults = () => {
     setPorts([{ id: "p1", protocol: "HTTPS/2", listening: "", internal: "8080", name: "web" }]);
-    setWebhookEnabled(false);
-    setWebhookPort("8080");
-    setWebhookSecret("");
     setUserExpanded(false);
   };
 
   if (collapsed) {
     const chipLabels = forkedFromTemplate
       ? ["Pre-filled from template"]
-      : ["Public IP auto-allocated", "HTTPS/2 :8080 (web)"];
+      : ["Public URL provided", "HTTPS/2 :8080 (web)"];
     return (
       <div
         style={{
@@ -1255,7 +1273,7 @@ function StepNetworking({
             marginLeft: "auto",
             display: "inline-flex", alignItems: "center", gap: 3,
             fontFamily: FONT, fontSize: 11, fontWeight: 500,
-            background: "transparent", color: "#7dd3fc",
+            background: "transparent", color: C.muted,
             border: "none", padding: 0, cursor: "pointer",
           }}
         >
@@ -1274,7 +1292,7 @@ function StepNetworking({
           display: "inline-flex", alignItems: "center", gap: 4,
           fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
           background: "transparent",
-          color: allDefault ? C.muted : "#7dd3fc",
+          color: C.muted,
           border: "none", padding: 0, cursor: "pointer",
         }}
       >
@@ -1402,76 +1420,6 @@ function StepNetworking({
         </div>
       </div>
 
-      {/* Public webhook receiver — opt-in public HTTPS ingress for 3rd-party webhooks */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <FieldLabel>Public webhook receiver</FieldLabel>
-          <Toggle on={webhookEnabled} onChange={setWebhookEnabled} />
-        </div>
-        <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "18px", color: C.muted, marginTop: -4 }}>
-          Expose a stable public HTTPS URL so third-party services (Stripe, GitHub, Slack, etc.) can POST events to your Agent.
-        </span>
-
-        {webhookEnabled && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 4 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>Webhook URL</span>
-              <div
-                style={{
-                  display: "flex", alignItems: "center", gap: 8,
-                  background: C.pillBg,
-                  border: `1px solid ${C.border}`,
-                  borderRadius: 8,
-                  padding: "8px 12px",
-                }}
-              >
-                <code style={{ flex: 1, fontFamily: MONO, fontSize: 13, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {webhookUrl}
-                </code>
-                <CopyInline value={webhookUrl} />
-              </div>
-              <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>
-                Stable across redeploys. GMI proxies POSTs to your container on the port below.
-              </span>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 12 }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>Forward to internal port</span>
-                <TextInput value={webhookPort} onChange={setWebhookPort} placeholder="8080" />
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>HMAC signing secret · optional</span>
-                  <button
-                    onClick={() => {
-                      const r = () => Math.random().toString(36).slice(2, 12);
-                      setWebhookSecret(`whsec_${r()}${r()}${r()}`);
-                    }}
-                    style={{
-                      fontFamily: FONT, fontSize: 11, fontWeight: 500,
-                      color: "#7dd3fc",
-                      background: "rgba(125,211,252,0.08)",
-                      border: "1px solid rgba(125,211,252,0.30)",
-                      padding: "1px 8px",
-                      borderRadius: 999,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Generate
-                  </button>
-                </div>
-                <TextInput value={webhookSecret} onChange={setWebhookSecret} placeholder="whsec_…" mono />
-              </div>
-            </div>
-            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>
-              If set, GMI signs each forwarded request with{" "}
-              <code style={{ fontFamily: MONO, color: C.fg, background: "rgba(255,255,255,0.04)", padding: "1px 5px", borderRadius: 3 }}>X-GMI-Signature</code>
-              {" "}so your code can verify authenticity.
-            </span>
-          </div>
-        )}
-      </div>
     </div>
     </div>
   );
@@ -1489,7 +1437,39 @@ function StepEnvVars({
   const update = (id: string, patch: Partial<CustomEnv>) =>
     setCustomEnvs(customEnvs.map((e) => (e.id === id ? { ...e, ...patch } : e)));
   const remove = (id: string) => setCustomEnvs(customEnvs.filter((e) => e.id !== id));
-  const add = () => setCustomEnvs([...customEnvs, { id: `env${Date.now()}`, key: "", value: "", secret: false }]);
+  // Original manual add — single blank row the user types into directly.
+  const add = () => setCustomEnvs([...customEnvs, { id: `env${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key: "", value: "", secret: false, role: "config" }]);
+
+  // Bulk paste — toggled by a separate secondary button. Coexists with the
+  // manual "+ Add variable" flow so users keep both options.
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [addText, setAddText] = useState("");
+  const applyAdd = () => {
+    const lines = addText.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+    const parsed: CustomEnv[] = [];
+    for (const line of lines) {
+      const eq = line.indexOf("=");
+      if (eq < 1) continue;
+      const key = line.slice(0, eq).trim();
+      let value = line.slice(eq + 1).trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      if (/^GMI_MAAS_/i.test(key)) continue;
+      // Heuristic: keys whose final segment is KEY / TOKEN / SECRET / PASSWORD / PWD
+      // default to secret. Suffix-based on purpose — avoids false positives like
+      // MAX_TOKENS (count) or PUBLIC_KEY_ID (identifier).
+      const looksSecret = /_(KEY|TOKEN|SECRET|PASSWORD|PWD)$/i.test(key) || /^(KEY|TOKEN|SECRET|PASSWORD|PWD)$/i.test(key);
+      parsed.push({
+        id: `env${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        key, value, secret: looksSecret,
+        role: looksSecret ? "secret_user_supplied" : "config",
+      });
+    }
+    if (parsed.length) setCustomEnvs([...customEnvs, ...parsed]);
+    setAddText("");
+    setPasteOpen(false);
+  };
 
   const allDefault = customEnvs.length === 0;
   const [userExpanded, setUserExpanded] = useState(false);
@@ -1536,7 +1516,7 @@ function StepEnvVars({
             marginLeft: "auto",
             display: "inline-flex", alignItems: "center", gap: 3,
             fontFamily: FONT, fontSize: 11, fontWeight: 500,
-            background: "transparent", color: "#7dd3fc",
+            background: "transparent", color: C.muted,
             border: "none", padding: 0, cursor: "pointer",
           }}
         >
@@ -1555,7 +1535,7 @@ function StepEnvVars({
           display: "inline-flex", alignItems: "center", gap: 4,
           fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
           background: "transparent",
-          color: allDefault ? C.muted : "#7dd3fc",
+          color: C.muted,
           border: "none", padding: 0, cursor: "pointer",
         }}
       >
@@ -1665,26 +1645,83 @@ function StepEnvVars({
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Custom Variables</div>
-          <button
-            onClick={add}
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              background: C.lime, color: C.limeText,
-              border: "none",
-              padding: "6px 12px", borderRadius: 8,
-              fontFamily: FONT, fontSize: 13, fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            <IconPlus size={12} /> Add variable
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => setPasteOpen((o) => !o)}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                background: pasteOpen ? "rgba(255,255,255,0.04)" : "transparent",
+                color: C.fg,
+                border: `1px solid ${C.border}`,
+                padding: "6px 12px", borderRadius: 8,
+                fontFamily: FONT, fontSize: 13, fontWeight: 500,
+                cursor: "pointer",
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="8" y="3" width="8" height="4" rx="1"/>
+                <path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/>
+              </svg>
+              {pasteOpen ? "Cancel paste" : "Paste .env"}
+            </button>
+            <button
+              onClick={add}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                background: C.lime, color: C.limeText,
+                border: "none",
+                padding: "6px 12px", borderRadius: 8,
+                fontFamily: FONT, fontSize: 13, fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              <IconPlus size={12} /> Add variable
+            </button>
+          </div>
         </div>
 
-        {customEnvs.length === 0 ? (
-          <div style={{ fontFamily: FONT, fontSize: 13, color: C.muted, padding: "8px 0" }}>
-            No custom variables yet.
+        {/* Bulk paste panel — toggled by Paste .env; independent of the manual + Add variable */}
+        {pasteOpen && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "10px 12px" }}>
+            <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.05em", textTransform: "uppercase" }}>
+              Type or paste KEY=value · one per line
+            </span>
+            <textarea
+              value={addText}
+              onChange={(e) => setAddText(e.target.value)}
+              placeholder={"OPENAI_API_KEY=sk-...\nMODEL_NAME=gpt-4o\nMAX_TOKENS=4096"}
+              rows={5}
+              autoFocus
+              style={{
+                background: "#000",
+                border: `1px solid ${C.border}`,
+                borderRadius: 6,
+                padding: "8px 10px",
+                fontFamily: MONO, fontSize: 12, lineHeight: "18px",
+                color: C.fg, outline: "none", resize: "vertical",
+              }}
+            />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
+              <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+                Keys ending in <code style={{ fontFamily: MONO, color: C.fg }}>_KEY / _TOKEN / _SECRET / _PASSWORD</code> default to Secret. GMI_MAAS_* keys are skipped.
+              </span>
+              <button onClick={applyAdd} disabled={!addText.trim()} style={{
+                fontFamily: FONT, fontSize: 13, fontWeight: 600,
+                background: addText.trim() ? C.lime : "#3a3a1f",
+                color: addText.trim() ? C.limeText : "#666",
+                border: "none",
+                padding: "6px 16px", borderRadius: 6,
+                cursor: addText.trim() ? "pointer" : "not-allowed",
+              }}>Add</button>
+            </div>
           </div>
-        ) : (
+        )}
+
+        {customEnvs.length === 0 && !pasteOpen ? (
+          <div style={{ fontFamily: FONT, fontSize: 13, color: C.muted, padding: "8px 0" }}>
+            No custom variables yet — click <span style={{ color: C.lime, fontWeight: 600 }}>+ Add variable</span> to type one, or <span style={{ color: C.fg, fontWeight: 600 }}>Paste .env</span> to bulk-import.
+          </div>
+        ) : customEnvs.length === 0 ? null : (
           customEnvs.map((env) => (
             <div
               key={env.id}
@@ -1698,7 +1735,10 @@ function StepEnvVars({
               <TextInput value={env.key}   onChange={(v) => update(env.id, { key: v })}   placeholder="MY_API_KEY" mono />
               <TextInput value={env.value} onChange={(v) => update(env.id, { value: v })} placeholder={env.secret ? "••••••••" : "value"} mono />
               <button
-                onClick={() => update(env.id, { secret: !env.secret })}
+                title={env.secret
+                  ? "Secret · cloner must supply their own value (never copied from your template)"
+                  : "Config · default value is copied to clones; editable by cloner"}
+                onClick={() => update(env.id, { secret: !env.secret, role: !env.secret ? "secret_user_supplied" : "config" })}
                 style={{
                   fontFamily: FONT, fontSize: 12, fontWeight: 500,
                   background: env.secret ? "rgba(199,167,255,0.12)" : "transparent",
@@ -1708,7 +1748,7 @@ function StepEnvVars({
                   cursor: "pointer",
                 }}
               >
-                {env.secret ? "Secret" : "Plain"}
+                {env.secret ? "Secret" : "Config"}
               </button>
               <button
                 onClick={() => remove(env.id)}
@@ -1732,7 +1772,9 @@ function StepEnvVars({
         }}
       >
         <span style={{ color: C.muted, marginTop: 2 }}><IconInfo size={12} /></span>
-        <span>Reminder — Secrets are encrypted at rest with AES-256. Plaintext values are never written to logs or audit history.</span>
+        <span>
+          <span style={{ color: C.fg }}>Config</span> values are copied to clones (editable on Deploy-your-own). <span style={{ color: C.fg }}>Secret</span> values are <em>never</em> copied — clones see the field blank, required, and must supply their own. Secrets are encrypted at rest with AES-256 and never logged.
+        </span>
       </div>
     </div>
     </div>
@@ -1759,7 +1801,7 @@ function StepMaasKey({
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <FieldLabel>
-            MaaS API Key
+            GMI Models key
             <span style={{ color: C.muted, fontWeight: 400, marginLeft: 6 }}>· optional</span>
           </FieldLabel>
           <button
@@ -1767,9 +1809,9 @@ function StepMaasKey({
             style={{
               display: "inline-flex", alignItems: "center", gap: 4,
               fontFamily: FONT, fontSize: 12, fontWeight: 500,
-              color: "#7dd3fc",
-              background: "rgba(125,211,252,0.08)",
-              border: "1px solid rgba(125,211,252,0.30)",
+              color: C.lime,
+              background: "rgba(221,234,77,0.10)",
+              border: "1px solid rgba(221,234,77,0.35)",
               padding: "2px 10px",
               borderRadius: 999,
               cursor: "pointer",
@@ -1834,8 +1876,8 @@ function StepConnectReview({
 }) {
   const rows = [
     { label: "Project Name", value: projectName || "—" },
-    { label: "Deployment Type", value: "Self-hosted + GMI MaaS" },
-    { label: "MaaS API Key", value: maasKey ? `${maasKey.slice(0, 6)}…${maasKey.slice(-4)}` : "Auto-issued at deploy time" },
+    { label: "Deployment Type", value: "Connect with GMI" },
+    { label: "GMI Models key", value: maasKey ? `${maasKey.slice(0, 6)}…${maasKey.slice(-4)}` : "Auto-issued at deploy time" },
     { label: "Access URL", value: accessUrl || "—" },
     { label: "Badge", value: "POWERED BY GMI MODELS", badge: true as const },
   ];
@@ -1904,15 +1946,15 @@ function StepConnectReview({
 
       <div
         style={{
-          background: "rgba(125,211,252,0.06)",
-          border: `1px solid rgba(125,211,252,0.30)`,
+          background: "rgba(255,255,255,0.02)",
+          border: `1px solid ${C.borderSoft}`,
           borderRadius: 10,
           padding: "16px 20px",
           fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "18px",
           display: "flex", gap: 8, alignItems: "flex-start",
         }}
       >
-        <span style={{ color: "#7dd3fc", marginTop: 2 }}><IconInfo size={13} /></span>
+        <span style={{ color: C.muted, marginTop: 2 }}><IconInfo size={13} /></span>
         <span>
           <span style={{ color: C.fg, fontWeight: 600 }}>Auto-approval on submit</span>
           {" "}— GMI probes your Access URL and, if a MaaS key was provided, re-runs the key check. If all checks pass, your listing goes live immediately.
@@ -1924,17 +1966,19 @@ function StepConnectReview({
 
 // ─── Post-submit Success view (Connect-your-agent flow) ──────────────────
 function SuccessView({
-  projectName, accessUrl, maasKey, onViewAgents, onListOnAgentbox,
+  projectName, accessUrl, maasKey, onViewAgents, onListOnAgentbox, hostMode = "connect",
 }: {
   projectName: string;
   accessUrl: string;
   maasKey: string;
   onViewAgents: () => void;
   onListOnAgentbox: () => void;
+  hostMode?: HostMode;
 }) {
+  const isGmi = hostMode === "gmi";
   const displayedKey = maasKey || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ImRhMDc2ZTY3LWY1N2YtNDYyNS05ZDJiLTcwODRhMjY4Y2Y5MiIsInNjb3BlIjoiaW5mZXJlbmNlIn0.demo-auto-issued";
   const curl = [
-    "# 1. Verify your GMI MaaS API key",
+    "# 1. Verify your GMI Models key",
     "# Run in your terminal — same check GMI ran during registration",
     "curl https://api.gmi-serving.com/v1/models \\",
     "  -H \"Authorization: Bearer $GMI_MAAS_API_KEY\"",
@@ -1963,10 +2007,12 @@ function SuccessView({
 
       <div>
         <h1 style={{ fontFamily: FONT, fontSize: 28, fontWeight: 700, lineHeight: "36px", color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>
-          Your Agent {projectName ? `"${projectName}" ` : ""}is registered. Call GMI MaaS from your code anytime.
+          Your Agent {projectName ? `"${projectName}" ` : ""}is registered.
         </h1>
         <p style={{ fontFamily: FONT, fontSize: 14, fontWeight: 400, lineHeight: "20px", color: C.muted, margin: "8px 0 0", maxWidth: 880 }}>
-          Auto-approved — your MaaS key is active (Inference-scoped) and your external endpoint is reachable. Not yet listed on the Agentbox; only your account is linked to this Agent until you publish.
+          {isGmi
+            ? "Your template is saved. Provision your first instance from My Agents to get an endpoint URL. Not yet listed on the Agentbox; only your account is linked until you publish."
+            : "Auto-approved — your MaaS key is active (Inference-scoped) and your external endpoint is reachable. Not yet listed on the Agentbox; only your account is linked to this Agent until you publish."}
         </p>
       </div>
 
@@ -1982,7 +2028,9 @@ function SuccessView({
           }}
         >
           <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>Deployment Type</span>
-          <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Self-hosted + GMI MaaS</span>
+          <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>
+            {isGmi ? "Host on GMI" : "Connect with GMI"}
+          </span>
         </div>
         <div
           style={{
@@ -2010,24 +2058,26 @@ function SuccessView({
         </div>
       </div>
 
-      {/* External Endpoint URL */}
-      <div
-        style={{
-          background: C.card,
-          border: `1px solid ${C.border}`,
-          borderRadius: 10,
-          padding: "14px 18px",
-          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-        }}
-      >
-        <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>External Endpoint URL</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-          <span style={{ fontFamily: MONO, fontSize: 13, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {accessUrl || "https://your-agent.yourdomain.com"}
-          </span>
-          <CopyInline value={accessUrl || "https://your-agent.yourdomain.com"} />
+      {/* External Endpoint URL — Connect-flow only (GMI gets endpoint per-task) */}
+      {!isGmi && (
+        <div
+          style={{
+            background: C.card,
+            border: `1px solid ${C.border}`,
+            borderRadius: 10,
+            padding: "14px 18px",
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+          }}
+        >
+          <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>External Endpoint URL</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+            <span style={{ fontFamily: MONO, fontSize: 13, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {accessUrl || "https://your-agent.yourdomain.com"}
+            </span>
+            <CopyInline value={accessUrl || "https://your-agent.yourdomain.com"} />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Verify your key — curl snippet */}
       <div
@@ -2101,27 +2151,29 @@ function SuccessView({
 
       <div style={{ fontFamily: FONT, fontSize: 13, lineHeight: "20px", color: C.muted }}>
         Browse available models in{" "}
-        <a href="#" style={{ color: "#7dd3fc", textDecoration: "none" }}>Models Hub →</a>{" "}
+        <a href="#" style={{ color: C.lime, textDecoration: "none" }}>Models Hub →</a>{" "}
         · SDK examples and integration patterns in{" "}
-        <a href="#" style={{ color: "#7dd3fc", textDecoration: "none" }}>Docs →</a>{" "}
+        <a href="#" style={{ color: C.lime, textDecoration: "none" }}>Docs →</a>{" "}
         · Manage keys in{" "}
-        <a href="#" style={{ color: "#7dd3fc", textDecoration: "none" }}>Console → API Keys →</a>
+        <a href="#" style={{ color: C.lime, textDecoration: "none" }}>Console → API Keys →</a>
       </div>
 
-      <div
-        style={{
-          fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "18px", color: C.muted,
-          background: C.cardSolid,
-          border: `1px solid ${C.borderSoft}`,
-          borderRadius: 8,
-          padding: "10px 14px",
-        }}
-      >
-        <span style={{ color: C.fg, fontWeight: 600 }}>Reminder:</span>{" "}
-        GMI does not host your Agent. Keep{" "}
-        <span style={{ fontFamily: MONO, color: C.fg }}>{accessUrl || "your access URL"}</span>{" "}
-        reachable at all times — if it goes down, moves, or changes auth, users will receive errors when calling your Agent.
-      </div>
+      {!isGmi && (
+        <div
+          style={{
+            fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "18px", color: C.muted,
+            background: C.cardSolid,
+            border: `1px solid ${C.borderSoft}`,
+            borderRadius: 8,
+            padding: "10px 14px",
+          }}
+        >
+          <span style={{ color: C.fg, fontWeight: 600 }}>Reminder:</span>{" "}
+          GMI does not host your Agent. Keep{" "}
+          <span style={{ fontFamily: MONO, color: C.fg }}>{accessUrl || "your access URL"}</span>{" "}
+          reachable at all times — if it goes down, moves, or changes auth, users will receive errors when calling your Agent.
+        </div>
+      )}
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
         <button
@@ -2179,37 +2231,206 @@ function CopyInline({ value }: { value: string }) {
 }
 
 // ─── Step 5: Review & Register ────────────────────────────────────────────
+// Per PRD M6.4: anonymous image manifest probe at publish (this) + clone (ClawDetail).
+// Same heuristic as ClawDetail's mockImagePullState — keeps prototype outcomes consistent.
+type PublishProbeState = "ok" | "private" | "missing" | "empty";
+function probePublishImage(image: string): PublishProbeState {
+  const v = image.trim().toLowerCase();
+  if (!v) return "empty";
+  if (v.includes("private") || v.includes("internal") || v.includes("ghcr.io/yourorg")) return "private";
+  if (v.includes("404") || v.includes("missing") || v.includes("does-not-exist")) return "missing";
+  return "ok";
+}
+
 function StepReview({
-  summary,
+  summary, dockerImage,
 }: {
-  summary: { label: string; value: string; highlight?: boolean }[];
+  summary: {
+    group: string;
+    rows: { label: string; value: string; highlight?: boolean }[];
+  }[];
   computeRate: number;
   modelInfo: ModelSpec | null;
+  dockerImage: string;
 }) {
-  return (
-    <div
-      style={{
-        background: C.cardSolid,
-        border: `1px solid ${C.border}`,
-        borderRadius: 8,
-        overflow: "hidden",
-      }}
-    >
-      {summary.map((row, i) => (
-        <div
-          key={row.label}
+  // Default collapsed so the wizard fits in one viewport without scrolling.
+  // Expanded view shows the full grouped review (Container / Network / Lifecycle & MaaS).
+  const [expanded, setExpanded] = useState(false);
+
+  if (!expanded) {
+    const chips = summary.map((g) => `${g.group} · ${g.rows.length}`);
+    return (
+      <div
+        style={{
+          background: C.card,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          padding: "12px 16px",
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+        }}
+      >
+        {chips.map((c) => (
+          <span
+            key={c}
+            style={{
+              fontFamily: FONT, fontSize: 11, fontWeight: 500, lineHeight: "14px",
+              color: C.fg,
+              background: "rgba(255,255,255,0.04)",
+              border: `1px solid ${C.border}`,
+              padding: "1px 8px",
+              borderRadius: 999,
+            }}
+          >
+            {c}
+          </span>
+        ))}
+        <button
+          onClick={() => setExpanded(true)}
           style={{
-            display: "grid", gridTemplateColumns: "160px 1fr",
-            padding: "8px 16px",
-            borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`,
-            background: row.highlight ? "rgba(99,105,35,0.18)" : "transparent",
-            alignItems: "center",
+            marginLeft: "auto",
+            display: "inline-flex", alignItems: "center", gap: 3,
+            fontFamily: FONT, fontSize: 11, fontWeight: 500,
+            background: "transparent", color: C.muted,
+            border: "none", padding: 0, cursor: "pointer",
           }}
         >
-          <div style={{ fontFamily: FONT, fontSize: 11, fontWeight: 400, color: C.muted }}>{row.label}</div>
-          <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.value}</div>
+          Review all <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 5l7 7-7 7" /></svg>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button
+          onClick={() => setExpanded(false)}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 4,
+            fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
+            background: "transparent", color: C.muted,
+            border: "none", padding: 0, cursor: "pointer",
+          }}
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m18 15-6-6-6 6" />
+          </svg>
+          Collapse
+        </button>
+      </div>
+      {summary.map(({ group, rows }) => (
+        <div
+          key={group}
+          style={{
+            background: C.cardSolid,
+            border: `1px solid ${C.border}`,
+            borderRadius: 8,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              padding: "8px 16px",
+              borderBottom: `1px solid ${C.borderSoft}`,
+              background: "rgba(255,255,255,0.02)",
+              fontFamily: FONT, fontSize: 11, fontWeight: 600,
+              color: C.muted,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+            }}
+          >
+            {group}
+          </div>
+          {rows.map((row, i) => (
+            <div
+              key={row.label}
+              style={{
+                display: "grid", gridTemplateColumns: "160px 1fr",
+                padding: "8px 16px",
+                borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`,
+                background: row.highlight ? "rgba(99,105,35,0.18)" : "transparent",
+                alignItems: "center",
+              }}
+            >
+              <div style={{ fontFamily: FONT, fontSize: 11, fontWeight: 400, color: C.muted }}>{row.label}</div>
+              <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.value}</div>
+            </div>
+          ))}
         </div>
       ))}
+
+      {/* A3 — Publish-time image availability check (PRD M6.4) */}
+      {(() => {
+        const state = probePublishImage(dockerImage);
+        if (state === "empty") return null;
+        if (state === "ok") {
+          return (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 8,
+              padding: "10px 14px",
+              background: "rgba(52,211,153,0.06)",
+              border: "1px solid rgba(52,211,153,0.30)",
+              borderRadius: 8,
+              fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "18px",
+            }}>
+              <span style={{ color: C.ok, display: "inline-flex" }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 6 9 17l-5-5"/>
+                </svg>
+              </span>
+              <span><span style={{ color: C.fg, fontWeight: 600 }}>Image availability check passed</span> — your image is public and pullable. Listing can go live after review.</span>
+            </div>
+          );
+        }
+        if (state === "private") {
+          return (
+            <div style={{
+              display: "flex", alignItems: "flex-start", gap: 8,
+              padding: "10px 14px",
+              background: "rgba(251,191,36,0.06)",
+              border: "1px solid rgba(251,191,36,0.30)",
+              borderRadius: 8,
+              fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "18px",
+            }}>
+              <span style={{ color: C.warn, display: "inline-flex", marginTop: 2 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+              </span>
+              <span>
+                <span style={{ color: C.fg, fontWeight: 600 }}>Image is private (401/403)</span> — listing will go live in <span style={{ color: C.fg }}>Try demo</span> mode (cloners can't pull your image). To enable Deploy-your-own, make the image public or attach registry credentials below.
+              </span>
+            </div>
+          );
+        }
+        return (
+          <div style={{
+            display: "flex", alignItems: "flex-start", gap: 8,
+            padding: "10px 14px",
+            background: "rgba(248,113,113,0.06)",
+            border: "1px solid rgba(248,113,113,0.30)",
+            borderRadius: 8,
+            fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "18px",
+          }}>
+            <span style={{ color: C.err, display: "inline-flex", marginTop: 2 }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/>
+              </svg>
+            </span>
+            <span>
+              <span style={{ color: C.fg, fontWeight: 600 }}>Image not found (404)</span> — Register will be blocked until the image reference is fixed.
+            </span>
+          </div>
+        );
+      })()}
+
+      {/* A4-lite — Cloning consent line (PRD M6.5) */}
+      <div style={{
+        fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px",
+        paddingTop: 2,
+      }}>
+        Others can deploy their own copy using your image and config. <span style={{ color: C.fg }}>Secrets are never copied</span> — cloners must supply their own.
+      </div>
     </div>
   );
 }
@@ -2270,7 +2491,7 @@ export default function DeployWizard() {
 
   // Step 2 — PRD F-06: starter image + region/tier defaulted
   const [dockerSource, setDockerSource] = useState<"registry" | "upload">("registry");
-  const [dockerImage, setDockerImage] = useState("gmi/starter-agent:latest");
+  const [dockerImage, setDockerImage] = useState("");
   const [enableCreds, setEnableCreds] = useState(false);
   const [region, setRegion] = useState("us-ia-iowa-1");
   const [computeTier, setComputeTier] = useState("container");
@@ -2283,10 +2504,6 @@ export default function DeployWizard() {
 
   // Step 3
   const [ports, setPorts] = useState<PortMap[]>(DEFAULT_PORTS);
-  // Webhook receiver — opt-in public HTTPS ingress for 3rd-party webhooks
-  const [webhookEnabled, setWebhookEnabled] = useState(false);
-  const [webhookPort, setWebhookPort] = useState("8080");
-  const [webhookSecret, setWebhookSecret] = useState("");
 
   // Step 4
   const [customEnvs, setCustomEnvs] = useState<CustomEnv[]>([]);
@@ -2324,27 +2541,37 @@ export default function DeployWizard() {
   const computeRate = tierInfo?.pricePerHr ?? 0;
 
   const summary = useMemo(() => [
-    { label: "Project Name", value: projectName || "—" },
-    { label: "Docker Image", value: dockerImage || "—" },
-    { label: "Registry Credentials", value: enableCreds ? "Configured" : "Public image", highlight: !enableCreds },
-    { label: "Compute Tier",   value: tierInfo ? `${tierInfo.name} — ${tierInfo.cpu} · ${tierInfo.ram}` : "—" },
-    { label: "Region",         value: regionInfo ? `${regionInfo.name} · ${regionInfo.sub}` : "—" },
-    { label: "Lifetime",       value: `max ${maxLifetime} · idle ${idleTimeout}` },
-    { label: "Port Mappings",  value: ports.length > 0
-        ? ports.map((p) => `${p.protocol} ${p.internal || "?"} (${p.name || "port"})`).join(", ")
-        : "—" },
-    { label: "Webhook receiver",
-        value: webhookEnabled
-          ? `Public · forwards to :${webhookPort}${webhookSecret ? " · signed" : ""}`
-          : "Off" },
-    { label: "MaaS",           value: modelInfo ? modelInfo.name : "—" },
-    { label: "Custom Env Vars", value: customEnvs.length > 0 ? `${customEnvs.length} configured` : "—" },
-  ], [projectName, dockerImage, enableCreds, tierInfo, regionInfo, maxLifetime, idleTimeout, ports, webhookEnabled, webhookPort, webhookSecret, modelInfo, customEnvs]);
+    {
+      group: "Container",
+      rows: [
+        { label: "Project name", value: projectName || "—" },
+        { label: "Image",        value: dockerImage || "—" },
+        { label: "Registry",     value: enableCreds ? "Configured" : "Public image", highlight: !enableCreds },
+        { label: "Tier",         value: tierInfo ? `${tierInfo.name} — ${tierInfo.cpu} · ${tierInfo.ram}` : "—" },
+        { label: "Region",       value: regionInfo ? `${regionInfo.name} · ${regionInfo.sub}` : "—" },
+      ],
+    },
+    {
+      group: "Network",
+      rows: [
+        { label: "Ports", value: ports.length > 0
+            ? ports.map((p) => `${p.protocol} ${p.internal || "?"} (${p.name || "port"})`).join(", ")
+            : "—" },
+      ],
+    },
+    {
+      group: "Lifecycle & MaaS",
+      rows: [
+        { label: "Auto-stop", value: `max ${maxLifetime} · idle ${idleTimeout}` },
+        { label: "Model",     value: modelInfo ? modelInfo.name : "—" },
+        { label: "Env vars",  value: customEnvs.length > 0 ? `${customEnvs.length} configured` : "—" },
+      ],
+    },
+  ], [projectName, dockerImage, enableCreds, tierInfo, regionInfo, maxLifetime, idleTimeout, ports, modelInfo, customEnvs]);
 
   // "Pre-configured" subtitle in the section header — flips off the moment user customizes.
   const step2AllDefault =
     dockerSource === "registry" &&
-    dockerImage === "gmi/starter-agent:latest" &&
     !enableCreds &&
     region === "us-ia-iowa-1" &&
     computeTier === "container" &&
@@ -2357,8 +2584,7 @@ export default function DeployWizard() {
     ports[0].protocol === "HTTPS/2" &&
     ports[0].internal === "8080" &&
     ports[0].name === "web" &&
-    !ports[0].listening &&
-    !webhookEnabled;
+    !ports[0].listening;
 
   const step4AllDefault = customEnvs.length === 0;
 
@@ -2369,66 +2595,93 @@ export default function DeployWizard() {
 
       <div style={{ marginLeft: 210, paddingTop: 40 }}>
 
-        {/* Page header + host mode chooser — one tight row */}
-        <header style={{ padding: "14px 24px 6px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-          <div>
-            <h1
-              style={{
-                fontFamily: FONT, fontSize: 20, fontWeight: 700, lineHeight: "26px",
-                color: C.fg, margin: 0, letterSpacing: "-0.02em",
-              }}
-            >
-              Register an Agent
-            </h1>
-            <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, margin: "2px 0 0" }}>
-              Configure infrastructure and register your Agent. List on the Agentbox after testing.
-            </p>
-          </div>
-          {/* Host mode — compact segmented switch */}
-          <div
+        {/* Page header */}
+        <header style={{ padding: "14px 24px 8px" }}>
+          <h1
             style={{
-              display: "inline-flex",
-              background: C.pillBg,
-              border: `1px solid ${C.border}`,
-              borderRadius: 999,
-              padding: 3,
+              fontFamily: FONT, fontSize: 24, fontWeight: 700, lineHeight: "30px",
+              color: C.fg, margin: 0, letterSpacing: "-0.02em",
             }}
           >
-            <button
-              onClick={() => setHostMode("gmi")}
-              style={{
-                fontFamily: FONT, fontSize: 13, fontWeight: 500, lineHeight: "18px",
-                background: hostMode === "gmi" ? "rgba(221,234,77,0.18)" : "transparent",
-                color: hostMode === "gmi" ? C.lime : C.muted,
-                border: "none",
-                padding: "4px 12px",
-                borderRadius: 999,
-                cursor: "pointer",
-                display: "inline-flex", alignItems: "center", gap: 6,
-              }}
-            >
-              <IconGlobe size={12} /> Host on GMI
-              {hostMode === "gmi" && (
-                <span style={{ fontSize: 10, fontWeight: 600, opacity: 0.7, marginLeft: 2 }}>DEFAULT</span>
-              )}
-            </button>
-            <button
-              onClick={() => setHostMode("connect")}
-              style={{
-                fontFamily: FONT, fontSize: 13, fontWeight: 500, lineHeight: "18px",
-                background: hostMode === "connect" ? "rgba(221,234,77,0.18)" : "transparent",
-                color: hostMode === "connect" ? C.lime : C.muted,
-                border: "none",
-                padding: "4px 12px",
-                borderRadius: 999,
-                cursor: "pointer",
-                display: "inline-flex", alignItems: "center", gap: 6,
-              }}
-            >
-              <IconUpload size={12} /> Connect your agent
-            </button>
-          </div>
+            Register an Agent
+          </h1>
+          <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, margin: "2px 0 0" }}>
+            Configure infrastructure and register your Agent. List on the Agentbox after testing.
+          </p>
         </header>
+
+        {/* Host mode — two side-by-side cards (Host on GMI DEFAULT yellow border / Connect with GMI outline).
+            Matches the original List Agent path-picker pattern: equal-weight cards, selected
+            card gets the lime accent + yellow border, deselected stays muted. */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 12,
+            padding: "0 24px 12px",
+          }}
+        >
+          <button
+            onClick={() => setHostMode("gmi")}
+            style={{
+              textAlign: "left", cursor: "pointer",
+              background: hostMode === "gmi" ? "rgba(99,105,35,0.18)" : C.cardSolid,
+              border: hostMode === "gmi" ? `1.5px solid ${C.lime}` : `1px solid ${C.border}`,
+              borderRadius: 10,
+              padding: "12px 16px",
+              display: "flex", flexDirection: "column", gap: 4,
+              transition: "border-color .15s, background .15s",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ color: hostMode === "gmi" ? C.lime : C.muted, display: "inline-flex" }}>
+                <IconGlobe size={14} />
+              </span>
+              <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>
+                Host on GMI
+              </span>
+              {hostMode === "gmi" && (
+                <span
+                  style={{
+                    fontFamily: MONO, fontSize: 9, fontWeight: 600, letterSpacing: "0.08em",
+                    color: C.lime, background: "rgba(221,234,77,0.10)",
+                    border: `1px solid rgba(221,234,77,0.35)`,
+                    padding: "1px 6px", borderRadius: 4,
+                  }}
+                >
+                  DEFAULT
+                </span>
+              )}
+            </div>
+            <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "16px" }}>
+              We run your agent + optional GMI Models. Container, networking, lifecycle all handled.
+            </span>
+          </button>
+          <button
+            onClick={() => setHostMode("connect")}
+            style={{
+              textAlign: "left", cursor: "pointer",
+              background: hostMode === "connect" ? "rgba(99,105,35,0.18)" : C.cardSolid,
+              border: hostMode === "connect" ? `1.5px solid ${C.lime}` : `1px solid ${C.border}`,
+              borderRadius: 10,
+              padding: "12px 16px",
+              display: "flex", flexDirection: "column", gap: 4,
+              transition: "border-color .15s, background .15s",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ color: hostMode === "connect" ? C.lime : C.muted, display: "inline-flex" }}>
+                <IconUpload size={14} />
+              </span>
+              <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>
+                Connect with GMI
+              </span>
+            </div>
+            <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "16px" }}>
+              You run the agent on your infra; only connects to GMI Models. You own uptime.
+            </span>
+          </button>
+        </div>
 
         {/* Pre-filled banner — visible when wizard was forked from a catalog template */}
         {forkedFrom && (
@@ -2436,8 +2689,8 @@ export default function DeployWizard() {
             style={{
               margin: "8px 24px 0",
               padding: "10px 14px",
-              background: "rgba(125,211,252,0.06)",
-              border: "1px solid rgba(125,211,252,0.30)",
+              background: "rgba(221,234,77,0.05)",
+              border: "1px solid rgba(221,234,77,0.30)",
               borderRadius: 8,
               display: "flex",
               alignItems: "center",
@@ -2446,14 +2699,14 @@ export default function DeployWizard() {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-              <span style={{ display: "inline-flex", color: "#7dd3fc" }}>
+              <span style={{ display: "inline-flex", color: C.lime }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M8 17.929H6c-1.105 0-2-.912-2-2.036V5.036C4 3.91 4.895 3 6 3h8c1.105 0 2 .911 2 2.036v1.866m-6 .17h8c1.105 0 2 .91 2 2.035v10.857C20 21.09 19.105 22 18 22h-8c-1.105 0-2-.911-2-2.036V9.107c0-1.124.895-2.036 2-2.036z"/>
                 </svg>
               </span>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg, lineHeight: "18px" }}>
-                  Pre-filled from <span style={{ color: "#7dd3fc" }}>{forkedFrom}</span>
+                  Pre-filled from <span style={{ color: C.lime }}>{forkedFrom}</span>
                 </div>
                 <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "16px", marginTop: 1 }}>
                   Image, env declarations, ports and defaults come from the template. Expand any section below to customize.
@@ -2476,13 +2729,19 @@ export default function DeployWizard() {
         )}
 
         {/* Wizard area — branches on hostMode (GMI / Connect) and submitted (Success view) */}
-        {submitted && hostMode === "connect" ? (
+        {submitted ? (
           <SuccessView
             projectName={projectName}
-            accessUrl={accessUrl}
+            accessUrl={hostMode === "connect" ? accessUrl : ""}
             maasKey={maasKey}
+            hostMode={hostMode}
             onViewAgents={() => setLocation("/dashboard")}
-            onListOnAgentbox={() => setLocation("/marketplace")}
+            onListOnAgentbox={() => {
+              // M3: navigate to the List-an-Agent form (instead of flipping
+              // state directly). The form is where the user fills marketplace
+              // identity, description & media, then submits for review.
+              setLocation("/list-claw?from=deploy");
+            }}
           />
         ) : (
           <section
@@ -2533,10 +2792,6 @@ export default function DeployWizard() {
                         {s.id === 3 && (
                           <StepNetworking
                             ports={ports} setPorts={setPorts}
-                            webhookEnabled={webhookEnabled} setWebhookEnabled={setWebhookEnabled}
-                            webhookPort={webhookPort} setWebhookPort={setWebhookPort}
-                            webhookSecret={webhookSecret} setWebhookSecret={setWebhookSecret}
-                            projectName={projectName}
                             forkedFromTemplate={!!forkedFrom}
                           />
                         )}
@@ -2546,6 +2801,7 @@ export default function DeployWizard() {
                             summary={summary}
                             computeRate={computeRate}
                             modelInfo={modelInfo}
+                            dockerImage={dockerImage}
                           />
                         )}
                       </div>
@@ -2588,9 +2844,13 @@ export default function DeployWizard() {
             <RegisterPanel
               computeRate={computeRate}
               hideComputeCost={hostMode === "connect"}
+              maxLifetime={maxLifetime}
+              idleTimeout={idleTimeout}
               canRegister={
+                // M6.4: block publish when the image is known-missing (404).
+                // Private (401/403) and public both allowed — review gate handles them.
                 hostMode === "gmi"
-                  ? projectName.trim().length > 1
+                  ? projectName.trim().length > 1 && probePublishImage(dockerImage) !== "missing" && dockerImage.trim().length > 0
                   : projectName.trim().length > 1 && /^https:\/\//i.test(accessUrl.trim())
               }
               ctaLabel={hostMode === "connect" ? "Submit" : "Register Agent"}
@@ -2609,10 +2869,26 @@ export default function DeployWizard() {
                     accessUrl: accessUrl.trim(),
                     category: "Code & Dev Tools",
                     registeredAt: new Date().toISOString(),
+                    listingState: "draft",
                   });
                   setSubmitted(true);
                 } else {
-                  setLocation("/dashboard");
+                  // Host on GMI: persist + show success view with 2 distinct CTAs
+                  // per PRD F-02 ("Register success → two distinct CTAs").
+                  const effectiveKey = maasKey || genMaasKey();
+                  if (!maasKey) setMaasKey(effectiveKey);
+                  persistRegisteredAgent({
+                    id: `ag_${Date.now().toString(36)}`,
+                    name: projectName.trim() || "hosted-agent",
+                    templateId: `tpl_${Date.now().toString(36)}`,
+                    hostMode: "gmi",
+                    maasKey: effectiveKey,
+                    accessUrl: "",
+                    category: "Code & Dev Tools",
+                    registeredAt: new Date().toISOString(),
+                    listingState: "draft",
+                  });
+                  setSubmitted(true);
                 }
               }}
             />

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
@@ -6,6 +6,7 @@ import Footer from "@/components/Footer";
 
 // ─── Tokens (Geist Sans + GMI Console palette, verbatim from Figma JSON) ──
 const FONT = "'Geist', system-ui, sans-serif";
+const MONO = "'GeistMono', ui-monospace, monospace";
 const C = {
   bg:        "#0a0a0a",
   fg:        "#fafafa",
@@ -28,6 +29,10 @@ const C = {
 type TaskStatus = "pending" | "creating" | "running" | "stopping" | "stopped" | "error" | "deleted";
 type AgentStatus = TaskStatus | "idle";
 
+// Per PRD M4: a registered agent lives in one of four listing states until human
+// review approves it. Default after Register = "draft" (only visible to owner).
+type ListingState = "draft" | "pending_review" | "live" | "rejected";
+
 interface MyAgent {
   id: string;
   name: string;
@@ -38,6 +43,7 @@ interface MyAgent {
   maasKey?: string;          // populated for connect-mode agents (synced from Register flow)
   accessUrl?: string;        // populated for connect-mode agents
   registeredAt?: string;
+  listingState?: ListingState;  // M4 state machine — default "draft"
 }
 
 // Mirrors the localStorage key written by DeployWizard's Connect-flow Submit
@@ -51,23 +57,12 @@ function loadRegisteredAgents(): MyAgent[] {
   } catch { return []; }
 }
 
-const MY_DEPLOYMENTS: MyAgent[] = [
-  // Ships with the OpenClaw provider plugin — a hello-world template the user
-  // can provision immediately to verify the plugin install worked.
-  { id: "ag_openclaw_default", name: "OpenClaw · default template",
-    templateId: "tpl_openclaw_default", category: "Code & Dev Tools",
-    isTemplate: true },
-  { id: "ag_openclaw_test", name: "Openclaw test", templateId: "d8772394-1a69-4cfd-8b97-f3c895db9e85",
-    category: "Code & Dev Tools" },
-  { id: "ag_openclaw_v3", name: "openclaw-v3", templateId: "tpl_8a1c-openclaw-v3",
-    category: "Code & Dev Tools" },
-  { id: "ag_hermes", name: "Hermes", templateId: "tpl_4f9b-hermes",
-    category: "Research & Knowledge" },
-  { id: "ag_tinyhuman", name: "test tinyhuman", templateId: "tpl_2d5e-tinyhuman",
-    category: "Code & Dev Tools" },
-];
+// Per PRD F-02 "New-user empty state": no seed agents. A fresh user has 0
+// deployments until they register or clone from the marketplace.
+const MY_DEPLOYMENTS: MyAgent[] = [];
 
 interface InstanceConfig {
+  name?: string;         // optional instance name (e.g. "prod-worker-1")
   envOverrides: { id: string; key: string; value: string }[];
   maxLifetime: string;   // e.g. "1h", "off"
   idleTimeout: string;   // e.g. "5min", "off"
@@ -93,11 +88,8 @@ function endpointFor(id: string): string {
   return `https://agentbox.gmi.cloud/t/${id.replace("inst_", "").slice(0, 12)}`;
 }
 
-const INITIAL_INSTANCES: Instance[] = [
-  { id: "inst_a1b2c3d4-9876-5432-abcd-1122334455", agentId: "ag_hermes",
-    status: "running", created: "2026-06-12 14:22:08",
-    endpointUrl: endpointFor("inst_a1b2c3d4-9876-5432-abcd-1122334455") },
-];
+// No seed instances — they were tied to seed agents which are now removed.
+const INITIAL_INSTANCES: Instance[] = [];
 
 // Mock log tail (F-03 — `GET /tasks/{id}/logs`); deterministic from instance id
 function mockLogsFor(inst: Instance): string[] {
@@ -197,9 +189,9 @@ function MaasKeyRow({ value, accessUrl }: { value: string; accessUrl?: string })
   return (
     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginTop: 6 }}>
       <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-        MaaS Key
+        GMI Models key
       </span>
-      <code style={{ fontFamily: "'GeistMono', monospace", fontSize: 12, color: C.fg, background: "rgba(125,211,252,0.06)", border: "1px solid rgba(125,211,252,0.25)", padding: "2px 8px", borderRadius: 6 }}>
+      <code style={{ fontFamily: "'GeistMono', monospace", fontSize: 12, color: C.fg, background: "rgba(255,255,255,0.03)", border: `1px solid ${C.borderSoft}`, padding: "2px 8px", borderRadius: 6 }}>
         {revealed ? value : masked}
       </code>
       <button
@@ -214,7 +206,7 @@ function MaasKeyRow({ value, accessUrl }: { value: string; accessUrl?: string })
       </button>
       <CopyChip value={value} />
       {accessUrl && (
-        <a href={accessUrl} target="_blank" rel="noreferrer" style={{ fontFamily: FONT, fontSize: 11, fontWeight: 500, color: "#7dd3fc", textDecoration: "none", marginLeft: "auto" }}>
+        <a href={accessUrl} target="_blank" rel="noreferrer" style={{ fontFamily: FONT, fontSize: 11, fontWeight: 500, color: C.muted, textDecoration: "none", marginLeft: "auto" }}>
           {accessUrl} ↗
         </a>
       )}
@@ -324,23 +316,193 @@ function statusDot(status: AgentStatus): string {
 }
 
 // ─── Left agent list item ─────────────────────────────────────────────────
+// ─── New-user welcome (right pane when 0 agents registered) ─────────────
+// Per PRD F-02: 0 agents → primary CTA "Start from a template →" deep-links
+// to /marketplace?starter=true (filtered to Starter / Official). Secondary
+// CTA lets users register from scratch.
+function NewUserWelcome({
+  onStartFromTemplate, onListAnAgent,
+}: {
+  onStartFromTemplate: () => void;
+  onListAnAgent: () => void;
+}) {
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      padding: "48px 32px",
+      minHeight: 360,
+    }}>
+      <div style={{
+        width: 48, height: 48, borderRadius: 10,
+        background: "rgba(221,234,77,0.10)",
+        border: `1px solid rgba(221,234,77,0.35)`,
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        color: C.lime,
+        marginBottom: 16,
+      }}>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+          <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+          <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+          <path d="M14 17.5h7M17.5 14v7" />
+        </svg>
+      </div>
+      <h2 style={{
+        fontFamily: FONT, fontSize: 18, fontWeight: 600, color: C.fg, margin: 0,
+        letterSpacing: "-0.01em",
+      }}>
+        You haven't registered any agents yet
+      </h2>
+      <p style={{
+        fontFamily: FONT, fontSize: 13, fontWeight: 400, color: C.muted,
+        margin: "6px 0 24px", textAlign: "center", maxWidth: 420, lineHeight: "20px",
+      }}>
+        Pick a curated starter template from the catalog and deploy your own copy in seconds,
+        or register a new agent from scratch.
+      </p>
+      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <button
+          onClick={onStartFromTemplate}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            fontFamily: FONT, fontSize: 14, fontWeight: 600, lineHeight: "20px",
+            background: C.lime, color: C.limeText,
+            border: "none",
+            padding: "9px 18px", borderRadius: 8, cursor: "pointer",
+          }}
+        >
+          Start from a template →
+        </button>
+        <button
+          onClick={onListAnAgent}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
+            background: "transparent", color: C.muted,
+            border: `1px solid ${C.border}`,
+            padding: "9px 16px", borderRadius: 8, cursor: "pointer",
+          }}
+        >
+          Or register from scratch
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Listing-state badge — PRD M4 review state machine ──────────────────
+// Compact pill that surfaces where a registered agent sits in the marketplace
+// review lifecycle. "draft" is the post-Register default. "pending_review"
+// after user clicks "List on Agentbox". "live" / "rejected" set by ops.
+function ListingStateBadge({ state }: { state?: ListingState }) {
+  // No badge when state is missing — keeps the row clean for seed/template entries.
+  if (!state || state === "draft") {
+    return (
+      <span
+        title="Draft — registered, not yet listed on Agentbox"
+        style={{
+          fontFamily: FONT, fontSize: 10, fontWeight: 600, lineHeight: "14px",
+          color: C.muted,
+          background: "rgba(255,255,255,0.04)",
+          border: `1px solid ${C.border}`,
+          padding: "1px 6px",
+          borderRadius: 999,
+          letterSpacing: "0.06em",
+        }}
+      >
+        DRAFT
+      </span>
+    );
+  }
+  if (state === "pending_review") {
+    return (
+      <span
+        title="Submitted for review — human will check before going live"
+        style={{
+          fontFamily: FONT, fontSize: 10, fontWeight: 600, lineHeight: "14px",
+          color: C.warn,
+          background: "rgba(251,191,36,0.10)",
+          border: "1px solid rgba(251,191,36,0.45)",
+          padding: "1px 6px",
+          borderRadius: 999,
+          letterSpacing: "0.06em",
+        }}
+      >
+        PENDING REVIEW
+      </span>
+    );
+  }
+  if (state === "live") {
+    return (
+      <span
+        title="Live on Agentbox"
+        style={{
+          fontFamily: FONT, fontSize: 10, fontWeight: 600, lineHeight: "14px",
+          color: C.ok,
+          background: "rgba(52,211,153,0.10)",
+          border: "1px solid rgba(52,211,153,0.45)",
+          padding: "1px 6px",
+          borderRadius: 999,
+          letterSpacing: "0.06em",
+        }}
+      >
+        LIVE
+      </span>
+    );
+  }
+  return (
+    <span
+      title="Rejected — see reviewer note; edit to resubmit"
+      style={{
+        fontFamily: FONT, fontSize: 10, fontWeight: 600, lineHeight: "14px",
+        color: C.err,
+        background: "rgba(248,113,113,0.10)",
+        border: "1px solid rgba(248,113,113,0.45)",
+        padding: "1px 6px",
+        borderRadius: 999,
+        letterSpacing: "0.06em",
+      }}
+    >
+      REJECTED
+    </span>
+  );
+}
+
 function AgentListItem({
-  agent, agg, selected, onClick,
+  agent, agg, selected, onClick, onEditTemplate, onDeleteTemplate,
 }: {
   agent: MyAgent;
   agg: AgentAggregate;
   selected: boolean;
   onClick: () => void;
+  onEditTemplate: (agent: MyAgent) => void;
+  onDeleteTemplate: (agent: MyAgent) => void;
 }) {
   const status: AgentStatus =
     agg.error > 0 ? "error" :
     agg.creating > 0 ? "creating" :
     agg.active > 0 ? "running" : "idle";
 
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  // Close menu on outside click
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [menuOpen]);
+
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onClick(); }}
       style={{
+        position: "relative",
         width: "100%",
         textAlign: "left",
         background: selected ? C.selectedYellow : C.card,
@@ -353,23 +515,79 @@ function AgentListItem({
         transition: "background .15s ease, border-color .15s ease",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 14, fontWeight: 500, color: C.fg, lineHeight: "20px" }}>{agent.name}</div>
-        {agent.isTemplate && (
-          <span
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 500, color: C.fg, lineHeight: "20px" }}>{agent.name}</div>
+          {agent.isTemplate && (
+            <span
+              style={{
+                fontFamily: FONT, fontSize: 10, fontWeight: 600, lineHeight: "14px",
+                color: C.lime,
+                background: "rgba(221,234,77,0.10)",
+                border: "1px solid rgba(221,234,77,0.45)",
+                padding: "1px 6px",
+                borderRadius: 999,
+                letterSpacing: "0.06em",
+              }}
+            >
+              TEMPLATE
+            </span>
+          )}
+          <ListingStateBadge state={agent.listingState} />
+        </div>
+        {/* Kebab menu — Edit / Delete template */}
+        <div ref={menuRef} style={{ position: "relative", flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+          <button
+            aria-label="Template options"
+            onClick={() => setMenuOpen((o) => !o)}
             style={{
-              fontFamily: FONT, fontSize: 10, fontWeight: 600, lineHeight: "14px",
-              color: C.lime,
-              background: "rgba(221,234,77,0.10)",
-              border: "1px solid rgba(221,234,77,0.45)",
-              padding: "1px 6px",
-              borderRadius: 999,
-              letterSpacing: "0.06em",
+              width: 24, height: 24,
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              background: menuOpen ? "rgba(255,255,255,0.06)" : "transparent",
+              border: `1px solid ${menuOpen ? C.border : "transparent"}`,
+              color: C.muted,
+              borderRadius: 6, cursor: "pointer",
             }}
           >
-            TEMPLATE
-          </span>
-        )}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" />
+            </svg>
+          </button>
+          {menuOpen && (
+            <div
+              style={{
+                position: "absolute", top: "calc(100% + 4px)", right: 0,
+                background: C.cardSolid,
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+                padding: 4,
+                display: "flex", flexDirection: "column",
+                minWidth: 160,
+                zIndex: 20,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+              }}
+            >
+              <button
+                onClick={() => { setMenuOpen(false); onEditTemplate(agent); }}
+                style={menuItemStyle(C.fg)}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                </svg>
+                Edit template
+              </button>
+              <button
+                onClick={() => { setMenuOpen(false); onDeleteTemplate(agent); }}
+                style={menuItemStyle("#f87171")}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z"/>
+                </svg>
+                Delete template
+              </button>
+            </div>
+          )}
+        </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <span
@@ -382,8 +600,23 @@ function AgentListItem({
           {status} · {agg.total} inst.
         </span>
       </div>
-    </button>
+    </div>
   );
+}
+
+function menuItemStyle(color: string): React.CSSProperties {
+  return {
+    display: "inline-flex", alignItems: "center", gap: 8,
+    fontFamily: FONT, fontSize: 13, fontWeight: 500, lineHeight: "18px",
+    color,
+    background: "transparent",
+    border: "none",
+    padding: "6px 10px",
+    borderRadius: 6,
+    cursor: "pointer",
+    textAlign: "left",
+    width: "100%",
+  };
 }
 
 // ─── Logs pane — extracted from previous inline expansion ───────────────
@@ -586,11 +819,11 @@ function ConfigPane({ inst }: { inst: Instance }) {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 12, lineHeight: "18px" }}>
               <span style={{ color: C.muted }}>max_lifetime</span>
-              <span style={{ color: cfg!.maxLifetime !== TEMPLATE_DEFAULT_CONFIG.maxLifetime ? "#7dd3fc" : C.fg, fontFamily: "'GeistMono', monospace" }}>{cfg!.maxLifetime}</span>
+              <span style={{ color: cfg!.maxLifetime !== TEMPLATE_DEFAULT_CONFIG.maxLifetime ? C.lime : C.fg, fontFamily: "'GeistMono', monospace" }}>{cfg!.maxLifetime}</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 12, lineHeight: "18px" }}>
               <span style={{ color: C.muted }}>idle_timeout</span>
-              <span style={{ color: cfg!.idleTimeout !== TEMPLATE_DEFAULT_CONFIG.idleTimeout ? "#7dd3fc" : C.fg, fontFamily: "'GeistMono', monospace" }}>{cfg!.idleTimeout}</span>
+              <span style={{ color: cfg!.idleTimeout !== TEMPLATE_DEFAULT_CONFIG.idleTimeout ? C.lime : C.fg, fontFamily: "'GeistMono', monospace" }}>{cfg!.idleTimeout}</span>
             </div>
           </div>
           {cfg!.envOverrides.length > 0 && (
@@ -600,7 +833,7 @@ function ConfigPane({ inst }: { inst: Instance }) {
               </div>
               {cfg!.envOverrides.map((e) => (
                 <div key={e.id} style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 12, fontFamily: "'GeistMono', monospace", fontSize: 12, lineHeight: "20px" }}>
-                  <span style={{ color: "#7dd3fc" }}>{e.key || "—"}</span>
+                  <span style={{ color: C.lime }}>{e.key || "—"}</span>
                   <span style={{ color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.value || "—"}</span>
                 </div>
               ))}
@@ -612,43 +845,364 @@ function ConfigPane({ inst }: { inst: Instance }) {
   );
 }
 
+// ─── Listing actions — primary CTA inline + ⋮ menu for secondary ─────────
+// "View public listing" is the high-frequency action (external link) so it
+// stays inline as a lime CTA. "Edit listing" + "Unpublish" fold into a ⋮ menu
+// to reduce button density on the agent detail header.
+function ListingActions({ agentId, state }: { agentId: string; state?: ListingState }) {
+  const [, setLocation] = useLocation();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const goToListingForm = () => setLocation(`/list-claw?agentId=${encodeURIComponent(agentId)}`);
+
+  // No state / draft → single primary CTA driving the user to complete the listing.
+  // The ⋮ menu only makes sense once a listing has been submitted (pending) or is live.
+  const isDraft   = !state || state === "draft";
+  const isPending = state === "pending_review";
+  const isLive    = state === "live";
+  const isRejected = state === "rejected";
+
+  const primaryLabel =
+    isDraft     ? "Complete listing"
+    : isPending ? "Edit pending listing"
+    : isLive    ? "View public listing"
+    : isRejected ? "Fix & resubmit"
+    : "Edit listing";
+
+  const primaryAction = isLive ? () => { /* would open public URL */ } : goToListingForm;
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <button
+        onClick={primaryAction}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 6,
+          fontFamily: FONT, fontSize: 13, fontWeight: 600, lineHeight: "20px",
+          background: isLive ? C.lime : "transparent",
+          color: isLive ? C.limeText : C.fg,
+          border: isLive ? "none" : `1px solid ${C.border}`,
+          padding: "6px 14px", borderRadius: 8, cursor: "pointer",
+        }}
+      >
+        {primaryLabel} {isLive && <IconExternalLink size={12} />}
+      </button>
+
+      {/* ⋮ menu only when there's a listing to manage (pending/live/rejected) */}
+      {!isDraft && (
+        <div ref={ref} style={{ position: "relative" }}>
+          <button
+            aria-label="Listing actions"
+            onClick={() => setOpen((o) => !o)}
+            style={{
+              width: 32, height: 32,
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              background: open ? "rgba(255,255,255,0.06)" : "transparent",
+              color: C.muted,
+              border: `1px solid ${C.border}`,
+              borderRadius: 8, cursor: "pointer",
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>
+            </svg>
+          </button>
+          {open && (
+            <div
+              style={{
+                position: "absolute", top: "calc(100% + 4px)", right: 0,
+                background: C.cardSolid,
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+                padding: 4,
+                minWidth: 160,
+                zIndex: 30,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+                display: "flex", flexDirection: "column",
+              }}
+            >
+              {isLive && (
+                <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.fg)}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                  </svg>
+                  Edit listing
+                </button>
+              )}
+              <button onClick={() => setOpen(false)} style={menuItemStyle(C.err)}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 6 6 18M6 6l12 12"/>
+                </svg>
+                {isLive ? "Unpublish" : "Withdraw"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Per-instance row ⋮ menu ─────────────────────────────────────────────
+// Reusable view actions (Detail / Log / Monitoring) live here so the inline
+// row stays focused on the net-new high-frequency actions (Open / Terminate).
+type RowPanel = "config" | "logs" | "metrics";
+function InstanceRowMenu({
+  instId, activePanel, onSelect,
+}: {
+  instId: string;
+  activePanel: "logs" | "shell" | "metrics" | "config" | null;
+  onSelect: (panel: RowPanel) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const items: { key: RowPanel; label: string; icon: React.ReactNode }[] = [
+    { key: "config",  label: "View Detail",  icon: <IconConfig /> },
+    { key: "logs",    label: "View Log",     icon: <IconLogs /> },
+    { key: "metrics", label: "Monitoring",   icon: <IconChart /> },
+  ];
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        aria-label={`Instance ${instId.slice(0, 8)} actions`}
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          width: 26, height: 24,
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          background: open ? "rgba(255,255,255,0.06)" : "transparent",
+          color: C.muted,
+          border: `1px solid ${open ? C.border : "transparent"}`,
+          borderRadius: 6, cursor: "pointer",
+        }}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="12" cy="5"  r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/>
+        </svg>
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute", top: "calc(100% + 4px)", right: 0,
+            background: C.cardSolid,
+            border: `1px solid ${C.border}`,
+            borderRadius: 8,
+            padding: 4,
+            minWidth: 152,
+            zIndex: 30,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+            display: "flex", flexDirection: "column",
+          }}
+        >
+          {items.map((it) => {
+            const active = activePanel === it.key;
+            return (
+              <button
+                key={it.key}
+                onClick={() => { setOpen(false); onSelect(it.key); }}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 8,
+                  fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "18px",
+                  color: active ? C.lime : C.fg,
+                  background: active ? "rgba(221,234,77,0.08)" : "transparent",
+                  border: "none",
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  textAlign: "left",
+                  width: "100%",
+                }}
+              >
+                {it.icon} {it.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Confirm dialog — replaces native window.confirm() ──────────────────
+// Single shared dialog for any destructive action (Terminate instance, Delete
+// template). Driven by a `pending` object on the parent — open it by setting
+// the object, close by setting it to null.
+type ConfirmRequest = {
+  title: string;
+  body: React.ReactNode;
+  confirmLabel?: string;
+  destructive?: boolean;
+  onConfirm: () => void;
+};
+function ConfirmDialog({
+  pending, onClose,
+}: {
+  pending: ConfirmRequest | null;
+  onClose: () => void;
+}) {
+  if (!pending) return null;
+  const isDestructive = pending.destructive !== false;
+  const confirmBg = isDestructive ? C.err : C.lime;
+  const confirmFg = isDestructive ? "#0a0a0a" : C.limeText;
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 1000,
+        background: "rgba(0,0,0,0.78)",
+        backdropFilter: "blur(6px)",
+        WebkitBackdropFilter: "blur(6px)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 440, maxWidth: "100%",
+          background: C.cardSolid,
+          border: `1px solid ${C.border}`,
+          borderRadius: 12,
+          padding: "20px 22px 18px",
+          display: "flex", flexDirection: "column", gap: 14,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {isDestructive && (
+            <span style={{
+              width: 26, height: 26, borderRadius: 999,
+              background: "rgba(248,113,113,0.14)",
+              border: "1px solid rgba(248,113,113,0.45)",
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              color: C.err,
+            }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+              </svg>
+            </span>
+          )}
+          <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0, lineHeight: "22px" }}>
+            {pending.title}
+          </h3>
+        </div>
+        <div style={{ fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "18px" }}>
+          {pending.body}
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
+          <button
+            onClick={onClose}
+            style={{
+              fontFamily: FONT, fontSize: 13, fontWeight: 500,
+              background: "transparent", color: C.muted,
+              border: `1px solid ${C.border}`,
+              padding: "6px 14px", borderRadius: 8, cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => { pending.onConfirm(); onClose(); }}
+            style={{
+              fontFamily: FONT, fontSize: 13, fontWeight: 600,
+              background: confirmBg, color: confirmFg,
+              border: "none",
+              padding: "6px 14px", borderRadius: 8, cursor: "pointer",
+            }}
+          >
+            {pending.confirmLabel ?? (isDestructive ? "Delete" : "Confirm")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Provision modal — per-task overrides (env + lifecycle) ─────────────
 function ProvisionModal({
-  open, agentName, onCancel, onSubmit,
+  open, agentName, image, onCancel, onSubmit,
 }: {
   open: boolean;
   agentName: string;
+  image?: string;
   onCancel: () => void;
   onSubmit: (cfg: InstanceConfig) => void;
 }) {
-  const [env, setEnv] = useState<{ id: string; key: string; value: string }[]>([]);
+  const [name, setName] = useState("");
+  // Always start with one empty editable row at the bottom (matches the
+  // reference UI — user can start typing without clicking "+ key" first).
+  const [env, setEnv] = useState<{ id: string; key: string; value: string }[]>([
+    { id: "e0", key: "", value: "" },
+  ]);
   const [maxLifetime, setMaxLifetime] = useState(TEMPLATE_DEFAULT_CONFIG.maxLifetime);
   const [idleTimeout, setIdleTimeout] = useState(TEMPLATE_DEFAULT_CONFIG.idleTimeout);
+  // .env import — parse KEY=VALUE lines into override rows
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState("");
 
   // Reset on close
   if (!open) return null;
 
   const addEnv = () => setEnv((e) => [...e, { id: `e${Math.random().toString(36).slice(2, 8)}`, key: "", value: "" }]);
+  const applyImport = () => {
+    const lines = importText.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+    const parsed: { id: string; key: string; value: string }[] = [];
+    for (const line of lines) {
+      const eq = line.indexOf("=");
+      if (eq < 1) continue;
+      const key = line.slice(0, eq).trim();
+      let value = line.slice(eq + 1).trim();
+      // strip quotes
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      // Skip GMI_MAAS_* — locked by platform
+      if (/^GMI_MAAS_/i.test(key)) continue;
+      parsed.push({ id: `e${Math.random().toString(36).slice(2, 8)}`, key, value });
+    }
+    if (parsed.length) setEnv((e) => [...e, ...parsed]);
+    setImportText("");
+    setImportOpen(false);
+  };
   const updateEnv = (id: string, patch: Partial<{ key: string; value: string }>) =>
     setEnv((e) => e.map((row) => (row.id === id ? { ...row, ...patch } : row)));
   const removeEnv = (id: string) => setEnv((e) => e.filter((row) => row.id !== id));
 
-  const close = () => {
-    setEnv([]);
+  const resetState = () => {
+    setName("");
+    setEnv([{ id: "e0", key: "", value: "" }]);
     setMaxLifetime(TEMPLATE_DEFAULT_CONFIG.maxLifetime);
     setIdleTimeout(TEMPLATE_DEFAULT_CONFIG.idleTimeout);
-    onCancel();
+    setImportOpen(false);
+    setImportText("");
   };
+
+  const close = () => { resetState(); onCancel(); };
 
   const submit = () => {
     onSubmit({
+      name: name.trim() || undefined,
       envOverrides: env.filter((e) => e.key.trim().length > 0),
       maxLifetime,
       idleTimeout,
     });
-    setEnv([]);
-    setMaxLifetime(TEMPLATE_DEFAULT_CONFIG.maxLifetime);
-    setIdleTimeout(TEMPLATE_DEFAULT_CONFIG.idleTimeout);
+    resetState();
   };
 
   const inputStyle: React.CSSProperties = {
@@ -665,8 +1219,10 @@ function ProvisionModal({
     <div
       onClick={close}
       style={{
-        position: "fixed", inset: 0, zIndex: 100,
-        background: "rgba(0,0,0,0.6)",
+        position: "fixed", inset: 0, zIndex: 1000,
+        background: "rgba(0,0,0,0.78)",
+        backdropFilter: "blur(6px)",
+        WebkitBackdropFilter: "blur(6px)",
         display: "flex", alignItems: "center", justifyContent: "center",
         padding: 24,
       }}
@@ -685,45 +1241,160 @@ function ProvisionModal({
       >
         {/* Header */}
         <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}` }}>
-          <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>Provision instance</h3>
+          <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>
+            Launch instance {agentName && <span style={{ color: C.muted, fontWeight: 500 }}> — {agentName}</span>}
+          </h3>
           <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "4px 0 0", lineHeight: "16px" }}>
-            Override template defaults for this task only. {agentName && <span>Agent: <span style={{ color: C.fg }}>{agentName}</span></span>}
+            Provision a new container instance from this deployment.
           </p>
         </div>
 
         {/* Body — scrollable */}
         <div style={{ padding: "16px 20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 18 }}>
-          {/* Env overrides */}
+          {/* Image / Template — read-only, shown so the user knows what they're launching */}
+          <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+              Image / Template
+            </span>
+            <code style={{
+              ...inputStyle,
+              color: C.muted,
+              display: "flex", alignItems: "center",
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            }}>
+              {image || "ghcr.io/mjs-gmi/openclaw-gmi:latest"}
+            </code>
+          </section>
+
+          {/* Name — optional */}
+          <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>
+              Name <span style={{ color: C.muted, fontWeight: 400 }}>· optional</span>
+            </label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. prod-worker-1"
+              style={{ ...inputStyle, fontFamily: FONT, fontSize: 13 }}
+            />
+          </section>
+
+          {/* Environment variables — table */}
           <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>
-                Environment overrides
-                <span style={{ color: C.muted, fontWeight: 400, marginLeft: 6 }}>· optional</span>
+                Environment variables <span style={{ color: C.muted, fontWeight: 400 }}>· optional</span>
               </label>
               <button
-                onClick={addEnv}
+                onClick={() => setImportOpen((o) => !o)}
                 style={{
-                  display: "inline-flex", alignItems: "center", gap: 4,
+                  display: "inline-flex", alignItems: "center", gap: 6,
                   fontFamily: FONT, fontSize: 12, fontWeight: 500,
-                  color: "#7dd3fc",
-                  background: "rgba(125,211,252,0.08)",
-                  border: "1px solid rgba(125,211,252,0.30)",
-                  padding: "2px 10px", borderRadius: 999, cursor: "pointer",
+                  color: importOpen ? C.muted : C.fg,
+                  background: "transparent",
+                  border: "none",
+                  padding: "2px 4px", cursor: "pointer",
                 }}
               >
-                + Add var
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                {importOpen ? "Cancel paste" : "Import .env"}
               </button>
             </div>
-            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-              Merged over template env at task start. Locked GMI keys (<code style={{ fontFamily: "'GeistMono', monospace", color: C.fg }}>GMI_MAAS_*</code>) cannot be overridden.
-            </span>
-            {env.length === 0 ? (
-              <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, padding: "6px 0" }}>
-                No overrides — task will inherit template env.
+
+            {/* Paste .env panel — separate from row-by-row, shows when toggled */}
+            {importOpen && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 6, padding: "8px 10px" }}>
+                <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                  Paste KEY=value · one per line
+                </span>
+                <textarea
+                  value={importText}
+                  onChange={(e) => setImportText(e.target.value)}
+                  placeholder={"OPENAI_API_KEY=sk-...\nDATABASE_URL=postgres://...\nLOG_LEVEL=debug"}
+                  rows={4}
+                  autoFocus
+                  style={{
+                    background: "#000",
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 6,
+                    padding: "8px 10px",
+                    fontFamily: "'GeistMono', monospace", fontSize: 12, lineHeight: "18px",
+                    color: C.fg, outline: "none", resize: "vertical",
+                  }}
+                />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>
+                    GMI_MAAS_* keys are skipped automatically.
+                  </span>
+                  <button onClick={applyImport} disabled={!importText.trim()} style={{
+                    fontFamily: FONT, fontSize: 12, fontWeight: 600,
+                    background: importText.trim() ? C.lime : "#3a3a1f",
+                    color: importText.trim() ? C.limeText : "#666",
+                    border: "none",
+                    padding: "4px 14px", borderRadius: 6,
+                    cursor: importText.trim() ? "pointer" : "not-allowed",
+                  }}>Add to overrides</button>
+                </div>
               </div>
-            ) : (
-              env.map((row) => (
-                <div key={row.id} style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 26px", gap: 6, alignItems: "center" }}>
+            )}
+
+            {/* Variables table */}
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 6, overflow: "hidden" }}>
+              {/* Table header */}
+              <div style={{
+                display: "grid", gridTemplateColumns: "1fr 1.4fr 26px", gap: 6,
+                padding: "8px 10px",
+                borderBottom: `1px solid ${C.borderSoft}`,
+                background: "rgba(255,255,255,0.02)",
+              }}>
+                <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.04em" }}>Key</span>
+                <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.04em" }}>Value</span>
+                <span />
+              </div>
+
+              {/* Locked rows — platform-managed env (cannot be overridden) */}
+              {[
+                { key: "GMI_MODELS",        value: "58e99bbf-78ba-480..." },
+                { key: "GMI_MAAS_API_KEY",  value: "gmi_••••••••••••••••" },
+                { key: "GMI_MAAS_BASE_URL", value: "https://api.gmi-serving.com" },
+                { key: "DEPLOYMENT_TYPE",   value: "gmi-ce" },
+              ].map((row) => (
+                <div key={row.key} style={{
+                  display: "grid", gridTemplateColumns: "1fr 1.4fr 26px", gap: 6,
+                  padding: "6px 10px", alignItems: "center",
+                  borderBottom: `1px solid ${C.borderSoft}`,
+                }}>
+                  <span style={{
+                    fontFamily: "'GeistMono', monospace", fontSize: 12,
+                    color: C.muted,
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}>
+                    {row.key}
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7 }}>
+                      <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    </svg>
+                  </span>
+                  <span style={{
+                    fontFamily: "'GeistMono', monospace", fontSize: 12,
+                    color: C.muted,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}>
+                    {row.value}
+                  </span>
+                  <span />
+                </div>
+              ))}
+
+              {/* Editable override rows */}
+              {env.map((row) => (
+                <div key={row.id} style={{
+                  display: "grid", gridTemplateColumns: "1fr 1.4fr 26px", gap: 6,
+                  padding: "6px 10px", alignItems: "center",
+                  borderBottom: `1px solid ${C.borderSoft}`,
+                }}>
                   <input
                     placeholder="KEY"
                     value={row.key}
@@ -731,14 +1402,14 @@ function ProvisionModal({
                     style={inputStyle}
                   />
                   <input
-                    placeholder="value"
+                    placeholder="Value"
                     value={row.value}
                     onChange={(e) => updateEnv(row.id, { value: e.target.value })}
                     style={inputStyle}
                   />
                   <button
                     onClick={() => removeEnv(row.id)}
-                    style={{ background: "transparent", border: "none", cursor: "pointer", color: "#ef4444", padding: 4, display: "inline-flex" }}
+                    style={{ background: "transparent", border: "none", cursor: "pointer", color: C.muted, padding: 4, display: "inline-flex" }}
                     aria-label="Remove"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -746,8 +1417,25 @@ function ProvisionModal({
                     </svg>
                   </button>
                 </div>
-              ))
-            )}
+              ))}
+
+              {/* + key — add another empty editable row */}
+              <button
+                onClick={addEnv}
+                style={{
+                  width: "100%", textAlign: "left",
+                  background: "transparent", border: "none",
+                  padding: "8px 10px",
+                  fontFamily: FONT, fontSize: 12, fontWeight: 500,
+                  color: C.muted, cursor: "pointer",
+                }}
+              >
+                + key
+              </button>
+            </div>
+            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+              Variables from the deployment template can't be changed. You can only add new variables below.
+            </span>
           </section>
 
           {/* Lifecycle overrides */}
@@ -778,9 +1466,6 @@ function ProvisionModal({
                 </select>
               </div>
             </div>
-            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-              Hard caps for just this task. Leave at template defaults if not needed.
-            </span>
           </section>
         </div>
 
@@ -807,7 +1492,7 @@ function ProvisionModal({
               padding: "6px 16px", borderRadius: 8, cursor: "pointer",
             }}
           >
-            Provision
+            Create Instance
           </button>
         </div>
       </div>
@@ -865,39 +1550,6 @@ function MonitorPane({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Aggregate status */}
-      <section>
-        <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: "0 0 12px" }}>
-          Aggregate status
-        </h3>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-          <MetricCard
-            label="Active"
-            value={agg.active > 0 ? String(agg.active) : "—"}
-            helper="status = running"
-            accent="#22c55e"
-          />
-          <MetricCard
-            label="Error"
-            value={agg.error > 0 ? String(agg.error) : "—"}
-            helper="red tab badge if > 0"
-            accent="#ef4444"
-          />
-          <MetricCard
-            label="Creating"
-            value={agg.creating > 0 ? String(agg.creating) : "—"}
-            helper="status = creating"
-            accent="#fbbf24"
-          />
-          <MetricCard
-            label="Last provisioned"
-            value={agg.lastProvisioned ? agg.lastProvisioned.slice(5, 16).replace(" ", "·") : "—"}
-            helper="max(createdAt)"
-            accent="#a3a3a3"
-          />
-        </div>
-      </section>
-
       {/* Instance Set */}
       <section>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, gap: 12 }}>
@@ -919,7 +1571,7 @@ function MonitorPane({
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 5v14M5 12h14" />
             </svg>
-            Provision instance
+            Instance
           </button>
         </div>
         <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, margin: "0 0 12px" }}>
@@ -986,32 +1638,36 @@ function MonitorPane({
           {filtered.length === 0 ? (
             <div
               style={{
-                padding: "32px 16px",
-                fontFamily: FONT, fontSize: 14, fontWeight: 400, color: C.muted, textAlign: "center",
+                padding: "40px 16px",
+                display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
               }}
             >
-              No instances yet — click <span style={{ color: C.lime, fontWeight: 600 }}>Provision instance</span> to start one.
+              <div
+                style={{
+                  width: 38, height: 38, borderRadius: 8,
+                  border: `1px dashed ${C.border}`,
+                  background: "rgba(255,255,255,0.02)",
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  color: C.muted,
+                }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+                  <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+                  <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+                  <path d="M14 17.5h7M17.5 14v7" />
+                </svg>
+              </div>
+              <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, lineHeight: "20px" }}>
+                No instances running
+              </div>
+              <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px", textAlign: "center", maxWidth: 360 }}>
+                Click <span style={{ color: C.lime, fontWeight: 600 }}>+ Instance</span> to provision one.
+                It boots in a few seconds and gets its own endpoint URL.
+              </div>
             </div>
           ) : (
             filtered.map((inst, i) => {
-              const isExpandedOn = (p: PanelKind) => expanded?.id === inst.id && expanded?.panel === p;
-              const panelBtn = (panel: PanelKind, label: string, icon: React.ReactNode) => (
-                <button
-                  onClick={() => togglePanel(inst.id, panel)}
-                  style={{
-                    fontFamily: FONT, fontSize: 11, fontWeight: 500,
-                    background: isExpandedOn(panel) ? "rgba(125,211,252,0.10)" : "transparent",
-                    color: isExpandedOn(panel) ? "#7dd3fc" : C.fg,
-                    border: `1px solid ${isExpandedOn(panel) ? "rgba(125,211,252,0.35)" : C.border}`,
-                    padding: "3px 8px",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                    display: "inline-flex", alignItems: "center", gap: 4,
-                  }}
-                >
-                  {icon} {label}
-                </button>
-              );
               return (
                 <div key={inst.id}>
                   <div
@@ -1031,17 +1687,18 @@ function MonitorPane({
                     >
                       {inst.id.slice(0, 24)}…
                     </div>
-                    <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <span
-                          style={{
-                            width: 6, height: 6, borderRadius: 999,
-                            background: statusDot(inst.status),
-                            animation: inst.status === "creating" ? "pulse 1.2s ease-in-out infinite" : "none",
-                          }}
-                        />
-                        <span style={{ color: C.muted }}>{inst.status}</span>
-                      </span>
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <span
+                        style={{
+                          width: 6, height: 6, borderRadius: 999,
+                          background: statusDot(inst.status),
+                          animation: inst.status === "creating" ? "pulse 1.2s ease-in-out infinite" : "none",
+                        }}
+                      />
+                      <span style={{ color: C.muted }}>{inst.status}</span>
+                    </div>
+                    <div style={{ color: C.muted }}>{inst.created}</div>
+                    <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
                       {inst.status === "running" && inst.endpointUrl && (
                         <a
                           href={inst.endpointUrl}
@@ -1051,11 +1708,11 @@ function MonitorPane({
                           style={{
                             display: "inline-flex", alignItems: "center", gap: 4,
                             fontFamily: FONT, fontSize: 11, fontWeight: 500,
-                            color: "#7dd3fc",
-                            background: "rgba(125,211,252,0.10)",
-                            border: "1px solid rgba(125,211,252,0.35)",
-                            padding: "2px 7px",
-                            borderRadius: 999,
+                            color: C.fg,
+                            background: "transparent",
+                            border: `1px solid ${C.border}`,
+                            padding: "3px 9px",
+                            borderRadius: 6,
                             textDecoration: "none",
                           }}
                         >
@@ -1065,13 +1722,6 @@ function MonitorPane({
                           </svg>
                         </a>
                       )}
-                    </div>
-                    <div style={{ color: C.muted }}>{inst.created}</div>
-                    <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
-                      {panelBtn("metrics", "Metrics", <IconChart />)}
-                      {panelBtn("shell", "Shell", <IconShell />)}
-                      {panelBtn("logs", "Logs", <IconLogs />)}
-                      {panelBtn("config", "Config", <IconConfig />)}
                       <button
                         onClick={() => onTerminate(inst.id)}
                         style={{
@@ -1079,13 +1729,18 @@ function MonitorPane({
                           background: "transparent",
                           color: C.err,
                           border: `1px solid ${C.border}`,
-                          padding: "3px 8px",
+                          padding: "3px 9px",
                           borderRadius: 6,
                           cursor: "pointer",
                         }}
                       >
                         Terminate
                       </button>
+                      <InstanceRowMenu
+                        instId={inst.id}
+                        activePanel={expanded?.id === inst.id ? expanded.panel : null}
+                        onSelect={(panel) => togglePanel(inst.id, panel)}
+                      />
                     </div>
                   </div>
                   {expanded?.id === inst.id && (
@@ -1116,7 +1771,7 @@ function MonitorPane({
 // ─── Integration pane ─────────────────────────────────────────────────────
 function IntegrationPane({ agent }: { agent: MyAgent }) {
   const curl = [
-    "# Provision an instance",
+    "# Create an instance",
     `curl -X POST https://api.gmicloud.ai/v1/agents/deployments/${agent.id}/tasks \\`,
     "  -H \"Authorization: Bearer $GMI_API_KEY\" \\",
     "  -H \"Content-Type: application/json\" \\",
@@ -1138,7 +1793,7 @@ function IntegrationPane({ agent }: { agent: MyAgent }) {
           Template ID
         </h3>
         <p style={{ fontFamily: FONT, fontSize: 13, fontWeight: 400, color: C.muted, margin: "0 0 12px" }}>
-          Use this ID when calling the Agentbox API to provision instances of this Agent.
+          Use this ID when calling the Agentbox API to create instances of this Agent.
         </p>
         <div
           style={{
@@ -1155,7 +1810,7 @@ function IntegrationPane({ agent }: { agent: MyAgent }) {
 
       <section>
         <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: "0 0 12px" }}>
-          cURL — provision → poll → terminate
+          cURL — create → poll → terminate
         </h3>
         <div
           style={{
@@ -1287,15 +1942,15 @@ function AgentDetailPane({
               <span
                 style={{
                   fontFamily: FONT, fontSize: 11, fontWeight: 600, lineHeight: "14px",
-                  color: "#7dd3fc",
-                  background: "rgba(125,211,252,0.10)",
-                  border: "1px solid rgba(125,211,252,0.30)",
+                  color: C.muted,
+                  background: "rgba(255,255,255,0.04)",
+                  border: `1px solid ${C.border}`,
                   padding: "1px 8px",
                   borderRadius: 999,
                   letterSpacing: "0.04em",
                 }}
               >
-                SELF-HOSTED
+                CONNECT WITH GMI
               </span>
             )}
           </div>
@@ -1304,39 +1959,7 @@ function AgentDetailPane({
           )}
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button
-            style={{
-              fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
-              background: "transparent", color: C.fg,
-              border: `1px solid ${C.border}`,
-              padding: "8px 14px", borderRadius: 8, cursor: "pointer",
-            }}
-          >
-            Unpublish
-          </button>
-          <button
-            style={{
-              fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
-              background: "transparent", color: C.fg,
-              border: `1px solid ${C.border}`,
-              padding: "8px 14px", borderRadius: 8, cursor: "pointer",
-            }}
-          >
-            Edit listing
-          </button>
-          <button
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
-              background: C.lime, color: C.limeText,
-              border: "none",
-              padding: "8px 14px", borderRadius: 8, cursor: "pointer",
-            }}
-          >
-            View public listing <IconExternalLink size={12} />
-          </button>
-        </div>
+        <ListingActions agentId={agent.id} state={agent.listingState} />
       </div>
 
       {/* Tabs */}
@@ -1370,10 +1993,54 @@ export default function Dashboard() {
   const [, setLocation] = useLocation();
   const [topTab, setTopTab] = useState<"deployments" | "uses">("deployments");
   const [filter, setFilter] = useState("");
-  const [registered] = useState<MyAgent[]>(() => loadRegisteredAgents());
+  const [registered, setRegistered] = useState<MyAgent[]>(() => loadRegisteredAgents());
+  const [hiddenSeedIds, setHiddenSeedIds] = useState<Set<string>>(new Set());
+
+  // Single shared destructive-action confirm dialog. Setting `confirm` opens it.
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+
+  const handleEditTemplate = (_agent: MyAgent) => {
+    // Prototype stub — full edit flow not wired yet. Hint at the existing path.
+    alert("Edit template is not wired yet. Use 'List an agent' to re-register a template with new config.");
+  };
+  const performDeleteTemplate = (agent: MyAgent) => {
+    const isRegistered = registered.some((a) => a.id === agent.id);
+    if (isRegistered) {
+      const next = registered.filter((a) => a.id !== agent.id);
+      setRegistered(next);
+      try { localStorage.setItem(REGISTERED_AGENTS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+    } else {
+      // Seed deployment: hide from runtime list (cannot truly delete sample data)
+      setHiddenSeedIds((s) => new Set([...s, agent.id]));
+    }
+    if (selectedId === agent.id) {
+      const remaining = [...registered.filter((a) => a.id !== agent.id), ...MY_DEPLOYMENTS.filter((a) => !hiddenSeedIds.has(a.id) && a.id !== agent.id)];
+      if (remaining[0]) setSelectedId(remaining[0].id);
+    }
+  };
+  const handleDeleteTemplate = (agent: MyAgent) => {
+    setConfirm({
+      title: "Delete template?",
+      body: (
+        <>
+          You're about to delete the template{" "}
+          <span style={{ color: C.fg, fontFamily: MONO }}>{agent.name}</span>.
+          This cannot be undone. Existing running instances will not be affected.
+        </>
+      ),
+      confirmLabel: "Delete template",
+      destructive: true,
+      onConfirm: () => performDeleteTemplate(agent),
+    });
+  };
   // Newly-registered agents from Connect flow appear at the top, then the seed list
-  const allAgents = useMemo(() => [...registered, ...MY_DEPLOYMENTS], [registered]);
-  const [selectedId, setSelectedId] = useState<string>(allAgents[0]?.id ?? MY_DEPLOYMENTS[0].id);
+  // (seed entries the user has deleted at runtime are hidden via hiddenSeedIds).
+  const allAgents = useMemo(
+    () => [...registered, ...MY_DEPLOYMENTS.filter((a) => !hiddenSeedIds.has(a.id))],
+    [registered, hiddenSeedIds],
+  );
+  // allAgents may be empty for a brand-new user — no fallback to MY_DEPLOYMENTS now that it's empty.
+  const [selectedId, setSelectedId] = useState<string>(allAgents[0]?.id ?? "");
   const [instances, setInstances] = useState<Instance[]>(INITIAL_INSTANCES);
 
   // Provision modal — open per-task override modal first, then provision on submit
@@ -1403,8 +2070,25 @@ export default function Dashboard() {
     }, 1500);
   };
 
-  const handleTerminate = (instanceId: string) => {
+  const performTerminate = (instanceId: string) => {
     setInstances((prev) => prev.filter((i) => i.id !== instanceId));
+  };
+  const handleTerminate = (instanceId: string) => {
+    const inst = instances.find((i) => i.id === instanceId);
+    const shortId = instanceId.slice(0, 20);
+    setConfirm({
+      title: "Terminate instance?",
+      body: (
+        <>
+          The running task <span style={{ color: C.fg, fontFamily: MONO }}>{shortId}…</span>{" "}
+          will stop immediately and its endpoint will go offline. Any in-flight requests will fail.
+          {inst?.config?.envOverrides?.length ? " Per-task env overrides will be lost." : ""}
+        </>
+      ),
+      confirmLabel: "Terminate",
+      destructive: true,
+      onConfirm: () => performTerminate(instanceId),
+    });
   };
 
   const list = useMemo(() => {
@@ -1466,7 +2150,7 @@ export default function Dashboard() {
         >
           {/* Left pane */}
           <aside style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
-            <h1 style={{ fontFamily: FONT, fontSize: 20, fontWeight: 500, lineHeight: "28px", color: C.fg, margin: 0, letterSpacing: "-0.01em" }}>
+            <h1 style={{ fontFamily: FONT, fontSize: 24, fontWeight: 700, lineHeight: "30px", color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>
               My Agents
             </h1>
 
@@ -1493,7 +2177,7 @@ export default function Dashboard() {
             </div>
 
             <button
-              onClick={() => setLocation("/deploy")}
+              onClick={() => setLocation("/list-claw")}
               style={{
                 display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
                 fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
@@ -1515,9 +2199,11 @@ export default function Dashboard() {
                   agg={aggregateFor(instances, agent.id)}
                   selected={agent.id === selected?.id}
                   onClick={() => setSelectedId(agent.id)}
+                  onEditTemplate={handleEditTemplate}
+                  onDeleteTemplate={handleDeleteTemplate}
                 />
               ))}
-              {list.length === 0 && (
+              {list.length === 0 && allAgents.length > 0 && (
                 <div style={{ fontFamily: FONT, fontSize: 13, color: C.muted, padding: 12 }}>
                   No agents match this filter.
                 </div>
@@ -1533,6 +2219,11 @@ export default function Dashboard() {
               onProvision={handleProvision}
               onTerminate={handleTerminate}
             />
+          ) : allAgents.length === 0 ? (
+            <NewUserWelcome
+              onStartFromTemplate={() => setLocation("/marketplace?starter=true")}
+              onListAnAgent={() => setLocation("/deploy")}
+            />
           ) : (
             <div style={{ fontFamily: FONT, fontSize: 14, color: C.muted, padding: 32, textAlign: "center" }}>
               Select an agent to see its details.
@@ -1546,11 +2237,14 @@ export default function Dashboard() {
       <ProvisionModal
         open={provisionForAgentId !== null}
         agentName={allAgents.find((a) => a.id === provisionForAgentId)?.name ?? ""}
+        image={(allAgents.find((a) => a.id === provisionForAgentId) as any)?.dockerImage}
         onCancel={() => setProvisionForAgentId(null)}
         onSubmit={(cfg) => {
           if (provisionForAgentId) actuallyProvision(provisionForAgentId, cfg);
         }}
       />
+
+      <ConfirmDialog pending={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

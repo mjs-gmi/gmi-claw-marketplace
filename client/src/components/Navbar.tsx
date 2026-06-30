@@ -246,7 +246,7 @@ export default function Navbar() {
         <SectionLabel>Agentbox</SectionLabel>
         <NavItem href="/marketplace" label="Browse Agents" icon={IcoClawMarketplace} active={isActive("/marketplace")} />
         <NavItem href="/dashboard" label="My Agents" icon={IcoDashboard} active={isActive("/dashboard")} />
-        <NavItem href="/deploy" label="Register & List" icon={IcoDeployList} active={isActive("/deploy")} />
+        <NavItem href="/deploy" label="Register Agent" icon={IcoDeployList} active={isActive("/deploy")} />
 
       </nav>
 

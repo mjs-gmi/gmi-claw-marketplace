@@ -35,7 +35,7 @@ export function getBadgeConfig(path: InfrastructurePath): BadgeConfig {
         color: "#c084fc",
         border: "rgba(192,132,252,0.4)",
         bg: "rgba(192,132,252,0.08)",
-        tooltip: "Model powered by GMI MaaS · Self-hosted infrastructure",
+        tooltip: "Connect with GMI · publisher hosts the agent, calls GMI Models",
       };
   }
 }

@@ -34,12 +34,13 @@ const OPENCLAW_INSTALL_CMD = "openclaw plugins install clawhub:openclaw-gmicloud
 const ALL_TYPES: (TypeLabel | "All")[] = ["All", ...TYPE_LABELS];
 
 // Subtle per-category accent. Avatar bg uses 12% alpha of the same.
+// Matched to production: Code & Dev Tools = purple, Content & Marketing = green
 const TYPE_COLOR: Record<TypeLabel, string> = {
-  "Code & Dev Tools":     "#7dd3fc", // sky-300
+  "Code & Dev Tools":     "#c7a7ff", // violet/purple
   "Data & Analytics":     C.lime,
-  "Customer Support":     "#86efac", // green-300
-  "Content & Marketing":  "#f9a8d4", // pink-300
-  "Research & Knowledge": "#c7a7ff", // violet/purple
+  "Customer Support":     "#7dd3fc", // sky-300
+  "Content & Marketing":  "#86efac", // green-300
+  "Research & Knowledge": "#f9a8d4", // pink-300
 };
 
 // ─── Icons (1.5-stroke lucide-style) ─────────────────────────────────────────
@@ -122,14 +123,18 @@ function CategoryTag({ type }: { type: TypeLabel }) {
   return (
     <span
       style={{
-        fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
-        color,
-        background: `${color}14`,
+        display: "inline-flex", alignItems: "center", gap: 6,
+        fontFamily: FONT, fontSize: 11, fontWeight: 500, lineHeight: "16px",
+        color: C.muted,
+        background: "rgba(255,255,255,0.04)",
+        border: `1px solid ${C.borderSoft}`,
         padding: "2px 8px",
-        borderRadius: 999,
+        borderRadius: 4,
         whiteSpace: "nowrap",
+        alignSelf: "flex-start",
       }}
     >
+      <span style={{ width: 7, height: 7, borderRadius: 2, background: color, flexShrink: 0 }} />
       {type}
     </span>
   );
@@ -175,18 +180,20 @@ function VerifiedCheck() {
   );
 }
 
-function MiniAvatar({ publisher, color }: { publisher: string; color: string }) {
+function MiniAvatar({ publisher }: { publisher: string; color: string }) {
+  // Match production: plain dark square with neutral white initials.
+  // The per-category color now lives only in the small dot of the category chip.
   const initials = publisher.replace(/[^a-zA-Z0-9]/g, "").slice(0, 2);
   const display = initials ? initials[0].toUpperCase() + (initials[1] || "").toLowerCase() : "?";
   return (
     <div
       style={{
-        width: 28, height: 28,
+        width: 32, height: 32,
         display: "flex", alignItems: "center", justifyContent: "center",
         background: "#0a0a0a",
         border: `1px solid ${C.border}`,
-        color,
-        fontFamily: FONT, fontSize: 11, fontWeight: 700, lineHeight: "14px",
+        color: C.fg,
+        fontFamily: FONT, fontSize: 12, fontWeight: 600, lineHeight: "14px",
         borderRadius: 6,
         flexShrink: 0,
       }}
@@ -225,11 +232,11 @@ function AgentCard({ claw }: { claw: Claw }) {
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <h3
               style={{
-                fontFamily: FONT, fontSize: 13, fontWeight: 600, lineHeight: "18px",
+                fontFamily: FONT, fontSize: 14, fontWeight: 600, lineHeight: "20px",
                 color: C.fg,
                 margin: 0,
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                minWidth: 0, flex: 1,
+                minWidth: 0,
               }}
             >
               {claw.name}
@@ -240,7 +247,7 @@ function AgentCard({ claw }: { claw: Claw }) {
             style={{
               fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px",
               color: C.muted,
-              marginTop: 2,
+              marginTop: 1,
               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
             }}
           >
@@ -251,7 +258,7 @@ function AgentCard({ claw }: { claw: Claw }) {
 
       <p
         style={{
-          fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px",
+          fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "17px",
           color: C.muted,
           margin: 0,
           display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
@@ -261,9 +268,8 @@ function AgentCard({ claw }: { claw: Claw }) {
         {claw.description}
       </p>
 
-      <div>
-        <CategoryTag type={claw.typeLabel} />
-      </div>
+      {/* Category chip — anchored at the bottom of the card */}
+      <CategoryTag type={claw.typeLabel} />
     </div>
   );
 }
@@ -297,18 +303,8 @@ export default function Marketplace() {
       <Navbar />
       <div style={{ marginLeft: 210, paddingTop: 40, display: "flex", flexDirection: "column" }}>
 
-        {/* Compact console-style page header */}
-        <header style={{ padding: "14px 24px 8px" }}>
-          <h1 style={{ fontFamily: FONT, fontSize: 20, fontWeight: 700, lineHeight: "26px", color: C.fg, margin: 0, letterSpacing: "-0.01em" }}>
-            Browse Agents
-          </h1>
-          <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, margin: "2px 0 0" }}>
-            AI Agents shipped by builders on GMI Cloud — install one, or register your own.
-          </p>
-        </header>
-
         {/* Thin OpenClaw plugin banner — single horizontal row */}
-        <div style={{ padding: "0 24px" }}>
+        <div style={{ padding: "14px 24px 0" }}>
           <div
             style={{
               background: C.card,
@@ -322,8 +318,8 @@ export default function Marketplace() {
               style={{
                 display: "inline-flex", alignItems: "center", justifyContent: "center",
                 width: 22, height: 22, borderRadius: 6,
-                background: "rgba(125,211,252,0.10)",
-                color: "#7dd3fc",
+                background: "rgba(255,255,255,0.04)",
+                color: C.muted,
                 flexShrink: 0,
               }}
             >
@@ -332,7 +328,7 @@ export default function Marketplace() {
               </svg>
             </span>
             <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.fg, whiteSpace: "nowrap" }}>
-              On OpenClaw?
+              Already on OpenClaw? Add GMI Cloud as a provider:
             </span>
             <code
               style={{
@@ -352,12 +348,12 @@ export default function Marketplace() {
               onClick={() => setLocation("/deploy")}
               style={{
                 fontFamily: FONT, fontSize: 12, fontWeight: 500,
-                background: "transparent", color: "#7dd3fc",
+                background: "transparent", color: C.lime,
                 border: "none", padding: "2px 4px", cursor: "pointer",
                 whiteSpace: "nowrap",
               }}
             >
-              Not on OpenClaw? Register →
+              Not on OpenClaw? Register from the dashboard →
             </button>
           </div>
         </div>
@@ -365,14 +361,14 @@ export default function Marketplace() {
         {/* ── Catalog header ─────────────────────────────────────────────── */}
         <section id="catalog" style={{ padding: "14px 24px 8px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
-            <h2
+            <h1
               style={{
-                fontFamily: FONT, fontSize: 20, fontWeight: 500, lineHeight: "28px",
-                color: C.fg, margin: 0, letterSpacing: "-0.01em",
+                fontFamily: FONT, fontSize: 24, fontWeight: 700, lineHeight: "30px",
+                color: C.fg, margin: 0, letterSpacing: "-0.02em",
               }}
             >
               Agent Catalog
-            </h2>
+            </h1>
 
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
@@ -432,11 +428,11 @@ export default function Marketplace() {
                     onClick={() => setActiveType(type)}
                     style={{
                       fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
-                      background: isActive ? C.activeBg : "transparent",
+                      background: isActive ? "rgba(255,255,255,0.06)" : "transparent",
                       color: isActive ? C.fg : C.muted,
-                      border: `1px solid ${isActive ? "transparent" : C.border}`,
+                      border: "1px solid transparent",
                       padding: "6px 12px",
-                      borderRadius: 999,
+                      borderRadius: 6,
                       cursor: "pointer",
                       transition: "background .15s ease, color .15s ease",
                     }}
@@ -456,7 +452,7 @@ export default function Marketplace() {
                   display: "inline-flex", alignItems: "center", justifyContent: "center",
                   width: 18, height: 18, borderRadius: 999,
                   background: verifiedOnly ? "#7dd3fc" : "transparent",
-                  border: `1.5px solid ${verifiedOnly ? "#7dd3fc" : "#7dd3fc"}`,
+                  border: `1.5px solid #7dd3fc`,
                   color: verifiedOnly ? "#0a0a0a" : "#7dd3fc",
                   transition: "background .15s ease",
                 }}
@@ -505,16 +501,12 @@ export default function Marketplace() {
             <>
               <div
                 style={{
-                  fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px",
-                  color: C.muted, marginBottom: 12,
-                }}
-              >
-                {filtered.length} {filtered.length === 1 ? "result" : "results"} · Verified first
-              </div>
-              <div
-                style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+                  // Cap card max-width at 320px so sparse catalogs (2-3 items)
+                  // don't stretch cards across the full row. Cards stay uniform
+                  // regardless of count; extra space breathes to the right.
+                  gridTemplateColumns: "repeat(auto-fill, 280px)",
+                  justifyContent: "start",
                   gap: 12,
                 }}
               >

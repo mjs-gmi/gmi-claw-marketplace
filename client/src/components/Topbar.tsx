@@ -7,8 +7,8 @@ function useBreadcrumb(): string[] {
   if (location.startsWith("/marketplace/")) return ["Home", "Agentbox", "Agent Detail"];
   if (location.startsWith("/marketplace")) return ["Home", "Agentbox"];
   if (location.startsWith("/dashboard")) return ["Home", "My Agents"];
-  if (location.startsWith("/deploy")) return ["Home", "Register & List"];
-  if (location.startsWith("/list-claw")) return ["Home", "Register & List", "List Agent"];
+  if (location.startsWith("/deploy")) return ["Home", "Register Agent"];
+  if (location.startsWith("/list-claw")) return ["Home", "Register Agent", "List Agent"];
   return ["Home"];
 }
 
