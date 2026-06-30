@@ -874,40 +874,20 @@ function ListingActions({ agentId, state }: { agentId: string; state?: ListingSt
   const isLive     = state === "live";
   const isRejected = state === "rejected";
 
-  // Inline state badge inside the trigger pill — color + abbreviated label so
-  // the user knows the current listing state without opening the menu.
-  const badge =
-    isDraft    ? { label: "DRAFT",    fg: C.muted,  bg: "rgba(255,255,255,0.04)", bd: C.border }
-    : isPending ? { label: "PENDING", fg: C.warn,   bg: "rgba(251,191,36,0.08)",  bd: "rgba(251,191,36,0.35)" }
-    : isLive    ? { label: "LIVE",    fg: C.ok,     bg: "rgba(52,211,153,0.08)",  bd: "rgba(52,211,153,0.35)" }
-    : isRejected ? { label: "REJECTED", fg: C.err,   bg: "rgba(248,113,113,0.08)", bd: "rgba(248,113,113,0.35)" }
-    : { label: "DRAFT", fg: C.muted, bg: "rgba(255,255,255,0.04)", bd: C.border };
-
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <button
         onClick={() => setOpen((o) => !o)}
         style={{
-          display: "inline-flex", alignItems: "center", gap: 8,
+          display: "inline-flex", alignItems: "center", gap: 6,
           fontFamily: FONT, fontSize: 13, fontWeight: 500, lineHeight: "20px",
           background: open ? "rgba(255,255,255,0.04)" : "transparent",
           color: C.fg,
           border: `1px solid ${C.border}`,
-          padding: "5px 10px 5px 12px", borderRadius: 8, cursor: "pointer",
+          padding: "5px 10px 5px 14px", borderRadius: 8, cursor: "pointer",
         }}
       >
         Listing
-        <span
-          style={{
-            fontFamily: MONO, fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
-            color: badge.fg,
-            background: badge.bg,
-            border: `1px solid ${badge.bd}`,
-            padding: "1px 6px", borderRadius: 4,
-          }}
-        >
-          {badge.label}
-        </span>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: C.muted, transition: "transform .15s", transform: open ? "rotate(180deg)" : "none" }}>
           <path d="m6 9 6 6 6-6"/>
         </svg>
@@ -920,62 +900,49 @@ function ListingActions({ agentId, state }: { agentId: string; state?: ListingSt
             border: `1px solid ${C.border}`,
             borderRadius: 8,
             padding: 4,
-            minWidth: 200,
+            minWidth: 180,
             zIndex: 30,
             boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
             display: "flex", flexDirection: "column",
           }}
         >
-          {/* Primary action — varies by state */}
+          {/* Order matches production: edit (most common) → view (read-only)
+              → spacer → destructive. All items render neutral; only the
+              destructive item is colored. */}
           {isDraft && (
-            <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.lime)}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 5v14M5 12h14"/>
-              </svg>
+            <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.fg)}>
               Complete listing
             </button>
           )}
           {isPending && (
             <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.fg)}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
               Edit pending listing
             </button>
           )}
           {isLive && (
             <>
-              <button onClick={() => setOpen(false)} style={menuItemStyle(C.lime)}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-                </svg>
-                View public listing
-              </button>
               <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.fg)}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                </svg>
                 Edit listing
+              </button>
+              <button onClick={() => setOpen(false)} style={menuItemStyle(C.fg)}>
+                View public listing
               </button>
             </>
           )}
           {isRejected && (
-            <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.lime)}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/>
-              </svg>
+            <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.fg)}>
               Fix & resubmit
             </button>
           )}
 
-          {/* Destructive — only on submitted states */}
+          {/* Destructive — small separator above, only on submitted states */}
           {!isDraft && (
-            <button onClick={() => setOpen(false)} style={menuItemStyle(C.err)}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M18 6 6 18M6 6l12 12"/>
-              </svg>
-              {isLive ? "Unpublish" : "Withdraw"}
-            </button>
+            <>
+              <div style={{ height: 1, background: C.borderSoft, margin: "4px 6px" }} />
+              <button onClick={() => setOpen(false)} style={menuItemStyle(C.err)}>
+                {isLive ? "Unpublish" : "Withdraw"}
+              </button>
+            </>
           )}
         </div>
       )}
