@@ -849,6 +849,11 @@ function ConfigPane({ inst }: { inst: Instance }) {
 // "View public listing" is the high-frequency action (external link) so it
 // stays inline as a lime CTA. "Edit listing" + "Unpublish" fold into a ⋮ menu
 // to reduce button density on the agent detail header.
+// Single "Listing ▼" dropdown sits next to "+ Instance" in the agent detail
+// header. All listing actions live behind one trigger — no inline primary
+// button — so the header stays tight even as state changes. State badge
+// inside the trigger (DRAFT / PENDING / LIVE / REJECTED) tells the user where
+// the listing is at a glance.
 function ListingActions({ agentId, state }: { agentId: string; state?: ListingState }) {
   const [, setLocation] = useLocation();
   const [open, setOpen] = useState(false);
@@ -864,86 +869,113 @@ function ListingActions({ agentId, state }: { agentId: string; state?: ListingSt
 
   const goToListingForm = () => setLocation(`/list-claw?agentId=${encodeURIComponent(agentId)}`);
 
-  // No state / draft → single primary CTA driving the user to complete the listing.
-  // The ⋮ menu only makes sense once a listing has been submitted (pending) or is live.
-  const isDraft   = !state || state === "draft";
-  const isPending = state === "pending_review";
-  const isLive    = state === "live";
+  const isDraft    = !state || state === "draft";
+  const isPending  = state === "pending_review";
+  const isLive     = state === "live";
   const isRejected = state === "rejected";
 
-  const primaryLabel =
-    isDraft     ? "Complete listing"
-    : isPending ? "Edit pending listing"
-    : isLive    ? "View public listing"
-    : isRejected ? "Fix & resubmit"
-    : "Edit listing";
-
-  const primaryAction = isLive ? () => { /* would open public URL */ } : goToListingForm;
+  // Inline state badge inside the trigger pill — color + abbreviated label so
+  // the user knows the current listing state without opening the menu.
+  const badge =
+    isDraft    ? { label: "DRAFT",    fg: C.muted,  bg: "rgba(255,255,255,0.04)", bd: C.border }
+    : isPending ? { label: "PENDING", fg: C.warn,   bg: "rgba(251,191,36,0.08)",  bd: "rgba(251,191,36,0.35)" }
+    : isLive    ? { label: "LIVE",    fg: C.ok,     bg: "rgba(52,211,153,0.08)",  bd: "rgba(52,211,153,0.35)" }
+    : isRejected ? { label: "REJECTED", fg: C.err,   bg: "rgba(248,113,113,0.08)", bd: "rgba(248,113,113,0.35)" }
+    : { label: "DRAFT", fg: C.muted, bg: "rgba(255,255,255,0.04)", bd: C.border };
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+    <div ref={ref} style={{ position: "relative" }}>
       <button
-        onClick={primaryAction}
+        onClick={() => setOpen((o) => !o)}
         style={{
-          display: "inline-flex", alignItems: "center", gap: 6,
-          fontFamily: FONT, fontSize: 13, fontWeight: 600, lineHeight: "20px",
-          background: isLive ? C.lime : "transparent",
-          color: isLive ? C.limeText : C.fg,
-          border: isLive ? "none" : `1px solid ${C.border}`,
-          padding: "6px 14px", borderRadius: 8, cursor: "pointer",
+          display: "inline-flex", alignItems: "center", gap: 8,
+          fontFamily: FONT, fontSize: 13, fontWeight: 500, lineHeight: "20px",
+          background: open ? "rgba(255,255,255,0.04)" : "transparent",
+          color: C.fg,
+          border: `1px solid ${C.border}`,
+          padding: "5px 10px 5px 12px", borderRadius: 8, cursor: "pointer",
         }}
       >
-        {primaryLabel} {isLive && <IconExternalLink size={12} />}
+        Listing
+        <span
+          style={{
+            fontFamily: MONO, fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
+            color: badge.fg,
+            background: badge.bg,
+            border: `1px solid ${badge.bd}`,
+            padding: "1px 6px", borderRadius: 4,
+          }}
+        >
+          {badge.label}
+        </span>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: C.muted, transition: "transform .15s", transform: open ? "rotate(180deg)" : "none" }}>
+          <path d="m6 9 6 6 6-6"/>
+        </svg>
       </button>
-
-      {/* ⋮ menu only when there's a listing to manage (pending/live/rejected) */}
-      {!isDraft && (
-        <div ref={ref} style={{ position: "relative" }}>
-          <button
-            aria-label="Listing actions"
-            onClick={() => setOpen((o) => !o)}
-            style={{
-              width: 32, height: 32,
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-              background: open ? "rgba(255,255,255,0.06)" : "transparent",
-              color: C.muted,
-              border: `1px solid ${C.border}`,
-              borderRadius: 8, cursor: "pointer",
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-              <circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>
-            </svg>
-          </button>
-          {open && (
-            <div
-              style={{
-                position: "absolute", top: "calc(100% + 4px)", right: 0,
-                background: C.cardSolid,
-                border: `1px solid ${C.border}`,
-                borderRadius: 8,
-                padding: 4,
-                minWidth: 160,
-                zIndex: 30,
-                boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
-                display: "flex", flexDirection: "column",
-              }}
-            >
-              {isLive && (
-                <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.fg)}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                  </svg>
-                  Edit listing
-                </button>
-              )}
-              <button onClick={() => setOpen(false)} style={menuItemStyle(C.err)}>
+      {open && (
+        <div
+          style={{
+            position: "absolute", top: "calc(100% + 4px)", right: 0,
+            background: C.cardSolid,
+            border: `1px solid ${C.border}`,
+            borderRadius: 8,
+            padding: 4,
+            minWidth: 200,
+            zIndex: 30,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+            display: "flex", flexDirection: "column",
+          }}
+        >
+          {/* Primary action — varies by state */}
+          {isDraft && (
+            <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.lime)}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+              Complete listing
+            </button>
+          )}
+          {isPending && (
+            <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.fg)}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+              Edit pending listing
+            </button>
+          )}
+          {isLive && (
+            <>
+              <button onClick={() => setOpen(false)} style={menuItemStyle(C.lime)}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 6 6 18M6 6l12 12"/>
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
                 </svg>
-                {isLive ? "Unpublish" : "Withdraw"}
+                View public listing
               </button>
-            </div>
+              <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.fg)}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                </svg>
+                Edit listing
+              </button>
+            </>
+          )}
+          {isRejected && (
+            <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.lime)}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/>
+              </svg>
+              Fix & resubmit
+            </button>
+          )}
+
+          {/* Destructive — only on submitted states */}
+          {!isDraft && (
+            <button onClick={() => setOpen(false)} style={menuItemStyle(C.err)}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 6 6 18M6 6l12 12"/>
+              </svg>
+              {isLive ? "Unpublish" : "Withdraw"}
+            </button>
           )}
         </div>
       )}
@@ -1437,36 +1469,6 @@ function ProvisionModal({
               Variables from the deployment template can't be changed. You can only add new variables below.
             </span>
           </section>
-
-          {/* Lifecycle overrides */}
-          <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>
-              Lifecycle overrides
-              <span style={{ color: C.muted, fontWeight: 400, marginLeft: 6 }}>· optional</span>
-            </label>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 500, color: C.muted, letterSpacing: "0.04em", textTransform: "uppercase" }}>max_lifetime</span>
-                <select
-                  value={maxLifetime}
-                  onChange={(e) => setMaxLifetime(e.target.value)}
-                  style={{ ...inputStyle, fontFamily: FONT, appearance: "none", paddingRight: 24, cursor: "pointer" }}
-                >
-                  {["30min", "1h", "2h", "4h", "8h", "24h", "off"].map((v) => <option key={v} value={v}>{v === "off" ? "No limit" : v}</option>)}
-                </select>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 500, color: C.muted, letterSpacing: "0.04em", textTransform: "uppercase" }}>idle_timeout</span>
-                <select
-                  value={idleTimeout}
-                  onChange={(e) => setIdleTimeout(e.target.value)}
-                  style={{ ...inputStyle, fontFamily: FONT, appearance: "none", paddingRight: 24, cursor: "pointer" }}
-                >
-                  {["1min", "5min", "15min", "30min", "1h", "off"].map((v) => <option key={v} value={v}>{v === "off" ? "Off" : v}</option>)}
-                </select>
-              </div>
-            </div>
-          </section>
         </div>
 
         {/* Footer */}
@@ -1550,30 +1552,12 @@ function MonitorPane({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Instance Set */}
+      {/* Instance Set — header is just a label now; "+ Instance" lives in
+          the agent detail header next to Listing ▼. */}
       <section>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, gap: 12 }}>
-          <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: 0 }}>
-            Instance Set
-          </h3>
-          <button
-            onClick={() => onProvision(agent.id)}
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              fontFamily: FONT, fontSize: 13, fontWeight: 600, lineHeight: "20px",
-              background: C.lime, color: C.limeText,
-              border: "none",
-              padding: "6px 14px",
-              borderRadius: 8,
-              cursor: "pointer",
-            }}
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-            Instance
-          </button>
-        </div>
+        <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: "0 0 4px" }}>
+          Instance Set
+        </h3>
         <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, margin: "0 0 12px" }}>
           Uses template defaults · per-task env passed via the SDK at task create.
         </p>
@@ -1896,6 +1880,29 @@ function AgentDetailPane({
   onTerminate: (instanceId: string) => void;
 }) {
   const [tab, setTab] = useState<"monitor" | "integration" | "analytics">("monitor");
+  // + Instance + Listing ▼ now share the top-right of the agent header.
+  // Provisioning is the highest-frequency action so it gets the lime fill;
+  // listing actions sit behind a single dropdown next to it.
+  const headerActions = (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <button
+        onClick={() => onProvision(agent.id)}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 6,
+          fontFamily: FONT, fontSize: 13, fontWeight: 600, lineHeight: "20px",
+          background: C.lime, color: C.limeText,
+          border: "none",
+          padding: "6px 14px", borderRadius: 8, cursor: "pointer",
+        }}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+        Instance
+      </button>
+      <ListingActions agentId={agent.id} state={agent.listingState} />
+    </div>
+  );
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
@@ -1959,7 +1966,7 @@ function AgentDetailPane({
           )}
         </div>
 
-        <ListingActions agentId={agent.id} state={agent.listingState} />
+        {headerActions}
       </div>
 
       {/* Tabs */}
