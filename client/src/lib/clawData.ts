@@ -55,6 +55,10 @@ export const TYPE_LABELS: TypeLabel[] = [
   "Research & Knowledge",
 ];
 
+// Special curated filter — a cross-category dimension, not a functional type.
+// An agent can belong to any TypeLabel *and* be built with Anthropic.
+export const ANTHROPIC_LABEL = "Agent built with Anthropic" as const;
+
 export interface Claw {
   id: string;
   name: string;
@@ -65,6 +69,10 @@ export interface Claw {
   infrastructurePath: InfrastructurePath;
   availability: Availability;
   pricing: string;
+  // Curated flag: agent is built with Anthropic models (Claude).
+  // When true, it appears under the "Agent built with Anthropic" filter
+  // and carries the Anthropic tag on its card.
+  builtWithAnthropic?: boolean;
 }
 
 export const ALL_CLAWS: Claw[] = [
@@ -89,6 +97,7 @@ export const ALL_CLAWS: Claw[] = [
     infrastructurePath: "gmi_ce_maas",
     availability: "available",
     pricing: "Free",
+    builtWithAnthropic: true,
   },
   {
     id: "enterprise-rag-pipeline",
@@ -100,6 +109,7 @@ export const ALL_CLAWS: Claw[] = [
     infrastructurePath: "gmi_ce_only",
     availability: "available",
     pricing: "Free",
+    builtWithAnthropic: true,
   },
   {
     id: "model-benchmark-suite",
@@ -111,6 +121,7 @@ export const ALL_CLAWS: Claw[] = [
     infrastructurePath: "gmi_ce_maas",
     availability: "available",
     pricing: "Free",
+    builtWithAnthropic: true,
   },
   {
     id: "contract-review-agent",
@@ -122,6 +133,7 @@ export const ALL_CLAWS: Claw[] = [
     infrastructurePath: "gmi_ce_only",
     availability: "available",
     pricing: "Free",
+    builtWithAnthropic: true,
   },
   {
     id: "data-pipeline-debugger",
@@ -133,6 +145,7 @@ export const ALL_CLAWS: Claw[] = [
     infrastructurePath: "self_hosted_maas",
     availability: "available",
     pricing: "Free",
+    builtWithAnthropic: true,
   },
   {
     id: "customer-support-triage",
@@ -144,6 +157,7 @@ export const ALL_CLAWS: Claw[] = [
     infrastructurePath: "self_hosted_maas",
     availability: "available",
     pricing: "Free",
+    builtWithAnthropic: true,
   },
   {
     id: "meeting-intelligence",
@@ -155,6 +169,7 @@ export const ALL_CLAWS: Claw[] = [
     infrastructurePath: "gmi_ce_only",
     availability: "available",
     pricing: "Free",
+    builtWithAnthropic: true,
   },
   {
     id: "creative-brief-generator",
@@ -188,5 +203,102 @@ export const ALL_CLAWS: Claw[] = [
     infrastructurePath: "gmi_ce_only",
     availability: "unavailable",
     pricing: "Free",
+    builtWithAnthropic: true,
+  },
+  {
+    id: "financial-filing-analyzer",
+    name: "Financial Filing Analyzer",
+    publisher: "fintel-labs",
+    description: "Parses 10-K, 10-Q, and earnings-call transcripts to extract risk factors, guidance changes, and segment performance. Produces analyst-ready summaries with page-level citations across hundreds of pages of filings.",
+    tags: ["finance", "10-k", "earnings", "analysis", "enterprise"],
+    typeLabel: "Data & Analytics",
+    infrastructurePath: "gmi_ce_maas",
+    availability: "available",
+    pricing: "Free",
+    builtWithAnthropic: true,
+  },
+  {
+    id: "compliance-policy-auditor",
+    name: "Compliance Policy Auditor",
+    publisher: "regops",
+    description: "Audits internal policies and controls against SOC 2, GDPR, HIPAA, and ISO 27001. Flags gaps, maps evidence to each requirement, and drafts remediation plans for security, legal, and GRC teams.",
+    tags: ["compliance", "soc2", "gdpr", "audit", "security"],
+    typeLabel: "Research & Knowledge",
+    infrastructurePath: "gmi_ce_only",
+    availability: "available",
+    pricing: "Free",
+    builtWithAnthropic: true,
+  },
+  {
+    id: "security-incident-copilot",
+    name: "Security Incident Copilot",
+    publisher: "sentinel-ai",
+    description: "Triages SIEM alerts, correlates signals across logs, and drafts incident timelines and postmortems with cited evidence trails. Cuts mean-time-to-resolution for enterprise SOC teams.",
+    tags: ["security", "incident", "soc", "siem", "enterprise"],
+    typeLabel: "Code & Dev Tools",
+    infrastructurePath: "gmi_ce_maas",
+    availability: "available",
+    pricing: "Free",
+    builtWithAnthropic: true,
+  },
+  {
+    id: "vendor-risk-assessor",
+    name: "Vendor Risk Assessor",
+    publisher: "trustlayer",
+    description: "Reviews vendor security questionnaires, SOC 2 reports, and DPAs to score third-party risk. Generates due-diligence summaries and tracks remediation across your entire vendor portfolio.",
+    tags: ["vendor", "risk", "due-diligence", "procurement", "compliance"],
+    typeLabel: "Research & Knowledge",
+    infrastructurePath: "gmi_ce_only",
+    availability: "available",
+    pricing: "Free",
+    builtWithAnthropic: true,
+  },
+  {
+    id: "rfp-response-builder",
+    name: "RFP Response Builder",
+    publisher: "proposalworks",
+    description: "Drafts enterprise RFP and security-questionnaire responses from your approved knowledge base. Keeps every answer consistent, on-message, and traceable back to its source document.",
+    tags: ["rfp", "sales", "proposals", "knowledge-base", "enterprise"],
+    typeLabel: "Content & Marketing",
+    infrastructurePath: "gmi_ce_maas",
+    availability: "available",
+    pricing: "Free",
+    builtWithAnthropic: true,
+  },
+  {
+    id: "support-escalation-agent",
+    name: "Enterprise Escalation Agent",
+    publisher: "helpdesk-pro",
+    description: "Handles tier-2 and tier-3 enterprise support escalations. Reads account history, reproduces issues from logs, and drafts SLA-aware resolution steps before routing to a human owner.",
+    tags: ["support", "escalation", "enterprise", "sla", "customer-service"],
+    typeLabel: "Customer Support",
+    infrastructurePath: "self_hosted_maas",
+    availability: "available",
+    pricing: "Free",
+    builtWithAnthropic: true,
+  },
+  {
+    id: "data-governance-classifier",
+    name: "Data Governance Classifier",
+    publisher: "governai",
+    description: "Scans data warehouses to classify and tag PII, PHI, and sensitive fields. Enforces retention and access policies and produces audit-ready data-lineage reports for privacy teams.",
+    tags: ["data-governance", "pii", "classification", "privacy", "enterprise"],
+    typeLabel: "Data & Analytics",
+    infrastructurePath: "gmi_ce_only",
+    availability: "available",
+    pricing: "Free",
+    builtWithAnthropic: true,
+  },
+  {
+    id: "codebase-modernization-agent",
+    name: "Codebase Modernization Agent",
+    publisher: "refactorlabs",
+    description: "Plans and executes large-scale migrations — framework upgrades, API deprecations, and language ports — across monorepos. Opens reviewed PRs with test coverage and rollback notes.",
+    tags: ["migration", "refactor", "monorepo", "devtools", "enterprise"],
+    typeLabel: "Code & Dev Tools",
+    infrastructurePath: "gmi_ce_maas",
+    availability: "available",
+    pricing: "Free",
+    builtWithAnthropic: true,
   },
 ];

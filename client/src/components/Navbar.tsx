@@ -1,18 +1,8 @@
-import React, { useState } from "react";
+import React from "react";
 import { Link, useLocation } from "wouter";
 
 // ─── Icons (pixel-style SVGs matching GMI Console) ───────────────────────────
 
-const IcoInference = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
-  </svg>
-);
-const IcoCompute = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M4 4h16v12H4V4zm2 2v8h12V6H6zm-2 10h16v2H4v-2zM9 18h6v2H9v-2z"/>
-  </svg>
-);
 const IcoHome = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
     <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
@@ -20,7 +10,12 @@ const IcoHome = () => (
 );
 const IcoStorage = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M2 6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6zm0 8a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-2zm4-1a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm0-8a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/>
+    <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+  </svg>
+);
+const IcoHistory = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3 2"/>
   </svg>
 );
 const IcoModelsHub = () => (
@@ -51,7 +46,7 @@ const IcoFineTuning = () => (
 );
 const IcoWorkflowGallery = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M13 2.05v2.02c3.95.49 7 3.85 7 7.93 0 3.21-1.81 6-4.72 7.28L13 17v5l5-3-1.22-1.22C19.91 16.26 22 13.27 22 10c0-5.18-3.94-9.45-9-9.95zM11 2.05C5.95 2.55 2 6.82 2 12c0 3.27 2.09 6.26 5.22 7.78L6 21l5 3v-5l-2.28 2.28C6.81 20 5 17.21 5 14c0-4.08 3.05-7.44 7-7.93V2.05z"/>
+    <path d="M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z"/>
   </svg>
 );
 const IcoMyWorkflows = () => (
@@ -76,7 +71,7 @@ const IcoClawMarketplace = () => (
 );
 const IcoDashboard = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>
+    <path d="M20 6h-2.18c.11-.31.18-.65.18-1a2.996 2.996 0 0 0-5.5-1.65l-.5.67-.5-.68C10.96 2.54 10.05 2 9 2 7.34 2 6 3.34 6 5c0 .35.07.69.18 1H4c-1.11 0-1.99.89-1.99 2L2 19c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zm-5-2c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zM9 4c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm11 15H4v-2h16v2zm0-5H4V8h5.08L7 10.83 8.62 12 11 8.76l1-1.36 1 1.36L15.38 12 17 10.83 14.92 8H20v6z"/>
   </svg>
 );
 const IcoDeployList = () => (
@@ -163,7 +158,6 @@ function NavItem({
 // ─── Main sidebar ─────────────────────────────────────────────────────────────
 export default function Navbar() {
   const [location] = useLocation();
-  const [tab, setTab] = useState<"inference" | "compute">("inference");
 
   const isActive = (href: string) =>
     location === href || (href !== "/" && location.startsWith(href));
@@ -172,9 +166,9 @@ export default function Navbar() {
     <aside
       style={{
         position: "fixed",
-        top: 0,
+        top: 40,
         left: 0,
-        height: "100vh",
+        height: "calc(100vh - 40px)",
         width: 210,
         background: "#0a0a0a",
         borderRight: "1px solid #404040",
@@ -185,40 +179,8 @@ export default function Navbar() {
         overflowX: "hidden",
       }}
     >
-      {/* Inference / Compute tab switcher */}
-      <div style={{ display: "flex", borderBottom: "1px solid #404040" }}>
-        {(["inference", "compute"] as const).map(t => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{
-              flex: 1,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-              padding: "10px 0",
-              fontFamily: "'Geist', system-ui, sans-serif",
-              fontSize: 14,
-              fontWeight: 400,
-              lineHeight: "20px",
-              background: "transparent",
-              border: "none",
-              borderBottom: tab === t ? "2px solid #DDEA4D" : "2px solid transparent",
-              color: tab === t ? "#DDEA4D" : "#fafafa",
-              cursor: "pointer",
-              transition: "color 0.12s",
-              marginBottom: "-1px",
-            }}
-          >
-            {t === "inference" ? <IcoInference /> : <IcoCompute />}
-            {t.charAt(0).toUpperCase() + t.slice(1)}
-          </button>
-        ))}
-      </div>
-
       {/* Nav body */}
-      <nav style={{ flex: 1, paddingTop: "0.25rem" }}>
+      <nav style={{ flex: 1, paddingTop: "0.5rem" }}>
 
         {/* Top-level */}
         <NavItem href="https://console.gmicloud.ai" label="Home" icon={IcoHome} external />
@@ -226,8 +188,9 @@ export default function Navbar() {
 
         {/* Explore */}
         <SectionLabel>Explore</SectionLabel>
-        <NavItem href="https://console.gmicloud.ai/models" label="Models Hub" icon={IcoModelsHub} external />
+        <NavItem href="https://console.gmicloud.ai/models" label="Model Hub" icon={IcoModelsHub} external />
         <NavItem href="https://console.gmicloud.ai/playground" label="Playground" icon={IcoPlayground} external />
+        <NavItem href="https://console.gmicloud.ai/history" label="History" icon={IcoHistory} external />
 
         {/* Model Management */}
         <SectionLabel>Model Management</SectionLabel>
@@ -237,7 +200,7 @@ export default function Navbar() {
 
         {/* Studio */}
         <SectionLabel>Studio</SectionLabel>
-        <NavItem href="https://console.gmicloud.ai/workflows" label="Workflow Gallery" icon={IcoWorkflowGallery} external />
+        <NavItem href="https://console.gmicloud.ai/workflows" label="Gallery" icon={IcoWorkflowGallery} external />
         <NavItem href="https://console.gmicloud.ai/my-workflows" label="My Workflows" icon={IcoMyWorkflows} external />
         <NavItem href="https://console.gmicloud.ai/team" label="Team Space" icon={IcoTeamSpace} external />
         <NavItem href="https://console.gmicloud.ai/media" label="My Media" icon={IcoMyMedia} external />
@@ -246,13 +209,13 @@ export default function Navbar() {
         <SectionLabel>Agentbox</SectionLabel>
         <NavItem href="/marketplace" label="Browse Agents" icon={IcoClawMarketplace} active={isActive("/marketplace")} />
         <NavItem href="/dashboard" label="My Agents" icon={IcoDashboard} active={isActive("/dashboard")} />
-        <NavItem href="/deploy" label="Register Agent" icon={IcoDeployList} active={isActive("/deploy")} />
+        <NavItem href="/deploy" label="Register & List" icon={IcoDeployList} active={isActive("/deploy")} />
 
       </nav>
 
-      {/* Bottom: Setting + Docs */}
+      {/* Bottom: Settings + Docs */}
       <div style={{ borderTop: "1px solid #1a1a1a", paddingBottom: "0.5rem", marginTop: "auto" }}>
-        <NavItem href="https://console.gmicloud.ai/settings" label="Setting" icon={IcoSetting} external />
+        <NavItem href="https://console.gmicloud.ai/settings" label="Settings" icon={IcoSetting} external />
         <NavItem href="https://docs.gmicloud.ai" label="Docs" icon={IcoDocs} external />
       </div>
     </aside>

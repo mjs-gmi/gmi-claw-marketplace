@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { ALL_CLAWS } from "@/lib/clawData";
 import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
+import CopyButton from "@/components/CopyButton";
 
 // ─── Tokens ───────────────────────────────────────────────────────────────
 const FONT = "'Geist', system-ui, sans-serif";
@@ -25,6 +26,7 @@ const C = {
   link:         "#5b94f0",
   warn:         "#fbbf24",
   ok:           "#34d399",
+  err:          "#f87171",
 } as const;
 
 const STEPS = [
@@ -285,25 +287,169 @@ function FieldLabel({ children, required }: { children: React.ReactNode; require
   );
 }
 
+// Small info icon with an instant custom hover tooltip (native `title` has a
+// ~1s delay and is easy to miss).
+function InfoHint({ text }: { text: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+      style={{ position: "relative", display: "inline-flex", alignItems: "center", color: C.muted, cursor: "help" }}
+    >
+      <IconInfo size={13} />
+      {show && (
+        <span
+          role="tooltip"
+          style={{
+            position: "absolute", top: "calc(100% + 6px)", left: 0,
+            width: 260,
+            background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 8,
+            padding: "8px 10px",
+            fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px",
+            color: C.fg, textAlign: "left", whiteSpace: "normal",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+            zIndex: 50, pointerEvents: "none",
+          }}
+        >
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+// Searchable data-center combobox — trigger + filterable list panel.
+function RegionSelect({
+  value, onChange, options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { id: string; name: string; sub: string; popular?: boolean }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+
+  const selected = options.find((o) => o.id === value);
+  const q = query.trim().toLowerCase();
+  const filtered = options.filter((o) =>
+    !q || o.name.toLowerCase().includes(q) || o.id.toLowerCase().includes(q) || o.sub.toLowerCase().includes(q),
+  );
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          width: "100%",
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+          background: C.pillBg, border: `1px solid ${open ? C.lime : C.border}`, borderRadius: 8,
+          padding: "10px 14px", cursor: "pointer",
+          fontFamily: FONT, fontSize: 14, lineHeight: "20px",
+          color: selected ? C.fg : C.muted, textAlign: "left",
+        }}
+      >
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {selected ? `${selected.name} (${selected.id})` : "Select a data center"}
+        </span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: C.muted, flexShrink: 0, transition: "transform .15s", transform: open ? "rotate(180deg)" : "none" }}>
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          style={{
+            position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0,
+            background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 8,
+            zIndex: 40, boxShadow: "0 8px 24px rgba(0,0,0,0.5)", overflow: "hidden",
+          }}
+        >
+          {/* Search */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: `1px solid ${C.borderSoft}` }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ color: C.muted, flexShrink: 0 }}>
+              <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
+            </svg>
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search…"
+              style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: C.fg, fontFamily: FONT, fontSize: 14, lineHeight: "20px" }}
+            />
+          </div>
+          {/* Options */}
+          <div style={{ maxHeight: 220, overflowY: "auto", padding: 4 }}>
+            {filtered.length === 0 ? (
+              <div style={{ padding: "10px 12px", fontFamily: FONT, fontSize: 13, color: C.muted }}>—</div>
+            ) : (
+              filtered.map((o) => {
+                const active = o.id === value;
+                return (
+                  <button
+                    type="button"
+                    key={o.id}
+                    onClick={() => { onChange(o.id); setOpen(false); setQuery(""); }}
+                    style={{
+                      width: "100%", textAlign: "left",
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "8px 12px",
+                      background: active ? C.selectedYel : "transparent",
+                      borderLeft: `2px solid ${active ? C.lime : "transparent"}`,
+                      borderTop: "none", borderRight: "none", borderBottom: "none",
+                      borderRadius: 4, cursor: "pointer",
+                      fontFamily: FONT, fontSize: 14, lineHeight: "20px", color: C.fg,
+                    }}
+                    onMouseEnter={(e) => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.04)"; }}
+                    onMouseLeave={(e) => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+                  >
+                    <span>{o.name} <span style={{ color: C.muted }}>({o.id})</span></span>
+                    {o.popular && (
+                      <span style={{ marginLeft: "auto", fontFamily: FONT, fontSize: 10, fontWeight: 600, letterSpacing: "0.04em", color: C.lime, background: "rgba(221,234,77,0.10)", border: "1px solid rgba(221,234,77,0.35)", padding: "0 6px", borderRadius: 999 }}>
+                        POPULAR
+                      </span>
+                    )}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TextInput({
-  value, onChange, placeholder, mono = false, disabled = false,
+  value, onChange, placeholder, mono = false, disabled = false, invalid = false, onPaste,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   mono?: boolean;
   disabled?: boolean;
+  invalid?: boolean;
+  onPaste?: (e: React.ClipboardEvent<HTMLInputElement>) => void;
 }) {
   return (
     <input
       type="text"
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      onPaste={onPaste}
       placeholder={placeholder}
       disabled={disabled}
       style={{
         background: disabled ? "rgba(40,40,40,0.5)" : C.pillBg,
-        border: `1px solid ${C.border}`,
+        border: `1px solid ${invalid ? C.err : C.border}`,
         color: disabled ? C.muted : C.fg,
         fontFamily: mono ? MONO : FONT,
         fontSize: 14, fontWeight: 400, lineHeight: "20px",
@@ -602,28 +748,6 @@ function RegisterPanel({
             </span>
           </div>
           <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>Container · per active instance · MaaS pay-per-token</div>
-          {(maxLifetime || idleTimeout) && (
-            <div
-              style={{
-                marginTop: 8, paddingTop: 8,
-                borderTop: `1px solid ${C.borderSoft}`,
-                display: "flex", alignItems: "center", gap: 6,
-                fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px",
-              }}
-            >
-              <span style={{ color: C.muted, display: "inline-flex" }}>
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
-                </svg>
-              </span>
-              <span>
-                Auto-stop after{" "}
-                <span style={{ color: C.fg, fontFamily: MONO }}>{maxLifetime ?? "1h"}</span>
-                {" · "}
-                <span style={{ color: C.fg, fontFamily: MONO }}>{idleTimeout ?? "5min"}</span> idle
-              </span>
-            </div>
-          )}
         </div>
       )}
 
@@ -807,7 +931,6 @@ function StepInfrastructure({
           imageChip,
           "Compute size",
           "US Iowa",
-          "Max 1h · idle 5min",
           "GMI Models on",
         ];
     return (
@@ -915,13 +1038,13 @@ function StepInfrastructure({
           display: "flex", flexDirection: "column", gap: 12,
         }}
       >
-        {/* Docker Image — registry URL is the only source for now; upload coming later */}
+        {/* Docker Image Source — registry URL text box; helper folded into an info tooltip */}
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <FieldLabel required>Docker Image</FieldLabel>
-          <TextInput value={dockerImage} onChange={setDockerImage} placeholder="docker.io/acme/agent:1.0.0" mono />
-          <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-            Pull from any registry — Docker Hub, GHCR, ECR. Upload-image flow coming later.
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <FieldLabel required>Docker Image Source</FieldLabel>
+            <InfoHint text="Pull from any registry — Docker Hub, GHCR, ECR. Upload-image flow coming later." />
+          </div>
+          <TextInput value={dockerImage} onChange={setDockerImage} placeholder="Registry URL" mono />
         </div>
 
         {/* Enable Credentials */}
@@ -943,53 +1066,10 @@ function StepInfrastructure({
           <Toggle on={enableCreds} onChange={setEnableCreds} />
         </div>
 
-        {/* Region */}
+        {/* Data Center — searchable combobox */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <FieldLabel required>Data Center Region</FieldLabel>
-          <Select
-            value={region}
-            onChange={setRegion}
-            placeholder="Select a data center region"
-            options={REGIONS.map((r) => ({ value: r.id, label: `${r.name} — ${r.sub}` }))}
-          />
-
-          <div style={{ marginTop: 6 }}>
-            <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted, marginBottom: 6 }}>Popular regions</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8 }}>
-              {REGIONS.filter((r) => r.popular).map((r) => {
-                const isActive = region === r.id;
-                return (
-                  <button
-                    key={r.id}
-                    onClick={() => setRegion(r.id)}
-                    style={{
-                      background: isActive ? C.selectedYel : C.cardSolid,
-                      border: `1px solid ${isActive ? C.selectedYelB : C.border}`,
-                      borderRadius: 8,
-                      padding: "10px 14px",
-                      textAlign: "left",
-                      display: "flex", alignItems: "center", gap: 10,
-                      cursor: "pointer",
-                      fontFamily: FONT,
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 12, height: 12, borderRadius: 999,
-                        border: `1.5px solid ${isActive ? C.lime : C.border}`,
-                        background: isActive ? C.lime : "transparent",
-                        flexShrink: 0,
-                      }}
-                    />
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: C.fg, lineHeight: "18px" }}>{r.name}</div>
-                      <div style={{ fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>{r.sub}</div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          <FieldLabel required>Data Center</FieldLabel>
+          <RegionSelect value={region} onChange={setRegion} options={REGIONS} />
         </div>
 
         {/* Compute Tier */}
@@ -1036,52 +1116,6 @@ function StepInfrastructure({
           )}
         </div>
 
-        {/* PRD F-09 — Lifecycle defaults (template-level; per-task override via SDK at task create) */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <FieldLabel>Lifecycle defaults</FieldLabel>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>Default task lifetime</span>
-              <Select
-                value={maxLifetime}
-                onChange={setMaxLifetime}
-                options={[
-                  { value: "30min", label: "30 min" },
-                  { value: "1h",    label: "1 hour" },
-                  { value: "2h",    label: "2 hours" },
-                  { value: "4h",    label: "4 hours" },
-                  { value: "8h",    label: "8 hours" },
-                  { value: "24h",   label: "24 hours" },
-                  { value: "off",   label: "No limit" },
-                ]}
-              />
-              <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>
-                Hard cap — task auto-stops after this duration.
-              </span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>Idle auto-stop</span>
-              <Select
-                value={idleTimeout}
-                onChange={setIdleTimeout}
-                options={[
-                  { value: "1min",  label: "1 min" },
-                  { value: "5min",  label: "5 min" },
-                  { value: "15min", label: "15 min" },
-                  { value: "30min", label: "30 min" },
-                  { value: "1h",    label: "1 hour" },
-                  { value: "off",   label: "Off" },
-                ]}
-              />
-              <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>
-                Auto-stop after N seconds of inactivity.
-              </span>
-            </div>
-          </div>
-          <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px", marginTop: 2 }}>
-            Callers can override these per-task via the SDK at task create.
-          </span>
-        </div>
       </div>
 
       {/* Add GMI Models */}
@@ -1444,8 +1478,8 @@ function StepEnvVars({
   // manual "+ Add variable" flow so users keep both options.
   const [pasteOpen, setPasteOpen] = useState(false);
   const [addText, setAddText] = useState("");
-  const applyAdd = () => {
-    const lines = addText.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  const parseEnvText = (text: string): CustomEnv[] => {
+    const lines = text.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
     const parsed: CustomEnv[] = [];
     for (const line of lines) {
       const eq = line.indexOf("=");
@@ -1457,18 +1491,33 @@ function StepEnvVars({
       }
       if (/^GMI_MAAS_/i.test(key)) continue;
       // Heuristic: keys whose final segment is KEY / TOKEN / SECRET / PASSWORD / PWD
-      // default to secret. Suffix-based on purpose — avoids false positives like
-      // MAX_TOKENS (count) or PUBLIC_KEY_ID (identifier).
+      // default to secret. Suffix-based — avoids false positives like MAX_TOKENS.
       const looksSecret = /_(KEY|TOKEN|SECRET|PASSWORD|PWD)$/i.test(key) || /^(KEY|TOKEN|SECRET|PASSWORD|PWD)$/i.test(key);
       parsed.push({
-        id: `env${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: `env${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${parsed.length}`,
         key, value, secret: looksSecret,
         role: looksSecret ? "secret_user_supplied" : "config",
       });
     }
+    return parsed;
+  };
+  const applyAdd = () => {
+    const parsed = parseEnvText(addText);
     if (parsed.length) setCustomEnvs([...customEnvs, ...parsed]);
     setAddText("");
     setPasteOpen(false);
+  };
+  // Honor the "paste .env into a Key field" tip — if the pasted text looks like
+  // KEY=value content, parse it into rows instead of dumping raw text.
+  const onKeyPaste = (rowId: string) => (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData("text");
+    if (!text.includes("=")) return;
+    const parsed = parseEnvText(text);
+    if (!parsed.length) return;
+    e.preventDefault();
+    const row = customEnvs.find((r) => r.id === rowId);
+    const base = row && !row.key && !row.value ? customEnvs.filter((r) => r.id !== rowId) : customEnvs;
+    setCustomEnvs([...base, ...parsed]);
   };
 
   const allDefault = customEnvs.length === 0;
@@ -1565,6 +1614,11 @@ function StepEnvVars({
         display: "flex", flexDirection: "column", gap: 20,
       }}
     >
+      {/* Subtitle — auto-inject note */}
+      <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "16px", marginTop: -4 }}>
+        Runtime configuration. <code style={{ fontFamily: MONO, fontSize: 11, color: C.fg }}>GMI_MAAS_API_KEY</code> is auto-injected by CE at runtime; builders must not override.
+      </div>
+
       {/* Auto-injected */}
       <section
         style={{
@@ -1658,11 +1712,10 @@ function StepEnvVars({
                 cursor: "pointer",
               }}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="8" y="3" width="8" height="4" rx="1"/>
-                <path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h8"/>
               </svg>
-              {pasteOpen ? "Cancel paste" : "Paste .env"}
+              {pasteOpen ? "Cancel" : "Add from .env"}
             </button>
             <button
               onClick={add}
@@ -1717,48 +1770,67 @@ function StepEnvVars({
           </div>
         )}
 
-        {customEnvs.length === 0 && !pasteOpen ? (
-          <div style={{ fontFamily: FONT, fontSize: 13, color: C.muted, padding: "8px 0" }}>
-            No custom variables yet — click <span style={{ color: C.lime, fontWeight: 600 }}>+ Add variable</span> to type one, or <span style={{ color: C.fg, fontWeight: 600 }}>Paste .env</span> to bulk-import.
+        {/* Table — header + rows */}
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+          {/* Header row — lime-tinted */}
+          <div style={{
+            display: "grid", gridTemplateColumns: "1fr 1.4fr 90px 44px", gap: 8,
+            padding: "8px 12px", background: C.selectedYel,
+            borderBottom: `1px solid ${C.borderSoft}`,
+            fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted, lineHeight: "16px",
+          }}>
+            <div>Key</div><div>Value</div><div>Type</div><div style={{ textAlign: "right" }}>Action</div>
           </div>
-        ) : customEnvs.length === 0 ? null : (
-          customEnvs.map((env) => (
-            <div
-              key={env.id}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1.4fr 110px 32px",
-                gap: 8,
-                alignItems: "center",
-              }}
-            >
-              <TextInput value={env.key}   onChange={(v) => update(env.id, { key: v })}   placeholder="MY_API_KEY" mono />
-              <TextInput value={env.value} onChange={(v) => update(env.id, { value: v })} placeholder={env.secret ? "••••••••" : "value"} mono />
-              <button
-                title={env.secret
-                  ? "Secret · cloner must supply their own value (never copied from your template)"
-                  : "Config · default value is copied to clones; editable by cloner"}
-                onClick={() => update(env.id, { secret: !env.secret, role: !env.secret ? "secret_user_supplied" : "config" })}
+          {customEnvs.length === 0 ? (
+            <div style={{ padding: "14px 12px", fontFamily: FONT, fontSize: 13, color: C.muted }}>
+              No custom variables yet.
+            </div>
+          ) : (
+            customEnvs.map((env, i) => (
+              <div
+                key={env.id}
                 style={{
-                  fontFamily: FONT, fontSize: 12, fontWeight: 500,
-                  background: env.secret ? "rgba(199,167,255,0.12)" : "transparent",
-                  color: env.secret ? "#c7a7ff" : C.muted,
-                  border: `1px solid ${env.secret ? "rgba(199,167,255,0.35)" : C.border}`,
-                  padding: "6px 10px", borderRadius: 999,
-                  cursor: "pointer",
+                  display: "grid", gridTemplateColumns: "1fr 1.4fr 90px 44px", gap: 8,
+                  padding: "8px 12px", alignItems: "center",
+                  borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`,
                 }}
               >
-                {env.secret ? "Secret" : "Config"}
-              </button>
-              <button
-                onClick={() => remove(env.id)}
-                style={{ background: "transparent", border: "none", cursor: "pointer", color: "#ef4444", padding: 4, display: "inline-flex" }}
-              >
-                <IconX color="#ef4444" />
-              </button>
-            </div>
-          ))
-        )}
+                <TextInput value={env.key}   onChange={(v) => update(env.id, { key: v })} onPaste={onKeyPaste(env.id)} placeholder="KEY_NAME" mono />
+                <TextInput value={env.value} onChange={(v) => update(env.id, { value: v })} placeholder={env.secret ? "••••••••" : "value"} mono />
+                <div>
+                  <button
+                    onClick={() => update(env.id, { secret: !env.secret, role: !env.secret ? "secret_user_supplied" : "config" })}
+                    style={{
+                      fontFamily: FONT, fontSize: 11, fontWeight: 600, letterSpacing: "0.04em",
+                      color: env.secret ? "#c7a7ff" : C.fg,
+                      background: env.secret ? "rgba(199,167,255,0.12)" : "rgba(255,255,255,0.06)",
+                      border: `1px solid ${env.secret ? "rgba(199,167,255,0.35)" : C.border}`,
+                      padding: "2px 8px", borderRadius: 4, cursor: "pointer",
+                    }}
+                  >
+                    {env.secret ? "SECRET" : "TEXT"}
+                  </button>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <button
+                    onClick={() => remove(env.id)}
+                    title="Remove"
+                    style={{ background: "transparent", border: "none", cursor: "pointer", color: C.muted, padding: 4, display: "inline-flex" }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Tip */}
+        <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "16px" }}>
+          Tip: paste .env contents directly into a Key field to add multiple variables at once.
+        </div>
       </section>
 
       <div
@@ -1771,9 +1843,9 @@ function StepEnvVars({
           display: "flex", gap: 8, alignItems: "flex-start",
         }}
       >
-        <span style={{ color: C.muted, marginTop: 2 }}><IconInfo size={12} /></span>
+        <span style={{ color: C.muted, marginTop: 1, display: "inline-flex" }}><IconLock size={12} /></span>
         <span>
-          <span style={{ color: C.fg }}>Config</span> values are copied to clones (editable on Deploy-your-own). <span style={{ color: C.fg }}>Secret</span> values are <em>never</em> copied — clones see the field blank, required, and must supply their own. Secrets are encrypted at rest with AES-256 and never logged.
+          <span style={{ color: C.fg, fontWeight: 500 }}>Reminder</span> — Secrets are encrypted at rest with AES-256. Plaintext values are never written to logs or audit history.
         </span>
       </div>
     </div>
@@ -1788,49 +1860,68 @@ function StepMaasKey({
   maasKey: string;
   setMaasKey: (v: string) => void;
 }) {
+  const badge: React.CSSProperties = {
+    fontFamily: MONO, fontSize: 10, fontWeight: 600, color: C.fg,
+    background: "#0a0a0a", border: `1px solid ${C.border}`,
+    padding: "2px 7px", borderRadius: 4, letterSpacing: "0.04em", whiteSpace: "nowrap",
+  };
   return (
-    <div
-      style={{
-        background: C.card,
-        border: `1px solid ${C.border}`,
-        borderRadius: 10,
-        padding: "16px 20px",
-        display: "flex", flexDirection: "column", gap: 18,
-      }}
-    >
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <FieldLabel>
-            GMI Models key
-            <span style={{ color: C.muted, fontWeight: 400, marginLeft: 6 }}>· optional</span>
-          </FieldLabel>
-          <button
-            onClick={() => setMaasKey(genMaasKey())}
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 4,
-              fontFamily: FONT, fontSize: 12, fontWeight: 500,
-              color: C.lime,
-              background: "rgba(221,234,77,0.10)",
-              border: "1px solid rgba(221,234,77,0.35)",
-              padding: "2px 10px",
-              borderRadius: 999,
-              cursor: "pointer",
-            }}
-          >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16" />
-            </svg>
-            Generate one
-          </button>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Card */}
+      <div
+        style={{
+          background: C.card,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          padding: "16px 20px",
+          display: "flex", flexDirection: "column", gap: 14,
+        }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, lineHeight: "22px" }}>
+            GMI MaaS API Key
+          </div>
+          <p style={{ fontFamily: FONT, fontSize: 13, fontWeight: 400, lineHeight: "20px", color: C.muted, margin: 0 }}>
+            Provide a MaaS API key. GMI uses it to validate your account, meter usage, and enable the Powered-by badge. If you leave this blank, the system will auto-issue one for your Agent.
+          </p>
         </div>
-        <TextInput value={maasKey} onChange={setMaasKey} placeholder="Paste an existing key, or click Generate" mono />
-        <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "18px", color: C.muted, margin: "2px 0 0" }}>
-          Leave blank and we auto-issue one at deploy. Your code must read{" "}
-          <code style={{ fontFamily: MONO, fontSize: 11, color: C.fg, background: "rgba(255,255,255,0.04)", padding: "1px 5px", borderRadius: 3 }}>GMI_MAAS_API_KEY</code>
-          {" "}at runtime — self-hosted Agents get the{" "}
-          <span style={{ fontFamily: FONT, fontSize: 10, fontWeight: 600, color: C.fg, background: "rgba(255,255,255,0.06)", border: `1px solid ${C.border}`, padding: "1px 6px", borderRadius: 3, letterSpacing: "0.04em" }}>POWERED BY GMI MODELS</span>
-          {" "}badge.
-        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+            MaaS API Key
+          </span>
+          <TextInput value={maasKey} onChange={setMaasKey} placeholder="Enter your MaaS API key" />
+          <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "18px", color: C.muted, margin: 0 }}>
+            Find your key in <a href="/dashboard" style={{ color: C.link, textDecoration: "none" }}>My Agents → Analytics</a> on any existing agent
+          </p>
+        </div>
+      </div>
+
+      {/* Footer explainer */}
+      <div
+        style={{
+          background: C.cardSolid,
+          border: `1px solid ${C.borderSoft}`,
+          borderRadius: 8,
+          padding: "12px 14px",
+          display: "flex", flexDirection: "column", gap: 10,
+          fontFamily: FONT, fontSize: 12, lineHeight: "18px", color: C.muted,
+        }}
+      >
+        <div>
+          <span style={{ color: C.fg, fontWeight: 600 }}>Powered by GMI MaaS</span> — Self-hosted Agents receive the{" "}
+          <span style={badge}>POWERED BY GMI MODELS</span> badge instead of{" "}
+          <span style={{ display: "inline-flex", verticalAlign: "text-bottom", color: "#3b82f6" }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="#3b82f6" aria-hidden="true">
+              <path d="M12 1l2.5 1.8 3-.4 1.2 2.8 2.8 1.2-.4 3L23 12l-1.8 2.5.4 3-2.8 1.2-1.2 2.8-3-.4L12 23l-2.5-1.8-3 .4-1.2-2.8L2.5 17.5l.4-3L1 12l1.9-2.5-.4-3 2.8-1.2L6.5 2.4l3 .4z"/>
+              <path d="M10.6 14.6l-2.2-2.2-1.4 1.4 3.6 3.6 6-6-1.4-1.4z" fill="#fff"/>
+            </svg>
+          </span>{" "}
+          You retain full responsibility for compute, scaling, and uptime.
+        </div>
+        <div>
+          <span style={{ color: C.fg, fontWeight: 600 }}>Code requirement</span> — Your code must reference the env variable{" "}
+          <span style={badge}>GMI_MAAS_API_KEY</span>. GMI will validate this key if you provide one, otherwise an auto-issued key is injected at deploy time.
+        </div>
       </div>
     </div>
   );
@@ -2074,7 +2165,7 @@ function SuccessView({
             <span style={{ fontFamily: MONO, fontSize: 13, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {accessUrl || "https://your-agent.yourdomain.com"}
             </span>
-            <CopyInline value={accessUrl || "https://your-agent.yourdomain.com"} />
+            <CopyButton value={accessUrl || "https://your-agent.yourdomain.com"} label={false} />
           </div>
         </div>
       )}
@@ -2096,7 +2187,7 @@ function SuccessView({
           }}
         >
           <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Verify your registered key in 5 seconds</span>
-          <CopyInline value={curl} />
+          <CopyButton value={curl} label={false} />
         </div>
         <pre
           style={{
@@ -2133,7 +2224,7 @@ function SuccessView({
           }}
         >
           <code style={{ fontFamily: MONO, fontSize: 12, fontWeight: 500, color: C.muted, letterSpacing: "0.04em" }}>GMI_MAAS_API_KEY</code>
-          <CopyInline value={displayedKey} />
+          <CopyButton value={displayedKey} label={false} />
         </div>
         <pre
           style={{
@@ -2204,32 +2295,6 @@ function SuccessView({
 }
 
 // Lightweight inline copy button (no state in component tree)
-function CopyInline({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={() => { navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
-      style={{
-        display: "inline-flex", alignItems: "center", gap: 4,
-        background: "transparent", border: "none",
-        color: copied ? C.lime : C.muted,
-        fontFamily: FONT, fontSize: 12, fontWeight: 500,
-        cursor: "pointer", padding: 2,
-      }}
-    >
-      {copied ? (
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M20 6 9 17l-5-5" />
-        </svg>
-      ) : (
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" />
-        </svg>
-      )}
-    </button>
-  );
-}
-
 // ─── Step 5: Review & Register ────────────────────────────────────────────
 // Per PRD M6.4: anonymous image manifest probe at publish (this) + clone (ClawDetail).
 // Same heuristic as ClawDetail's mockImagePullState — keeps prototype outcomes consistent.
@@ -2243,7 +2308,7 @@ function probePublishImage(image: string): PublishProbeState {
 }
 
 function StepReview({
-  summary, dockerImage,
+  summary, dockerImage, computeRate, modelInfo,
 }: {
   summary: {
     group: string;
@@ -2253,184 +2318,100 @@ function StepReview({
   modelInfo: ModelSpec | null;
   dockerImage: string;
 }) {
-  // Default collapsed so the wizard fits in one viewport without scrolling.
-  // Expanded view shows the full grouped review (Container / Network / Lifecycle & MaaS).
-  const [expanded, setExpanded] = useState(false);
+  // Always expanded — Review & Register is one of the two default-visible steps.
+  const rows = summary.flatMap((g) => g.rows);
+  const dayRate = computeRate * 24;
+  const inAmt = modelInfo ? modelInfo.inPrice.split("/")[0].trim() : "—";
+  const outAmt = modelInfo?.outPrice ? modelInfo.outPrice.split("/")[0].trim() : null;
+  const imgState = probePublishImage(dockerImage);
 
-  if (!expanded) {
-    const chips = summary.map((g) => `${g.group} · ${g.rows.length}`);
-    return (
-      <div
-        style={{
-          background: C.card,
-          border: `1px solid ${C.border}`,
-          borderRadius: 10,
-          padding: "12px 16px",
-          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-        }}
-      >
-        {chips.map((c) => (
-          <span
-            key={c}
-            style={{
-              fontFamily: FONT, fontSize: 11, fontWeight: 500, lineHeight: "14px",
-              color: C.fg,
-              background: "rgba(255,255,255,0.04)",
-              border: `1px solid ${C.border}`,
-              padding: "1px 8px",
-              borderRadius: 999,
-            }}
-          >
-            {c}
-          </span>
-        ))}
-        <button
-          onClick={() => setExpanded(true)}
-          style={{
-            marginLeft: "auto",
-            display: "inline-flex", alignItems: "center", gap: 3,
-            fontFamily: FONT, fontSize: 11, fontWeight: 500,
-            background: "transparent", color: C.muted,
-            border: "none", padding: 0, cursor: "pointer",
-          }}
-        >
-          Review all <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 5l7 7-7 7" /></svg>
-        </button>
-      </div>
-    );
-  }
+  const costCard: React.CSSProperties = {
+    background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 10,
+    padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8,
+  };
+  const costLabel: React.CSSProperties = {
+    fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted,
+    letterSpacing: "0.06em", textTransform: "uppercase",
+  };
+  const bigNum: React.CSSProperties = {
+    fontFamily: FONT, fontSize: 22, fontWeight: 700, color: C.fg,
+    textAlign: "right", letterSpacing: "-0.01em", lineHeight: "26px",
+  };
+  const unit: React.CSSProperties = { fontSize: 13, fontWeight: 500, color: C.muted };
+  const io: React.CSSProperties = { fontSize: 11, fontWeight: 500, color: C.muted, marginLeft: 4 };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button
-          onClick={() => setExpanded(false)}
-          style={{
-            display: "inline-flex", alignItems: "center", gap: 4,
-            fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
-            background: "transparent", color: C.muted,
-            border: "none", padding: 0, cursor: "pointer",
-          }}
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="m18 15-6-6-6 6" />
-          </svg>
-          Collapse
-        </button>
-      </div>
-      {summary.map(({ group, rows }) => (
-        <div
-          key={group}
-          style={{
-            background: C.cardSolid,
-            border: `1px solid ${C.border}`,
-            borderRadius: 8,
-            overflow: "hidden",
-          }}
-        >
-          <div
-            style={{
-              padding: "8px 16px",
-              borderBottom: `1px solid ${C.borderSoft}`,
-              background: "rgba(255,255,255,0.02)",
-              fontFamily: FONT, fontSize: 11, fontWeight: 600,
-              color: C.muted,
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-            }}
-          >
-            {group}
-          </div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* Configuration Summary */}
+      <div style={{ background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Configuration Summary</div>
+        <div style={{ border: `1px solid ${C.borderSoft}`, borderRadius: 8, overflow: "hidden" }}>
           {rows.map((row, i) => (
             <div
               key={row.label}
               style={{
-                display: "grid", gridTemplateColumns: "160px 1fr",
-                padding: "8px 16px",
+                display: "grid", gridTemplateColumns: "200px 1fr", gap: 12,
+                padding: "10px 14px", alignItems: "center",
                 borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`,
-                background: row.highlight ? "rgba(99,105,35,0.18)" : "transparent",
-                alignItems: "center",
               }}
             >
-              <div style={{ fontFamily: FONT, fontSize: 11, fontWeight: 400, color: C.muted }}>{row.label}</div>
-              <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.value}</div>
+              <div style={{ fontFamily: FONT, fontSize: 13, color: C.muted }}>{row.label}</div>
+              <div style={{ fontFamily: row.label === "Docker Image" ? MONO : FONT, fontSize: 13, fontWeight: 500, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.value}</div>
             </div>
           ))}
         </div>
-      ))}
-
-      {/* A3 — Publish-time image availability check (PRD M6.4) */}
-      {(() => {
-        const state = probePublishImage(dockerImage);
-        if (state === "empty") return null;
-        if (state === "ok") {
-          return (
-            <div style={{
-              display: "flex", alignItems: "center", gap: 8,
-              padding: "10px 14px",
-              background: "rgba(52,211,153,0.06)",
-              border: "1px solid rgba(52,211,153,0.30)",
-              borderRadius: 8,
-              fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "18px",
-            }}>
-              <span style={{ color: C.ok, display: "inline-flex" }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M20 6 9 17l-5-5"/>
-                </svg>
-              </span>
-              <span><span style={{ color: C.fg, fontWeight: 600 }}>Image availability check passed</span> — your image is public and pullable. Listing can go live after review.</span>
-            </div>
-          );
-        }
-        if (state === "private") {
-          return (
-            <div style={{
-              display: "flex", alignItems: "flex-start", gap: 8,
-              padding: "10px 14px",
-              background: "rgba(251,191,36,0.06)",
-              border: "1px solid rgba(251,191,36,0.30)",
-              borderRadius: 8,
-              fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "18px",
-            }}>
-              <span style={{ color: C.warn, display: "inline-flex", marginTop: 2 }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                </svg>
-              </span>
-              <span>
-                <span style={{ color: C.fg, fontWeight: 600 }}>Image is private (401/403)</span> — listing will go live in <span style={{ color: C.fg }}>Try demo</span> mode (cloners can't pull your image). To enable Deploy-your-own, make the image public or attach registry credentials below.
-              </span>
-            </div>
-          );
-        }
-        return (
-          <div style={{
-            display: "flex", alignItems: "flex-start", gap: 8,
-            padding: "10px 14px",
-            background: "rgba(248,113,113,0.06)",
-            border: "1px solid rgba(248,113,113,0.30)",
-            borderRadius: 8,
-            fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "18px",
-          }}>
-            <span style={{ color: C.err, display: "inline-flex", marginTop: 2 }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/>
-              </svg>
-            </span>
-            <span>
-              <span style={{ color: C.fg, fontWeight: 600 }}>Image not found (404)</span> — Register will be blocked until the image reference is fixed.
-            </span>
-          </div>
-        );
-      })()}
-
-      {/* A4-lite — Cloning consent line (PRD M6.5) */}
-      <div style={{
-        fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px",
-        paddingTop: 2,
-      }}>
-        Others can deploy their own copy using your image and config. <span style={{ color: C.fg }}>Secrets are never copied</span> — cloners must supply their own.
+        <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Need to change something? Use Back to return to the previous step.</div>
       </div>
+
+      {/* Cost Estimate */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Cost Estimate</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div style={costCard}>
+            <div style={costLabel}>Compute cost</div>
+            <div style={bigNum}>~${computeRate.toFixed(4)}<span style={unit}>/hr</span></div>
+            <div style={{ ...bigNum, fontSize: 16, color: C.muted }}>~${dayRate.toFixed(2)}<span style={unit}>/day</span></div>
+          </div>
+          <div style={costCard}>
+            <div style={costLabel}>Models tokens</div>
+            {modelInfo ? (
+              <>
+                <div style={bigNum}>{inAmt}<span style={unit}>/ 1M</span><span style={io}>Input</span></div>
+                {outAmt && <div style={bigNum}>{outAmt}<span style={unit}>/ 1M</span><span style={io}>Output</span></div>}
+              </>
+            ) : (
+              <div style={{ ...bigNum, color: C.muted }}>—</div>
+            )}
+          </div>
+        </div>
+        <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Billing begins immediately upon clicking Register.</div>
+      </div>
+
+      {/* Notification — Registration ≠ Listing */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px", fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "18px" }}>
+        <span style={{ color: C.muted, display: "inline-flex", marginTop: 1, flexShrink: 0 }}><IconInfo size={13} /></span>
+        <span>
+          <span style={{ color: C.fg, fontWeight: 600 }}>Registration ≠ Listing</span> — Registering the Agent provisions infrastructure with GMI but does not make it public on the Agentbox. List it explicitly from the Dashboard once you have tested it.
+        </span>
+      </div>
+
+      {/* Publish-time image availability — only surface blocking states (private / 404) */}
+      {imgState === "private" && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "10px 14px", background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.30)", borderRadius: 8, fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "18px" }}>
+          <span style={{ color: C.warn, display: "inline-flex", marginTop: 2 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </span>
+          <span><span style={{ color: C.fg, fontWeight: 600 }}>Image is private (401/403)</span> — listing will go live in <span style={{ color: C.fg }}>Try demo</span> mode (cloners can't pull your image). Make it public or attach registry credentials to enable Deploy-your-own.</span>
+        </div>
+      )}
+      {imgState === "missing" && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "10px 14px", background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.30)", borderRadius: 8, fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "18px" }}>
+          <span style={{ color: C.err, display: "inline-flex", marginTop: 2 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
+          </span>
+          <span><span style={{ color: C.fg, fontWeight: 600 }}>Image not found (404)</span> — Register will be blocked until the image reference is fixed.</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -2481,6 +2462,55 @@ function FooterButtons({
   );
 }
 
+// ─── Edit-template right panel — Live Cost Estimate + Back / Save changes ──
+function EditCostPanel({
+  computeRate, onBack, onSave,
+}: {
+  computeRate: number;
+  onBack: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <aside style={{ display: "flex", flexDirection: "column", gap: 14, position: "sticky", top: 48 }}>
+      <div style={{ background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Live Cost Estimate</div>
+        <div style={{ fontFamily: FONT, fontSize: 28, fontWeight: 700, color: C.fg, letterSpacing: "-0.02em", lineHeight: "32px" }}>
+          ${computeRate.toFixed(4)}<span style={{ fontSize: 15, fontWeight: 500, color: C.muted }}>/hr</span>
+        </div>
+        <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Container tier · per active instance</div>
+        <div style={{ borderTop: `1px solid ${C.borderSoft}`, marginTop: 4, paddingTop: 10, display: "flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 12, color: C.muted }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, background: C.lime, display: "inline-block", flexShrink: 0 }} />
+          MaaS: pay per token used
+        </div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <button
+          onClick={onBack}
+          style={{
+            fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
+            background: "transparent", color: C.fg,
+            border: `1px solid ${C.border}`,
+            padding: "8px 18px", borderRadius: 8, cursor: "pointer",
+          }}
+        >
+          Back
+        </button>
+        <button
+          onClick={onSave}
+          style={{
+            fontFamily: FONT, fontSize: 14, fontWeight: 600, lineHeight: "20px",
+            background: C.lime, color: C.limeText,
+            border: "none",
+            padding: "8px 18px", borderRadius: 8, cursor: "pointer",
+          }}
+        >
+          Save changes
+        </button>
+      </div>
+    </aside>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────
 export default function DeployWizard() {
   const [, setLocation] = useLocation();
@@ -2516,6 +2546,11 @@ export default function DeployWizard() {
   // ?use=<id> — Use-this-agent fork. Wizard is pre-filled from a marketplace
   // template; user lands on a collapsed view and expands to customize.
   const [forkedFrom, setForkedFrom] = useState<string | null>(null);
+  // ?edit=<id> — Edit-template mode (opened from My Agents). Shows a focused
+  // review of the template config with a Save changes CTA (no re-registration).
+  const [editMode] = useState(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).has("edit"),
+  );
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const useId = params.get("use");
@@ -2533,6 +2568,18 @@ export default function DeployWizard() {
     setCustomEnvs(found.template.envDeclarations);
     setSelectedModel(found.template.model);
   }, []);
+  // Pre-fill the edit view from the agent being edited (demo values).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("edit")) return;
+    setHostMode("gmi");
+    setProjectName(params.get("name") || "Openclaw test");
+    setDockerSource("registry");
+    setDockerImage("ghcr.io/mjs-gmi/openclaw-gmi:v5-mode-none");
+    setRegion("us-ia-iowa-1");
+    setComputeTier("container");
+    setSelectedModel("claude-opus-48");
+  }, []);
 
   const tierInfo = useMemo(() => COMPUTE_TIERS.find((t) => t.id === computeTier) || null, [computeTier]);
   const modelInfo = useMemo(() => MODELS.find((m) => m.id === selectedModel) || null, [selectedModel]);
@@ -2544,27 +2591,26 @@ export default function DeployWizard() {
     {
       group: "Container",
       rows: [
-        { label: "Project name", value: projectName || "—" },
-        { label: "Image",        value: dockerImage || "—" },
-        { label: "Registry",     value: enableCreds ? "Configured" : "Public image", highlight: !enableCreds },
-        { label: "Tier",         value: tierInfo ? `${tierInfo.name} — ${tierInfo.cpu} · ${tierInfo.ram}` : "—" },
-        { label: "Region",       value: regionInfo ? `${regionInfo.name} · ${regionInfo.sub}` : "—" },
+        { label: "Project Name",         value: projectName || "—" },
+        { label: "Docker Image",         value: dockerImage || "—" },
+        { label: "Registry Credentials", value: enableCreds ? "Configured" : "Public image" },
+        { label: "Compute Tier",         value: tierInfo ? `${tierInfo.name} - ${tierInfo.sub}` : "—" },
+        { label: "Region",               value: regionInfo ? `${regionInfo.name} · ${regionInfo.sub}` : "—" },
       ],
     },
     {
       group: "Network",
       rows: [
-        { label: "Ports", value: ports.length > 0
+        { label: "Port Mappings", value: ports.length > 0
             ? ports.map((p) => `${p.protocol} ${p.internal || "?"} (${p.name || "port"})`).join(", ")
             : "—" },
       ],
     },
     {
-      group: "Lifecycle & MaaS",
+      group: "Model & MaaS",
       rows: [
-        { label: "Auto-stop", value: `max ${maxLifetime} · idle ${idleTimeout}` },
-        { label: "Model",     value: modelInfo ? modelInfo.name : "—" },
-        { label: "Env vars",  value: customEnvs.length > 0 ? `${customEnvs.length} configured` : "—" },
+        { label: "MaaS",            value: modelInfo ? modelInfo.name : "—" },
+        { label: "Custom Env Vars", value: customEnvs.length > 0 ? `${customEnvs.length} configured` : "—" },
       ],
     },
   ], [projectName, dockerImage, enableCreds, tierInfo, regionInfo, maxLifetime, idleTimeout, ports, modelInfo, customEnvs]);
@@ -2587,6 +2633,47 @@ export default function DeployWizard() {
     !ports[0].listening;
 
   const step4AllDefault = customEnvs.length === 0;
+
+  // ── Edit-template view — focused review of the template config ────────────
+  if (editMode) {
+    return (
+      <div style={{ minHeight: "100vh", background: C.bg, color: C.fg, fontFamily: FONT }}>
+        <Topbar />
+        <Navbar />
+        <div style={{ marginLeft: 210, paddingTop: 40 }}>
+          <header style={{ padding: "14px 24px 8px" }}>
+            <h1 style={{ fontFamily: FONT, fontSize: 24, fontWeight: 700, lineHeight: "30px", color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>
+              Edit template
+            </h1>
+            <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, margin: "2px 0 0" }}>
+              Update your template configuration
+            </p>
+          </header>
+          <section
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(0, 1fr) 300px",
+              gap: 16,
+              padding: "8px 24px 24px",
+              alignItems: "start",
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <StepReview summary={summary} dockerImage={dockerImage} computeRate={computeRate} modelInfo={modelInfo} />
+            </div>
+            <EditCostPanel
+              computeRate={computeRate}
+              onBack={() => setLocation("/dashboard")}
+              onSave={() => {
+                setLocation("/dashboard");
+              }}
+            />
+          </section>
+          <Footer />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.fg, fontFamily: FONT }}>
@@ -2694,37 +2781,22 @@ export default function DeployWizard() {
               borderRadius: 8,
               display: "flex",
               alignItems: "center",
-              justifyContent: "space-between",
-              gap: 12,
+              gap: 10,
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-              <span style={{ display: "inline-flex", color: C.lime }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M8 17.929H6c-1.105 0-2-.912-2-2.036V5.036C4 3.91 4.895 3 6 3h8c1.105 0 2 .911 2 2.036v1.866m-6 .17h8c1.105 0 2 .91 2 2.035v10.857C20 21.09 19.105 22 18 22h-8c-1.105 0-2-.911-2-2.036V9.107c0-1.124.895-2.036 2-2.036z"/>
-                </svg>
-              </span>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg, lineHeight: "18px" }}>
-                  Pre-filled from <span style={{ color: C.lime }}>{forkedFrom}</span>
-                </div>
-                <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "16px", marginTop: 1 }}>
-                  Image, env declarations, ports and defaults come from the template. Expand any section below to customize.
-                </div>
+            <span style={{ display: "inline-flex", color: C.lime, flexShrink: 0 }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8 17.929H6c-1.105 0-2-.912-2-2.036V5.036C4 3.91 4.895 3 6 3h8c1.105 0 2 .911 2 2.036v1.866m-6 .17h8c1.105 0 2 .91 2 2.035v10.857C20 21.09 19.105 22 18 22h-8c-1.105 0-2-.911-2-2.036V9.107c0-1.124.895-2.036 2-2.036z"/>
+              </svg>
+            </span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg, lineHeight: "18px" }}>
+                Pre-filled from <span style={{ color: C.lime }}>{forkedFrom}</span>
+              </div>
+              <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "16px", marginTop: 1 }}>
+                Image, env declarations, ports and defaults come from the template. Expand any section below to customize.
               </div>
             </div>
-            <button
-              onClick={() => setLocation("/marketplace")}
-              style={{
-                fontFamily: FONT, fontSize: 12, fontWeight: 500,
-                background: "transparent", color: C.muted,
-                border: `1px solid ${C.border}`,
-                padding: "4px 10px", borderRadius: 6, cursor: "pointer",
-                whiteSpace: "nowrap",
-              }}
-            >
-              Cancel
-            </button>
           </div>
         )}
 

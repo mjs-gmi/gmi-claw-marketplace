@@ -3,7 +3,8 @@ import { useLocation } from "wouter";
 import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
-import { ALL_CLAWS, TYPE_LABELS, getBadgeConfig, type Claw, type TypeLabel } from "@/lib/clawData";
+import CopyButton from "@/components/CopyButton";
+import { ALL_CLAWS, TYPE_LABELS, ANTHROPIC_LABEL, getBadgeConfig, type Claw, type TypeLabel } from "@/lib/clawData";
 
 // ─── Design tokens — extracted verbatim from Figma JSON ──────────────────────
 // Geist Sans across the board. Mono only inside the terminal block.
@@ -31,7 +32,12 @@ const C = {
 // One real command: turns GMI Cloud into a provider inside an existing OpenClaw setup.
 const OPENCLAW_INSTALL_CMD = "openclaw plugins install clawhub:openclaw-gmicloud-provider";
 
-const ALL_TYPES: (TypeLabel | "All")[] = ["All", ...TYPE_LABELS];
+// "All" + functional categories, then the curated Anthropic filter pinned at the end.
+type FilterKey = TypeLabel | "All" | typeof ANTHROPIC_LABEL;
+const ALL_TYPES: FilterKey[] = ["All", ...TYPE_LABELS, ANTHROPIC_LABEL];
+
+// Anthropic brand accent (clay / terracotta).
+const ANTHROPIC_COLOR = "#d97757";
 
 // Subtle per-category accent. Avatar bg uses 12% alpha of the same.
 // Matched to production: Code & Dev Tools = purple, Content & Marketing = green
@@ -74,27 +80,6 @@ const IconCopy = ({ size = 12 }: { size?: number }) => (
     <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" />
   </svg>
 );
-
-function CopyButton({ cmd }: { cmd: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={() => { navigator.clipboard.writeText(cmd); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
-      style={{
-        display: "inline-flex", alignItems: "center", gap: 6,
-        background: "transparent",
-        border: "none",
-        color: copied ? C.lime : C.muted,
-        fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
-        cursor: "pointer",
-        padding: "2px 6px",
-        borderRadius: 6,
-      }}
-    >
-      {copied ? <><IconCheck size={11} /> Copied</> : <><IconCopy size={11} /> Copy</>}
-    </button>
-  );
-}
 
 function VerifiedBadge({ path }: { path: Claw["infrastructurePath"] }) {
   if (path !== "gmi_ce_maas") return null;
@@ -140,6 +125,35 @@ function CategoryTag({ type }: { type: TypeLabel }) {
   );
 }
 
+// Anthropic-style radial burst mark (clay), used to brand the tab / banner / tag.
+const AnthropicMark = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round">
+    <path d="M12 3v4.5M12 16.5V21M3 12h4.5M16.5 12H21M5.64 5.64l3.18 3.18M15.18 15.18l3.18 3.18M18.36 5.64l-3.18 3.18M8.82 15.18l-3.18 3.18" />
+  </svg>
+);
+
+function AnthropicTag() {
+  return (
+    <span
+      title="Built with Anthropic — runs on Claude models"
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 5,
+        fontFamily: FONT, fontSize: 11, fontWeight: 600, lineHeight: "16px",
+        color: ANTHROPIC_COLOR,
+        background: "rgba(217,119,87,0.10)",
+        border: `1px solid rgba(217,119,87,0.40)`,
+        padding: "2px 8px",
+        borderRadius: 4,
+        whiteSpace: "nowrap",
+        alignSelf: "flex-start",
+      }}
+    >
+      <AnthropicMark size={11} />
+      Built with Anthropic
+    </span>
+  );
+}
+
 function Avatar({ publisher, color }: { publisher: string; color: string }) {
   const initials = publisher.replace(/[^a-zA-Z0-9]/g, "").slice(0, 2);
   const display = initials ? initials[0].toUpperCase() + (initials[1] || "").toLowerCase() : "?";
@@ -180,21 +194,20 @@ function VerifiedCheck() {
   );
 }
 
-function MiniAvatar({ publisher }: { publisher: string; color: string }) {
-  // Match production: plain dark square with neutral white initials.
-  // The per-category color now lives only in the small dot of the category chip.
+function MiniAvatar({ publisher, color }: { publisher: string; color: string }) {
+  // Match production: dark square with category-colored initials + faint tint.
   const initials = publisher.replace(/[^a-zA-Z0-9]/g, "").slice(0, 2);
   const display = initials ? initials[0].toUpperCase() + (initials[1] || "").toLowerCase() : "?";
   return (
     <div
       style={{
-        width: 32, height: 32,
+        width: 36, height: 36,
         display: "flex", alignItems: "center", justifyContent: "center",
-        background: "#0a0a0a",
-        border: `1px solid ${C.border}`,
-        color: C.fg,
-        fontFamily: FONT, fontSize: 12, fontWeight: 600, lineHeight: "14px",
-        borderRadius: 6,
+        background: `${color}14`,
+        border: `1px solid ${color}33`,
+        color,
+        fontFamily: FONT, fontSize: 13, fontWeight: 700, lineHeight: "14px",
+        borderRadius: 8,
         flexShrink: 0,
       }}
     >
@@ -268,8 +281,11 @@ function AgentCard({ claw }: { claw: Claw }) {
         {claw.description}
       </p>
 
-      {/* Category chip — anchored at the bottom of the card */}
-      <CategoryTag type={claw.typeLabel} />
+      {/* Category chip (+ Anthropic tag) — anchored at the bottom of the card */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        <CategoryTag type={claw.typeLabel} />
+        {claw.builtWithAnthropic && <AnthropicTag />}
+      </div>
     </div>
   );
 }
@@ -277,7 +293,7 @@ function AgentCard({ claw }: { claw: Claw }) {
 export default function Marketplace() {
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
-  const [activeType, setActiveType] = useState<TypeLabel | "All">("All");
+  const [activeType, setActiveType] = useState<FilterKey>("All");
   const [verifiedOnly, setVerifiedOnly] = useState(false);
 
   const filtered = ALL_CLAWS
@@ -287,7 +303,9 @@ export default function Marketplace() {
         c.name.toLowerCase().includes(q) ||
         c.description.toLowerCase().includes(q) ||
         c.tags.some((t) => t.toLowerCase().includes(q));
-      const matchesType = activeType === "All" || c.typeLabel === activeType;
+      const matchesType =
+        activeType === "All" ||
+        (activeType === ANTHROPIC_LABEL ? !!c.builtWithAnthropic : c.typeLabel === activeType);
       const matchesTrust = !verifiedOnly || c.infrastructurePath === "gmi_ce_maas";
       return matchesSearch && matchesType && matchesTrust;
     })
@@ -303,39 +321,46 @@ export default function Marketplace() {
       <Navbar />
       <div style={{ marginLeft: 210, paddingTop: 40, display: "flex", flexDirection: "column" }}>
 
-        {/* Thin OpenClaw plugin banner — single horizontal row */}
-        <div style={{ padding: "14px 24px 0" }}>
+        {/* ── Hero ─────────────────────────────────────────────────────────── */}
+        <div style={{ padding: "24px 24px 0" }}>
+          <h1
+            style={{
+              fontFamily: FONT, fontSize: 34, fontWeight: 700, lineHeight: "40px",
+              color: C.fg, margin: 0, letterSpacing: "-0.02em",
+            }}
+          >
+            Browse Agents
+          </h1>
+          <p
+            style={{
+              fontFamily: FONT, fontSize: 14, fontWeight: 400, lineHeight: "20px",
+              color: C.muted, margin: "8px 0 0",
+            }}
+          >
+            AI Agents shipped by builders on GMI Cloud — install one, or register your own
+          </p>
+        </div>
+
+        {/* OpenClaw plugin banner — single horizontal row */}
+        <div style={{ padding: "20px 24px 0" }}>
           <div
             style={{
               background: C.card,
               border: `1px solid ${C.border}`,
-              borderRadius: 8,
-              padding: "8px 12px",
-              display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+              borderRadius: 10,
+              padding: "10px 14px",
+              display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
             }}
           >
-            <span
-              style={{
-                display: "inline-flex", alignItems: "center", justifyContent: "center",
-                width: 22, height: 22, borderRadius: 6,
-                background: "rgba(255,255,255,0.04)",
-                color: C.muted,
-                flexShrink: 0,
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 2v4M15 2v4M6 6h12v6a6 6 0 0 1-12 0V6zM12 18v4" />
-              </svg>
-            </span>
-            <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.fg, whiteSpace: "nowrap" }}>
-              Already on OpenClaw? Add GMI Cloud as a provider:
+            <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, color: C.fg, whiteSpace: "nowrap" }}>
+              On OpenClaw?
             </span>
             <code
               style={{
-                fontFamily: FONT_MONO, fontSize: 12, color: C.fg,
+                fontFamily: FONT_MONO, fontSize: 13, color: C.fg,
                 background: "#0d0d0d",
                 border: `1px solid ${C.borderSoft}`,
-                padding: "3px 8px", borderRadius: 6,
+                padding: "6px 10px", borderRadius: 7,
                 whiteSpace: "nowrap", overflowX: "auto",
                 flex: "1 1 auto",
                 minWidth: 0,
@@ -343,23 +368,23 @@ export default function Marketplace() {
             >
               <span style={{ color: C.muted }}>$ </span>{OPENCLAW_INSTALL_CMD}
             </code>
-            <CopyButton cmd={OPENCLAW_INSTALL_CMD} />
+            <CopyButton value={OPENCLAW_INSTALL_CMD} />
             <button
               onClick={() => setLocation("/deploy")}
               style={{
-                fontFamily: FONT, fontSize: 12, fontWeight: 500,
+                fontFamily: FONT, fontSize: 13, fontWeight: 500,
                 background: "transparent", color: C.lime,
                 border: "none", padding: "2px 4px", cursor: "pointer",
                 whiteSpace: "nowrap",
               }}
             >
-              Not on OpenClaw? Register from the dashboard →
+              Not on OpenClaw? Register →
             </button>
           </div>
         </div>
 
         {/* ── Catalog header ─────────────────────────────────────────────── */}
-        <section id="catalog" style={{ padding: "14px 24px 8px" }}>
+        <section id="catalog" style={{ padding: "28px 24px 8px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
             <h1
               style={{
@@ -367,7 +392,7 @@ export default function Marketplace() {
                 color: C.fg, margin: 0, letterSpacing: "-0.02em",
               }}
             >
-              Agent Catalog
+              Agent Marketplace
             </h1>
 
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -422,6 +447,35 @@ export default function Marketplace() {
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {ALL_TYPES.map((type) => {
                 const isActive = activeType === type;
+
+                // Curated Anthropic filter — set apart from the functional
+                // category tabs with a divider, the clay brand accent + mark.
+                if (type === ANTHROPIC_LABEL) {
+                  return (
+                    <div key={type} style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ width: 1, height: 20, background: C.border, borderRadius: 1 }} />
+                      <button
+                        onClick={() => setActiveType(type)}
+                        style={{
+                          display: "inline-flex", alignItems: "center", gap: 6,
+                          fontFamily: FONT, fontSize: 14, fontWeight: 600, lineHeight: "20px",
+                          background: isActive ? "rgba(217,119,87,0.14)" : "rgba(217,119,87,0.05)",
+                          color: isActive ? ANTHROPIC_COLOR : "rgba(217,119,87,0.82)",
+                          border: `1px solid ${isActive ? "rgba(217,119,87,0.55)" : "rgba(217,119,87,0.28)"}`,
+                          boxShadow: isActive ? "0 0 0 3px rgba(217,119,87,0.10)" : "none",
+                          padding: "6px 12px",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          transition: "background .15s ease, color .15s ease, border-color .15s ease, box-shadow .15s ease",
+                        }}
+                      >
+                        <AnthropicMark size={13} />
+                        {type}
+                      </button>
+                    </div>
+                  );
+                }
+
                 return (
                   <button
                     key={type}
@@ -492,6 +546,53 @@ export default function Marketplace() {
 
         {/* ── Catalog grid ───────────────────────────────────────────────── */}
         <section style={{ padding: "12px 32px 32px" }}>
+          {/* Curated Anthropic专区 header — only when the filter is active */}
+          {activeType === ANTHROPIC_LABEL && (
+            <div
+              style={{
+                display: "flex", alignItems: "center", gap: 16,
+                background: "linear-gradient(90deg, rgba(217,119,87,0.12), rgba(217,119,87,0.02))",
+                border: "1px solid rgba(217,119,87,0.30)",
+                borderRadius: 12,
+                padding: "16px 18px",
+                marginBottom: 18,
+              }}
+            >
+              <div
+                style={{
+                  width: 42, height: 42, borderRadius: 11, flexShrink: 0,
+                  background: "rgba(217,119,87,0.14)",
+                  border: "1px solid rgba(217,119,87,0.45)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  color: ANTHROPIC_COLOR,
+                }}
+              >
+                <AnthropicMark size={22} />
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <span style={{ fontFamily: FONT, fontSize: 17, fontWeight: 700, color: C.fg, letterSpacing: "-0.01em" }}>
+                    Agents built with Anthropic
+                  </span>
+                  <span
+                    style={{
+                      fontFamily: FONT, fontSize: 11, fontWeight: 600, lineHeight: "16px",
+                      color: ANTHROPIC_COLOR,
+                      background: "rgba(217,119,87,0.12)",
+                      border: "1px solid rgba(217,119,87,0.40)",
+                      padding: "1px 8px", borderRadius: 999,
+                    }}
+                  >
+                    {filtered.length} agents
+                  </span>
+                </div>
+                <div style={{ fontFamily: FONT, fontSize: 13, fontWeight: 400, lineHeight: "18px", color: C.muted, marginTop: 4 }}>
+                  Enterprise-grade agents running on Claude — built for compliance, security, and long-context reasoning.
+                </div>
+              </div>
+            </div>
+          )}
+
           {filtered.length === 0 ? (
             <div style={{ textAlign: "center", padding: "64px 0", fontFamily: FONT }}>
               <div style={{ fontSize: 14, fontWeight: 500, color: C.fg, marginBottom: 6 }}>No agents found</div>
@@ -502,12 +603,9 @@ export default function Marketplace() {
               <div
                 style={{
                   display: "grid",
-                  // Cap card max-width at 320px so sparse catalogs (2-3 items)
-                  // don't stretch cards across the full row. Cards stay uniform
-                  // regardless of count; extra space breathes to the right.
-                  gridTemplateColumns: "repeat(auto-fill, 280px)",
-                  justifyContent: "start",
-                  gap: 12,
+                  // Match production: cards fill the row (~4 columns at this width).
+                  gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+                  gap: 16,
                 }}
               >
                 {filtered.map((claw) => (

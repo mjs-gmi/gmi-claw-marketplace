@@ -151,7 +151,7 @@ export default function ClawDetail() {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center">
         <div className="text-center">
-          <div className="font-mono-gmi text-sm text-gray-400 mb-4">// Claw not found</div>
+          <div className="font-mono-gmi text-sm text-[#a3a3a3] mb-4">// Claw not found</div>
           <Link href="/marketplace">
             <button className="btn-primary-lime text-xs px-6 py-2.5 font-bold">
               Back to Marketplace
@@ -196,8 +196,8 @@ export default function ClawDetail() {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
 
-              {/* Left: Main content */}
-              <div className="lg:col-span-2 space-y-8">
+              {/* Left: Main content — text-first layout (no media reserved) */}
+              <div className="lg:col-span-2" style={{ display: "flex", flexDirection: "column", gap: 24 }}>
 
                 {/* Header */}
                 <div>
@@ -228,6 +228,21 @@ export default function ClawDetail() {
                       <Tag size={10} />
                       {claw.typeLabel}
                     </span>
+                    {/* Built with Anthropic */}
+                    {claw.builtWithAnthropic && (
+                      <span
+                        className="inline-flex items-center gap-1.5 text-xs font-mono-gmi px-2.5 py-1"
+                        style={{
+                          background: "rgba(217,119,87,0.08)",
+                          color: "#d97757",
+                          border: "1px solid rgba(217,119,87,0.35)",
+                        }}
+                        title="Built with Anthropic — powered by Claude models"
+                      >
+                        <Tag size={10} />
+                        Built with Anthropic
+                      </span>
+                    )}
                   </div>
 
                   <h1
@@ -249,91 +264,90 @@ export default function ClawDetail() {
                   </div>
                 </div>
 
-                {/* Tags */}
-                <div className="flex flex-wrap gap-2">
-                  {claw.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="text-xs font-mono-gmi px-2.5 py-1 text-gray-300"
-                      style={{ border: "1px solid #2a2a2a" }}
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-
-                {/* Description */}
-                <div>
-                  <h2
-                    className="text-white mb-3"
-                    style={{
+                {/* Two-col band: prose (lead + optional long) | Details facts card.
+                    Both sides always carry content, so there's no empty half and
+                    no reserved image slot to leave a hole. */}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(0, 1.6fr) minmax(0, 1fr)",
+                    gap: 24,
+                    alignItems: "start",
+                  }}
+                >
+                  {/* Prose — single substantial intro (richest text available),
+                      elevated to carry the visual weight in place of an image.
+                      Shown once so a superset fullDescription never repeats the
+                      opening sentences. */}
+                  <div style={{ minWidth: 0 }}>
+                    <p style={{
                       fontFamily: "'Geist', system-ui, sans-serif",
-                      fontSize: 16, fontWeight: 600, lineHeight: "22px", letterSpacing: "-0.005em",
-                    }}
-                  >
-                    About this Claw
-                  </h2>
-                  <p className="text-gray-400 leading-relaxed text-sm">{fullDescription}</p>
-                </div>
-
-                {/* Media — neutral empty state per M1; replaced with real media when uploaded */}
-                <div>
-                  <h2
-                    className="text-white mb-3"
-                    style={{
-                      fontFamily: "'Geist', system-ui, sans-serif",
-                      fontSize: 16, fontWeight: 600, lineHeight: "22px", letterSpacing: "-0.005em",
-                    }}
-                  >
-                    Media
-                  </h2>
-                  <div
-                    className="w-full flex items-center justify-center"
-                    style={{
-                      background: "rgba(255,255,255,0.02)",
-                      border: "1px dashed #2a2a2a",
-                      borderRadius: 8,
-                      aspectRatio: "16/9",
-                    }}
-                  >
-                    <span style={{
-                      fontFamily: "'Geist', system-ui, sans-serif",
-                      fontSize: 12, color: "#525252",
+                      fontSize: 16, fontWeight: 400, lineHeight: "27px",
+                      color: "#e5e5e5", maxWidth: "62ch", margin: 0,
                     }}>
-                      No media uploaded
-                    </span>
+                      {fullDescription}
+                    </p>
                   </div>
+
+                  {/* Details facts card — surfaces Pricing / Availability / Publisher
+                      and folds the old Infrastructure block into a caption. */}
+                  {(() => {
+                    const availLabel =
+                      claw.availability === "available" ? "Available" :
+                      claw.availability === "early_access" ? "Early access" : "Unavailable";
+                    const availColor =
+                      claw.availability === "available" ? "#DDEA4D" :
+                      claw.availability === "early_access" ? "#fb923c" : "#a3a3a3";
+                    const rows: { label: string; value: string; color: string }[] = [
+                      { label: "Pricing", value: claw.pricing, color: "#fafafa" },
+                      { label: "Availability", value: availLabel, color: availColor },
+                      { label: "Publisher", value: claw.publisher, color: "#fafafa" },
+                    ];
+                    return (
+                      <div style={{ background: "#0a0a0a", border: "1px solid #404040", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+                        <div style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: 13, fontWeight: 600, color: "#fafafa", lineHeight: "18px" }}>
+                          Details
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                          {rows.map((r) => (
+                            <div key={r.label} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+                              <span style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: 12, color: "#a3a3a3", lineHeight: "18px" }}>{r.label}</span>
+                              <span style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: 13, fontWeight: 500, color: r.color, lineHeight: "18px", textAlign: "right" }}>{r.value}</span>
+                            </div>
+                          ))}
+                        </div>
+                        {/* Infrastructure — folded in as a caption */}
+                        <div style={{ borderTop: "1px solid #262626", paddingTop: 12, display: "flex", alignItems: "flex-start", gap: 8 }}>
+                          <span style={{ color: badge.color, display: "inline-flex", marginTop: 1, flexShrink: 0 }}><CheckCircle size={12} /></span>
+                          <div style={{ minWidth: 0 }}>
+                            <div className="font-mono-gmi" style={{ fontSize: 12, fontWeight: 700, color: badge.color, lineHeight: "16px" }}>{badge.label}</div>
+                            <div className="font-mono-gmi" style={{ fontSize: 11, color: "#a3a3a3", lineHeight: "16px", marginTop: 2 }}>{badge.tooltip}</div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
-                {/* Infrastructure info */}
-                <div>
-                  <h2
-                    className="text-white mb-3"
-                    style={{
-                      fontFamily: "'Geist', system-ui, sans-serif",
-                      fontSize: 16, fontWeight: 600, lineHeight: "22px", letterSpacing: "-0.005em",
-                    }}
-                  >
-                    Infrastructure
-                  </h2>
-                  <div
-                    className="p-4 flex items-start gap-3"
-                    style={{ background: "#0a0a0a", border: `1px solid ${badge.border}` }}
-                  >
-                    <div
-                      className="w-2 h-2 rounded-full mt-1.5 shrink-0"
-                      style={{ background: badge.color }}
-                    />
-                    <div>
-                      <div className="font-mono-gmi text-sm font-bold mb-1" style={{ color: badge.color }}>
-                        {badge.label}
-                      </div>
-                      <div className="text-xs text-gray-300 font-mono-gmi leading-relaxed">
-                        {badge.tooltip}
-                      </div>
+                {/* Tags — full-width module */}
+                {claw.tags.length > 0 && (
+                  <div>
+                    <div style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: 14, fontWeight: 600, color: "#fafafa", lineHeight: "20px", marginBottom: 10 }}>
+                      Tags
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {claw.tags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="text-xs font-mono-gmi px-2.5 py-1 text-gray-300"
+                          style={{ border: "1px solid #404040" }}
+                        >
+                          {tag}
+                        </span>
+                      ))}
                     </div>
                   </div>
-                </div>
+                )}
 
               </div>
 
@@ -360,7 +374,7 @@ export default function ClawDetail() {
                     {claw.availability === "unavailable" && (
                       <>
                         <div className="w-1.5 h-1.5 rounded-full" style={{ background: "#999" }} />
-                        <span className="text-gray-400">Unavailable</span>
+                        <span className="text-[#a3a3a3]">Unavailable</span>
                       </>
                     )}
                   </div>
@@ -377,7 +391,7 @@ export default function ClawDetail() {
                           onClick={() => canClone && setLocation(`/deploy?use=${claw.id}`)}
                           className="w-full py-3 font-bold text-sm flex items-center justify-center gap-2 transition-all"
                           style={{
-                            background: canClone ? "#DDEA4D" : "#2a2a2a",
+                            background: canClone ? "#DDEA4D" : "#404040",
                             color: canClone ? "#000000" : "#666",
                             cursor: canClone ? "pointer" : "not-allowed",
                           }}
@@ -387,7 +401,7 @@ export default function ClawDetail() {
                           <Copy size={13} />
                           {pullState === "private" ? "Try demo ↗" : "Deploy your own ↗"}
                         </button>
-                        <p className="text-xs text-gray-500 font-mono-gmi text-center mt-1">
+                        <p className="text-xs text-[#a3a3a3] font-mono-gmi text-center mt-1">
                           {pullState === "public"
                             ? "Opens Register & List pre-filled with image, env declarations, and ports. You bring your own GMI key + billing."
                             : pullState === "private"
@@ -420,7 +434,7 @@ export default function ClawDetail() {
                     <div>
                       <div
                         className="w-full py-3 text-sm flex items-center justify-center gap-2 cursor-not-allowed"
-                        style={{ background: "#111", color: "#999", border: "1px solid #2a2a2a" }}
+                        style={{ background: "#111", color: "#999", border: "1px solid #404040" }}
                       >
                         <AlertCircle size={14} />
                         Unavailable
@@ -434,11 +448,11 @@ export default function ClawDetail() {
                   {/* Trust info */}
                   <div style={{ borderTop: "1px solid #1e1e1e" }} />
                   <div className="space-y-2">
-                    <div className="flex items-start gap-2 text-xs text-gray-400 font-mono-gmi">
+                    <div className="flex items-start gap-2 text-xs text-[#a3a3a3] font-mono-gmi">
                       <CheckCircle size={12} className="shrink-0 mt-0.5" style={{ color: badge.color }} />
                       <span>{badge.tooltip}</span>
                     </div>
-                    <div className="flex items-start gap-2 text-xs text-gray-400 font-mono-gmi">
+                    <div className="flex items-start gap-2 text-xs text-[#a3a3a3] font-mono-gmi">
                       <CheckCircle size={12} className="shrink-0 mt-0.5 text-gray-300" />
                       <span>Browser-based. No SDK, API key, or installation required.</span>
                     </div>

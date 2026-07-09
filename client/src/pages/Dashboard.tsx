@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
+import CopyButton from "@/components/CopyButton";
 
 // ─── Tokens (Geist Sans + GMI Console palette, verbatim from Figma JSON) ──
 const FONT = "'Geist', system-ui, sans-serif";
@@ -14,11 +15,13 @@ const C = {
   border:    "#404040",
   borderSoft:"#262626",
   card:      "#171717",
+  cardSolid: "#171717",
   pillBg:    "rgba(82,82,82,0.3)",
   activeBg:  "rgba(255,255,255,0.12)",
   selectedYellow: "rgba(99,105,35,0.3)",
   ok:        "#34d399",
   err:       "#ef4444",
+  warn:      "#fbbf24",
   lime:      "#DDEA4D",
   limeText:  "#0a0a0a",
 } as const;
@@ -39,6 +42,8 @@ interface MyAgent {
   templateId: string;
   category: string;
   isTemplate?: boolean;
+  verified?: boolean;        // blue check next to the name (curated / approved agent)
+  displayStatus?: AgentStatus; // rollup label shown when the agent has 0 live instances
   hostMode?: "gmi" | "connect";
   maasKey?: string;          // populated for connect-mode agents (synced from Register flow)
   accessUrl?: string;        // populated for connect-mode agents
@@ -57,9 +62,27 @@ function loadRegisteredAgents(): MyAgent[] {
   } catch { return []; }
 }
 
-// Per PRD F-02 "New-user empty state": no seed agents. A fresh user has 0
-// deployments until they register or clone from the marketplace.
-const MY_DEPLOYMENTS: MyAgent[] = [];
+// Demo seed deployments so the prototype renders a populated state (mirrors the
+// GMI Console "My Agents" reference). The new-user empty-state logic below is
+// retained — it simply doesn't trigger while these demo agents are present.
+const MY_DEPLOYMENTS: MyAgent[] = [
+  {
+    id: "agent_openclaw",
+    name: "Openclaw test",
+    templateId: "d8772394-1a69-4cfd-8b97-f3c895db9e85",
+    category: "Code & Dev Tools",
+    verified: true,
+    displayStatus: "running",
+  },
+  {
+    id: "agent_hermes",
+    name: "Hermes",
+    templateId: "a14f0c52-6b9d-4e71-9a83-2c1e7f4db0aa",
+    category: "Code & Dev Tools",
+    verified: true,
+    displayStatus: "running",
+  },
+];
 
 interface InstanceConfig {
   name?: string;         // optional instance name (e.g. "prod-worker-1")
@@ -204,35 +227,13 @@ function MaasKeyRow({ value, accessUrl }: { value: string; accessUrl?: string })
       >
         {revealed ? "Hide" : "Reveal"}
       </button>
-      <CopyChip value={value} />
+      <CopyButton value={value} />
       {accessUrl && (
         <a href={accessUrl} target="_blank" rel="noreferrer" style={{ fontFamily: FONT, fontSize: 11, fontWeight: 500, color: C.muted, textDecoration: "none", marginLeft: "auto" }}>
           {accessUrl} ↗
         </a>
       )}
     </div>
-  );
-}
-
-function CopyChip({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={(e) => {
-        e.stopPropagation();
-        navigator.clipboard.writeText(value);
-        setCopied(true); setTimeout(() => setCopied(false), 1500);
-      }}
-      style={{
-        display: "inline-flex", alignItems: "center", gap: 4,
-        background: "transparent", border: "none",
-        color: copied ? C.lime : C.muted,
-        fontFamily: FONT, fontSize: 12, fontWeight: 500,
-        cursor: "pointer", padding: "1px 4px", borderRadius: 4,
-      }}
-    >
-      <IconCopy size={11} /> {copied ? "Copied" : "Copy"}
-    </button>
   );
 }
 
@@ -396,7 +397,8 @@ function NewUserWelcome({
 // after user clicks "List on Agentbox". "live" / "rejected" set by ops.
 function ListingStateBadge({ state }: { state?: ListingState }) {
   // No badge when state is missing — keeps the row clean for seed/template entries.
-  if (!state || state === "draft") {
+  if (!state) return null;
+  if (state === "draft") {
     return (
       <span
         title="Draft — registered, not yet listed on Agentbox"
@@ -481,7 +483,8 @@ function AgentListItem({
   const status: AgentStatus =
     agg.error > 0 ? "error" :
     agg.creating > 0 ? "creating" :
-    agg.active > 0 ? "running" : "idle";
+    agg.active > 0 ? "running" :
+    (agent.displayStatus ?? "idle");
 
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -518,6 +521,12 @@ function AgentListItem({
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 500, color: C.fg, lineHeight: "20px" }}>{agent.name}</div>
+          {agent.verified && (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="#3b82f6" style={{ flexShrink: 0 }} aria-label="Verified">
+              <path d="M12 1l2.5 1.8 3-.4 1.2 2.8 2.8 1.2-.4 3L23 12l-1.8 2.5.4 3-2.8 1.2-1.2 2.8-3-.4L12 23l-2.5-1.8-3 .4-1.2-2.8L2.5 17.5l.4-3L1 12l1.9-2.5-.4-3 2.8-1.2L6.5 2.4l3 .4z"/>
+              <path d="M10.6 14.6l-2.2-2.2-1.4 1.4 3.6 3.6 6-6-1.4-1.4z" fill="#fff"/>
+            </svg>
+          )}
           {agent.isTemplate && (
             <span
               style={{
@@ -628,7 +637,7 @@ function LogsPane({ inst }: { inst: Instance }) {
         <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
           Logs · last {lines.length} lines · GET /tasks/{inst.id.slice(0, 12)}…/logs
         </span>
-        <CopyChip value={lines.join("\n")} />
+        <CopyButton value={lines.join("\n")} />
       </div>
       <pre
         style={{
@@ -1353,6 +1362,8 @@ function ProvisionModal({
                 <span />
               </div>
 
+              {/* Scrollable body — header + "+ key" stay put; rows scroll once the list grows */}
+              <div style={{ maxHeight: 220, overflowY: "auto" }}>
               {/* Locked rows — platform-managed env (cannot be overridden) */}
               {[
                 { key: "GMI_MODELS",        value: "58e99bbf-78ba-480..." },
@@ -1417,6 +1428,7 @@ function ProvisionModal({
                   </button>
                 </div>
               ))}
+              </div>
 
               {/* + key — add another empty editable row */}
               <button
@@ -1501,6 +1513,7 @@ function MonitorPane({
 }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "running" | "error" | "creating">("all");
+  const [sortDir, setSortDir] = useState<"desc" | "asc">("desc"); // Created column sort
   type PanelKind = "logs" | "shell" | "metrics" | "config";
   const [expanded, setExpanded] = useState<{ id: string; panel: PanelKind } | null>(null);
   const togglePanel = (id: string, panel: PanelKind) => {
@@ -1510,15 +1523,56 @@ function MonitorPane({
   const agg = useMemo(() => aggregateFor(instances, agent.id), [instances, agent.id]);
   const mine = useMemo(() => instances.filter((i) => i.agentId === agent.id), [instances, agent.id]);
   const filtered = useMemo(() => {
-    return mine.filter((i) => {
+    const rows = mine.filter((i) => {
       if (filter !== "all" && i.status !== filter) return false;
-      if (search && !i.id.toLowerCase().includes(search.toLowerCase())) return false;
+      if (search) {
+        const hay = `${i.config?.name ?? ""} ${i.id}`.toLowerCase();
+        if (!hay.includes(search.toLowerCase())) return false;
+      }
       return true;
     });
-  }, [mine, filter, search]);
+    // `created` is "YYYY-MM-DD HH:MM:SS" — lexicographic order == chronological.
+    rows.sort((a, b) =>
+      sortDir === "desc" ? b.created.localeCompare(a.created) : a.created.localeCompare(b.created),
+    );
+    return rows;
+  }, [mine, filter, search, sortDir]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Aggregate status — rollup across this agent's instances */}
+      <section>
+        <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: "0 0 12px" }}>
+          Aggregate status
+        </h3>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+          <MetricCard
+            label="Active"
+            value={agg.active > 0 ? String(agg.active) : "—"}
+            helper="status = running"
+            accent={C.ok}
+          />
+          <MetricCard
+            label="Error"
+            value={agg.error > 0 ? String(agg.error) : "—"}
+            helper="red tab badge if > 0"
+            accent={C.err}
+          />
+          <MetricCard
+            label="Creating"
+            value={agg.creating > 0 ? String(agg.creating) : "—"}
+            helper="status = creating"
+            accent={C.warn}
+          />
+          <MetricCard
+            label="Last provisioned"
+            value={agg.lastProvisioned ? agg.lastProvisioned.slice(11, 16) : "—"}
+            helper="max(createdAt)"
+            accent={C.muted}
+          />
+        </div>
+      </section>
+
       {/* Instance Set — header is just a label now; "+ Instance" lives in
           the agent detail header next to Listing ▼. */}
       <section>
@@ -1574,48 +1628,42 @@ function MonitorPane({
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "1.4fr 1.4fr 1fr 1.4fr",
+              gridTemplateColumns: "1.3fr 1.7fr 0.9fr 1.1fr 1.3fr",
               padding: "10px 16px",
               borderBottom: `1px solid ${C.border}`,
               background: "rgba(255,255,255,0.02)",
               fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted, lineHeight: "16px",
             }}
           >
-            <div>Instance ID</div>
+            <div>Instance Name</div>
+            <div>Endpoint</div>
             <div>Status</div>
-            <div>Created</div>
+            <button
+              onClick={() => setSortDir((d) => (d === "desc" ? "asc" : "desc"))}
+              title={`Sort by created — ${sortDir === "desc" ? "newest first" : "oldest first"}`}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 4,
+                background: "transparent", border: "none", padding: 0,
+                font: "inherit", color: "inherit", cursor: "pointer",
+                justifySelf: "start",
+              }}
+            >
+              Created
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.9, transform: sortDir === "asc" ? "rotate(180deg)" : "none", transition: "transform .15s" }}>
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </button>
             <div style={{ textAlign: "right" }}>Action</div>
           </div>
           {filtered.length === 0 ? (
             <div
               style={{
-                padding: "40px 16px",
-                display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
+                padding: "48px 16px",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontFamily: FONT, fontSize: 13, fontWeight: 400, color: C.muted, lineHeight: "18px",
               }}
             >
-              <div
-                style={{
-                  width: 38, height: 38, borderRadius: 8,
-                  border: `1px dashed ${C.border}`,
-                  background: "rgba(255,255,255,0.02)",
-                  display: "inline-flex", alignItems: "center", justifyContent: "center",
-                  color: C.muted,
-                }}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="3" width="7" height="7" rx="1.5"/>
-                  <rect x="14" y="3" width="7" height="7" rx="1.5"/>
-                  <rect x="3" y="14" width="7" height="7" rx="1.5"/>
-                  <path d="M14 17.5h7M17.5 14v7" />
-                </svg>
-              </div>
-              <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, lineHeight: "20px" }}>
-                No instances running
-              </div>
-              <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px", textAlign: "center", maxWidth: 360 }}>
-                Click <span style={{ color: C.lime, fontWeight: 600 }}>+ Instance</span> to provision one.
-                It boots in a few seconds and gets its own endpoint URL.
-              </div>
+              No instances yet
             </div>
           ) : (
             filtered.map((inst, i) => {
@@ -1624,7 +1672,7 @@ function MonitorPane({
                   <div
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "1.4fr 1.4fr 1fr 1.8fr",
+                      gridTemplateColumns: "1.3fr 1.7fr 0.9fr 1.1fr 1.3fr",
                       padding: "10px 16px",
                       borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`,
                       fontFamily: FONT, fontSize: 13, fontWeight: 400, color: C.fg, lineHeight: "20px",
@@ -1633,10 +1681,16 @@ function MonitorPane({
                     }}
                   >
                     <div
-                      title={inst.id}
-                      style={{ fontFamily: "'GeistMono', monospace", fontSize: 12, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      title={inst.config?.name || inst.id}
+                      style={{ color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                     >
-                      {inst.id.slice(0, 24)}…
+                      {inst.config?.name || `${inst.id.slice(0, 14)}…`}
+                    </div>
+                    <div
+                      title={inst.endpointUrl}
+                      style={{ fontFamily: "'GeistMono', monospace", fontSize: 12, color: inst.endpointUrl ? C.muted : C.borderSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    >
+                      {inst.endpointUrl ? inst.endpointUrl.replace(/^https?:\/\//, "") : "—"}
                     </div>
                     <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                       <span
@@ -1755,7 +1809,7 @@ function IntegrationPane({ agent }: { agent: MyAgent }) {
           }}
         >
           <span style={{ flex: 1, overflowX: "auto" }}>{agent.templateId}</span>
-          <CopyChip value={agent.templateId} />
+          <CopyButton value={agent.templateId} />
         </div>
       </section>
 
@@ -1780,7 +1834,7 @@ function IntegrationPane({ agent }: { agent: MyAgent }) {
             }}
           >
             <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>Terminal</span>
-            <CopyChip value={curl} />
+            <CopyButton value={curl} />
           </div>
           <pre
             style={{
@@ -1896,21 +1950,34 @@ function AgentDetailPane({
               </span>
             )}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
             <span
               style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
                 fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
-                color: "#c7a7ff",
-                background: "rgba(199,167,255,0.10)",
-                padding: "2px 8px",
-                borderRadius: 999,
+                color: C.fg,
+                background: C.pillBg,
+                border: `1px solid ${C.border}`,
+                padding: "3px 10px",
+                borderRadius: 6,
               }}
             >
+              <span style={{ width: 7, height: 7, borderRadius: 2, background: "#a3e635", display: "inline-block" }} />
               {agent.category}
             </span>
-            <span style={{ fontFamily: "'GeistMono', monospace", fontSize: 12, fontWeight: 500, color: C.muted, display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <span
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                fontFamily: MONO, fontSize: 12, fontWeight: 500, lineHeight: "16px",
+                color: C.muted,
+                background: C.pillBg,
+                border: `1px solid ${C.border}`,
+                padding: "3px 10px",
+                borderRadius: 6,
+              }}
+            >
               {agent.templateId}
-              <CopyChip value={agent.templateId} />
+              <CopyButton value={agent.templateId} />
             </span>
             {agent.hostMode === "connect" && (
               <span
@@ -1973,9 +2040,9 @@ export default function Dashboard() {
   // Single shared destructive-action confirm dialog. Setting `confirm` opens it.
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
-  const handleEditTemplate = (_agent: MyAgent) => {
-    // Prototype stub — full edit flow not wired yet. Hint at the existing path.
-    alert("Edit template is not wired yet. Use 'List an agent' to re-register a template with new config.");
+  const handleEditTemplate = (agent: MyAgent) => {
+    // Opens the wizard in Edit-template mode, pre-filled from this agent.
+    setLocation(`/deploy?edit=${encodeURIComponent(agent.id)}&name=${encodeURIComponent(agent.name)}`);
   };
   const performDeleteTemplate = (agent: MyAgent) => {
     const isRegistered = registered.some((a) => a.id === agent.id);
@@ -1985,7 +2052,11 @@ export default function Dashboard() {
       try { localStorage.setItem(REGISTERED_AGENTS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
     } else {
       // Seed deployment: hide from runtime list (cannot truly delete sample data)
-      setHiddenSeedIds((s) => new Set([...s, agent.id]));
+      setHiddenSeedIds((s) => {
+        const next = new Set(s);
+        next.add(agent.id);
+        return next;
+      });
     }
     if (selectedId === agent.id) {
       const remaining = [...registered.filter((a) => a.id !== agent.id), ...MY_DEPLOYMENTS.filter((a) => !hiddenSeedIds.has(a.id) && a.id !== agent.id)];
