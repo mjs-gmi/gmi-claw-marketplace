@@ -4,34 +4,7 @@ import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
 import { TYPE_LABELS, type TypeLabel } from "@/lib/clawData";
-
-// ─── Tokens (kept in sync with DeployWizard / Dashboard / Marketplace) ──────
-const FONT = "'Geist', system-ui, sans-serif";
-const MONO = "'GeistMono', ui-monospace, monospace";
-const C = {
-  bg:         "#0a0a0a",
-  fg:         "#fafafa",
-  muted:      "#a3a3a3",
-  border:     "#404040",
-  borderSoft: "#262626",
-  card:       "rgba(23,23,23,0.95)",
-  cardSolid:  "#171717",
-  pillBg:     "rgba(82,82,82,0.3)",
-  lime:       "#DDEA4D",
-  limeText:   "#0a0a0a",
-  link:       "#5b94f0",
-  warn:       "#fbbf24",
-  ok:         "#34d399",
-  err:        "#f87171",
-} as const;
-
-const TYPE_COLOR: Record<TypeLabel, string> = {
-  "Code & Dev Tools":     "#c7a7ff",
-  "Data & Analytics":     C.lime,
-  "Customer Support":     "#7dd3fc",
-  "Content & Marketing":  "#86efac",
-  "Research & Knowledge": "#f9a8d4",
-};
+import { FONT, MONO, C, TYPE_COLOR } from "@/lib/tokens";
 
 // ─── Storage keys (shared with DeployWizard / Dashboard) ────────────────────
 const REGISTERED_AGENTS_KEY = "gmi:registered-agents";
@@ -78,6 +51,7 @@ interface ListingDraft {
   // (users can clone the image themselves via "Deploy your own").
   publicUrl: string;
   demoVideoUrl: string;
+  docsUrl: string;
   updatedAt: string;
 }
 
@@ -128,16 +102,6 @@ function flipAgentListingState(agentId: string, next: ListingState) {
   } catch { /* ignore */ }
 }
 
-// Same heuristic the wizard / ClawDetail uses — keeps probe truth consistent.
-type ImageProbe = "ok" | "private" | "missing" | "empty" | "n/a";
-function probeImage(image: string | undefined): ImageProbe {
-  if (image === undefined) return "n/a";
-  const v = image.trim().toLowerCase();
-  if (!v) return "empty";
-  if (v.includes("private") || v.includes("internal") || v.includes("ghcr.io/yourorg")) return "private";
-  if (v.includes("404") || v.includes("missing") || v.includes("does-not-exist")) return "missing";
-  return "ok";
-}
 
 // ─── Icons ──────────────────────────────────────────────────────────────────
 const Icon = {
@@ -187,12 +151,12 @@ export default function ListClaw() {
       return {
         agentId: "", name: "", publisher: "", category: "",
         tags: [], shortDesc: "", logoDataUrl: "", fullDesc: "",
-        sampleOutputDataUrl: "", publicUrl: "", demoVideoUrl: "",
+        sampleOutputDataUrl: "", publicUrl: "", demoVideoUrl: "", docsUrl: "",
         updatedAt: "",
       };
     }
     const existing = loadListing(agent.id);
-    if (existing) return { ...existing, publicUrl: existing.publicUrl ?? "" };
+    if (existing) return { ...existing, publicUrl: existing.publicUrl ?? "", docsUrl: existing.docsUrl ?? "" };
     return {
       agentId:             agent.id,
       name:                agent.name || "",
@@ -205,6 +169,7 @@ export default function ListClaw() {
       sampleOutputDataUrl: "",
       publicUrl:           "",
       demoVideoUrl:        "",
+      docsUrl:             "",
       updatedAt:           "",
     };
   }, [agent]);
@@ -222,12 +187,17 @@ export default function ListClaw() {
     saveListing(draft);
   }, [draft]);
 
+  // All registered agents — for the "Linked Template" picker.
+  const allAgents = useMemo<RegisteredAgent[]>(() => {
+    try { return JSON.parse(localStorage.getItem(REGISTERED_AGENTS_KEY) || "[]"); }
+    catch { return []; }
+  }, []);
+
   // Empty state — no registered agent → show register-first guard.
   if (!agent) {
     return <NoAgentGuard onRegister={() => setLocation("/deploy")} onDashboard={() => setLocation("/dashboard")} />;
   }
 
-  const probe = probeImage(agent.dockerImage);
 
   // Agent Access URL — required ONLY for "Connect with GMI" listings (the
   // publisher hosts the agent themselves, so they MUST provide a public URL
@@ -264,13 +234,6 @@ export default function ListClaw() {
     setLocation("/dashboard?listed=1");
   };
 
-  const saveDraft = () => {
-    const finalDraft = { ...draft, updatedAt: new Date(2025, 0, 1).toISOString() };
-    saveListing(finalDraft);
-    // keep listingState as draft
-    setLocation("/dashboard?draft=1");
-  };
-
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.fg, fontFamily: FONT }}>
       <Topbar />
@@ -278,336 +241,135 @@ export default function ListClaw() {
 
       <div style={{ marginLeft: 210, paddingTop: 40, display: "flex", flexDirection: "column", minHeight: "100vh" }}>
 
-        {/* ── Header strip ─────────────────────────────────────────────── */}
-        <header style={{ padding: "20px 24px 16px", borderBottom: `1px solid ${C.borderSoft}` }}>
+        {/* ── Header ───────────────────────────────────────────────────── */}
+        <header style={{ padding: "24px 24px 20px" }}>
           <button
             onClick={() => setLocation("/dashboard")}
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              background: "transparent", border: "none", color: C.muted, cursor: "pointer",
-              fontFamily: FONT, fontSize: 12, padding: 0, marginBottom: 10,
-            }}
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "transparent", border: "none", color: C.muted, cursor: "pointer", fontFamily: FONT, fontSize: 12, padding: 0, marginBottom: 12 }}
           >
             <Icon.back /> My Agents
           </button>
-          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 32, flexWrap: "wrap" }}>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <h1 style={{ fontFamily: FONT, fontSize: 22, fontWeight: 600, letterSpacing: "-0.02em", margin: 0, lineHeight: "28px" }}>
-                List your Agent on the Marketplace
-              </h1>
-              <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, margin: "6px 0 0", lineHeight: "20px" }}>
-                Fill in what users will see, then submit for review. Your provisioned containers keep running either way.
-              </p>
-            </div>
-            <LifecycleStepper currentStep="list" />
-          </div>
+          <h1 style={{ fontFamily: FONT, fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em", margin: 0, lineHeight: "34px" }}>List an Agent</h1>
+          <p style={{ fontFamily: FONT, fontSize: 14, color: C.muted, margin: "6px 0 0", lineHeight: "20px" }}>List an Agent on the Agentbox</p>
         </header>
 
-        {/* ── Body: form + sticky live preview ─────────────────────────── */}
-        <section
-          style={{
-            flex: 1,
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1fr) 320px",
-            gap: 24,
-            padding: "16px 24px 96px",
-            alignItems: "start",
-          }}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
+        {/* ── Body ─────────────────────────────────────────────────────── */}
+        <div style={{ flex: 1, padding: "0 24px 96px" }}>
 
-            {/* 1) Link a Template — picks which registered agent this
-                 listing is for. Pre-selected from ?agentId or latest. After
-                 selection, shows the auto-detected hosting mode + image. */}
-            <TemplatePicker
-              agent={agent}
-              probe={probe}
-              onEditRegistration={() => setLocation("/deploy")}
-            />
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", gap: 24, alignItems: "start" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
 
-            {/* 2) Essentials — the bare minimum needed to publish.
-                 Everything else lives in the collapsible "Add more details"
-                 block below — listings are living docs that can be polished
-                 later via Edit listing. */}
-            <FlatSection
-              title="The essentials"
-              subtitle="Five fields. Everything else is polish you can add later."
-            >
-              <Row>
-                <Field label="Agent name" required error={errors.name}>
-                  <TextInput
-                    value={draft.name}
-                    onChange={(v) => update("name", v)}
-                    placeholder="e.g. Contract Review Agent"
-                  />
-                </Field>
-                <Field
-                  label="Category"
-                  required
-                  error={errors.category}
-                  hint="Where users find you in Browse Agents."
-                >
+              <SectionCard title="Link a Template" subtitle={`Each listing links to exactly one published ${agent.hostMode === "connect" ? "self-hosted" : "CE"} template`} required>
+                <Field label="Linked Template" required>
                   <Select
-                    value={draft.category}
-                    onChange={(v) => update("category", v as TypeLabel | "")}
-                    options={TYPE_LABELS}
-                    placeholder="Pick a category"
+                    value={agent.id}
+                    onChange={(id) => setLocation(`/list-claw?agentId=${encodeURIComponent(id)}`)}
+                    options={allAgents.map((a) => a.id)}
+                    renderOption={(id) => { const a = allAgents.find((x) => x.id === id); return a ? a.name : id; }}
+                    placeholder="Select a template"
                   />
                 </Field>
-              </Row>
-              <Field
-                label="Publisher"
-                required
-                error={errors.publisher}
-              >
-                <TextInput
-                  value={draft.publisher}
-                  onChange={(v) => update("publisher", v)}
-                  placeholder="e.g. Acme Labs"
-                />
-              </Field>
-              <Field
-                label="Short description"
-                required
-                error={errors.shortDesc}
-                hint={`${draft.shortDesc.length}/${SHORT_DESC_MAX} characters — one tight sentence about what it does.`}
-                hintAlign="right"
-              >
-                <TextArea
-                  value={draft.shortDesc}
-                  onChange={(v) => update("shortDesc", v.slice(0, SHORT_DESC_MAX))}
-                  placeholder="Real-time document translation across 40+ languages, hosted on Acme infrastructure."
-                  rows={2}
-                />
-              </Field>
-              {showPublicUrl ? (
-                <>
-                  <Field
-                    label="Agent Access URL"
-                    required
-                    error={errors.publicUrl}
-                    hint="This link directs to your agent. Public landing page, demo, docs or another repo — anywhere users can interact with what you built. Pre-filled from your registration; override to a different URL if you want."
-                  >
-                    <TextInput
-                      value={draft.publicUrl || agent.accessUrl || ""}
-                      onChange={(v) => update("publicUrl", v)}
-                      placeholder="https://your-agent.yourdomain.com"
-                    />
-                  </Field>
-                  {/* Connect mode — light explainer of how the URL is used.
-                      Try demo just links out; nothing of the publisher is
-                      copied or exposed. */}
-                  <div
-                    style={{
-                      background: "rgba(125,211,252,0.04)",
-                      border: `1px solid rgba(125,211,252,0.20)`,
-                      borderRadius: 8,
-                      padding: "8px 12px",
-                      display: "flex", alignItems: "center", gap: 8,
-                      fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "18px",
-                    }}
-                  >
-                    <span style={{ color: "#7dd3fc", display: "inline-flex" }}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-                      </svg>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 12, color: C.muted }}>
+                  Detected badge:
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.fg }}>
+                    <span style={{ color: "#3b82f6", display: "inline-flex" }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1l2.5 1.8 3-.4 1.2 2.8 2.8 1.2-.4 3L23 12l-1.8 2.5.4 3-2.8 1.2-1.2 2.8-3-.4L12 23l-2.5-1.8-3 .4-1.2-2.8L2.5 17.5l.4-3L1 12l1.9-2.5-.4-3 2.8-1.2L6.5 2.4l3 .4z"/><path d="M10.6 14.6l-2.2-2.2-1.4 1.4 3.6 3.6 6-6-1.4-1.4z" fill="#fff"/></svg>
                     </span>
-                    <span>
-                      <span style={{ color: C.fg, fontWeight: 500 }}>Users see a Try demo ↗ button</span> pointing to this URL. You host the agent and own uptime — nothing of yours is shared.
-                    </span>
-                  </div>
-                </>
-              ) : (
-                // Host on GMI — M6.5 §"Consent at publish": one strong reminder
-                // that the publisher is opting into letting others clone their
-                // image + config. Definition-list layout — keeps the strong
-                // consent presence but drops the bullet/column visual noise.
-                <div
-                  style={{
-                    background: "rgba(221,234,77,0.06)",
-                    border: `1px solid rgba(221,234,77,0.35)`,
-                    borderRadius: 10,
-                    padding: "12px 14px",
-                    display: "flex", flexDirection: "column", gap: 8,
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ color: C.lime, display: "inline-flex" }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M20 6 9 17l-5-5"/>
-                      </svg>
-                    </span>
-                    <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>
-                      Deploy-your-own listing
-                    </span>
-                    <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>
-                      — others get a copy of your image
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "auto 1fr",
-                      columnGap: 14,
-                      rowGap: 4,
-                      fontFamily: FONT, fontSize: 12, lineHeight: "18px",
-                    }}
-                  >
-                    <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase", alignSelf: "center" }}>
-                      Copied
-                    </span>
-                    <span style={{ color: C.fg }}>
-                      image <span style={{ color: C.muted }}>·</span> env names + defaults <span style={{ color: C.muted }}>·</span> ports + infra config
-                    </span>
-                    <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase", alignSelf: "center" }}>
-                      Not copied
-                    </span>
-                    <span style={{ color: C.fg }}>
-                      your secrets <span style={{ color: C.muted }}>·</span> GMI Models key
-                    </span>
-                  </div>
+                    {agent.hostMode === "connect" ? "MaaS — external endpoint detected" : "CE + MaaS — full GMI stack detected"}
+                  </span>
                 </div>
+
+                {/* Consent callout — CE-hosted (Deploy-your-own) explains what gets copied */}
+                {agent.hostMode !== "connect" && (
+                  <div style={{ background: "rgba(221,234,77,0.06)", border: `1px solid rgba(221,234,77,0.35)`, borderRadius: 10, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Deploy-your-own listing</div>
+                    <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "18px" }}>
+                      Users click <span style={{ color: C.fg, fontWeight: 600 }}>Deploy your own</span> and GMI copies your image + config into their account. They run it, pay for compute, and bring their own GMI Models key.
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", columnGap: 14, rowGap: 6, fontFamily: FONT, fontSize: 12, lineHeight: "18px", marginTop: 2 }}>
+                      <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase", alignSelf: "center" }}>Copied</span>
+                      <span style={{ color: C.fg }}>image <span style={{ color: C.muted }}>·</span> env names + defaults <span style={{ color: C.muted }}>·</span> ports + infra config</span>
+                      <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase", alignSelf: "center" }}>Not copied</span>
+                      <span style={{ color: C.fg }}>your secrets <span style={{ color: C.muted }}>·</span> GMI Models key</span>
+                    </div>
+                  </div>
+                )}
+              </SectionCard>
+
+              {/* Agent Access URL — only for Self-hosted (Connect) listings; the
+                  Try demo CTA needs a public URL. CE-hosted is cloneable instead. */}
+              {showPublicUrl && (
+                <SectionCard title="Agent Access URL" subtitle="This link directs to your agent. Use your agent landing page or documentation URL" required>
+                  <Field label="Access URL" required error={errors.publicUrl} hint="Must be publicly reachable over HTTPS. GMI checks the page loads (HTTP 200) before listing">
+                    <TextInput value={draft.publicUrl || agent.accessUrl || ""} onChange={(v) => update("publicUrl", v)} placeholder="https://your-agent.yourdomain.com" />
+                  </Field>
+                </SectionCard>
               )}
-            </FlatSection>
 
-            {/* 3) Add more details — collapsed by default. The fields here
-                 are all optional and polish the public detail page. */}
-            <CollapsibleSection
-              title="Add more details"
-              subtitle="Optional · all of these can be added now or later via Edit listing"
-              defaultOpen={false}
-              badge={countPolishFilled(draft)}
-            >
-              <Field
-                label="Full description"
-                hint="Markdown supported — use ## What it does and ## How it works. If blank, your short description appears on the detail page."
-              >
-                <TextArea
-                  value={draft.fullDesc}
-                  onChange={(v) => update("fullDesc", v)}
-                  placeholder={"## What it does\nAcme Translate runs glossary-aware document translation across 40+ language pairs.\n\n## How it works\nHosted on Acme infra with GMI Models as the underlying model layer."}
-                  rows={6}
-                  monospace
-                />
-              </Field>
-              <Row>
-                <Field label="Logo" hint="Square PNG/JPG up to 256×256. Auto-generated from name + category if blank.">
-                  <LogoUploader
-                    value={draft.logoDataUrl}
-                    onChange={(v) => update("logoDataUrl", v)}
-                    fallbackName={draft.name || agent.name}
-                    fallbackColor={draft.category ? TYPE_COLOR[draft.category as TypeLabel] : C.lime}
-                  />
-                </Field>
-                <Field label="Tags" hint={`Up to ${TAG_MAX}. Press Enter to add.`}>
-                  <TagInput
-                    tags={draft.tags}
-                    onChange={(t) => update("tags", t)}
-                    max={TAG_MAX}
-                  />
-                </Field>
-              </Row>
-              <Field label="Demo video URL" hint="YouTube / Loom / Vimeo — embedded above the description on the detail page.">
-                <TextInput
-                  value={draft.demoVideoUrl}
-                  onChange={(v) => update("demoVideoUrl", v)}
-                  placeholder="https://"
-                />
-              </Field>
-            </CollapsibleSection>
-          </div>
+              <SectionCard title="Listing Identity">
+                <Row>
+                  <Field label="Agent Name" required error={errors.name}>
+                    <TextInput value={draft.name} onChange={(v) => update("name", v)} placeholder="e.g. Contract Review Agent" />
+                  </Field>
+                  <Field label="Publisher Name" required error={errors.publisher}>
+                    <TextInput value={draft.publisher} onChange={(v) => update("publisher", v)} placeholder="e.g. Acme Labs" />
+                  </Field>
+                </Row>
+                <Row>
+                  <Field label="Category" required error={errors.category}>
+                    <Select value={draft.category} onChange={(v) => update("category", v as TypeLabel | "")} options={TYPE_LABELS} placeholder="Pick a category" />
+                  </Field>
+                  <Field label="Tags (max 5)">
+                    <TagInput tags={draft.tags} onChange={(t) => update("tags", t)} max={TAG_MAX} />
+                  </Field>
+                </Row>
+                <Row>
+                  <Field label="Logo (optional)" hint="Square PNG/JPG, at least 256px. Auto-generated from name + category if blank.">
+                    <LogoUploader value={draft.logoDataUrl} onChange={(v) => update("logoDataUrl", v)} fallbackName={draft.name || agent.name} fallbackColor={draft.category ? TYPE_COLOR[draft.category as TypeLabel] : C.lime} />
+                  </Field>
+                  <Field label="Short Description (shown on card)" required error={errors.shortDesc} hint={`${draft.shortDesc.length} / ${SHORT_DESC_MAX} characters`} hintAlign="right">
+                    <TextArea value={draft.shortDesc} onChange={(v) => update("shortDesc", v.slice(0, SHORT_DESC_MAX))} placeholder="Real-time document translation across 40+ languages, hosted on Acme infrastructure." rows={3} />
+                  </Field>
+                </Row>
+              </SectionCard>
 
-          {/* ── Right column: live preview card + inline CTA (matches
-                production's Continue to Review pattern — no sticky bottom bar) */}
-          <aside style={{ position: "sticky", top: 88, display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-              Live Card Preview
+              <SectionCard title="Description & Media">
+                <Field label="Full Description (Markdown)" required hint="Markdown supported. Use ## What it does and ## How it works.">
+                  <TextArea value={draft.fullDesc} onChange={(v) => update("fullDesc", v)} placeholder={"## What it does\nContract Review Agent ingests PDF or DOCX contracts and produces a clause-by-clause risk report.\n\n## How it works\nCombines deterministic clause extraction with semantic risk classification."} rows={6} monospace />
+                </Field>
+                <Field label="Sample Output (optional)" hint="Up to 5 images, PNG or JPG.">
+                  <SampleUploader value={draft.sampleOutputDataUrl} onChange={(v) => update("sampleOutputDataUrl", v)} />
+                </Field>
+                <Row>
+                  <Field label="Demo Video URL">
+                    <TextInput value={draft.demoVideoUrl} onChange={(v) => update("demoVideoUrl", v)} placeholder="https://" />
+                  </Field>
+                  <Field label="Documentation Link">
+                    <TextInput value={draft.docsUrl} onChange={(v) => update("docsUrl", v)} placeholder="https://docs.acme.com/..." />
+                  </Field>
+                </Row>
+              </SectionCard>
             </div>
-            <LivePreviewCard draft={draft} fallbackName={agent.name} />
 
-            {/* Detail-page CTA mock — surfaces the mode (Cloneable vs Try demo)
-                visually so the publisher sees what button users will see when
-                they click into the listing. Pairs with the inline outcome chip
-                in the Link a Template section. */}
-            <div
-              style={{
-                background: C.cardSolid,
-                border: `1px solid ${C.borderSoft}`,
-                borderRadius: 10,
-                padding: "10px 12px",
-                display: "flex", flexDirection: "column", gap: 8,
-              }}
-            >
-              <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-                On detail page · users see
+            {/* Aside — live preview + submit */}
+            <aside style={{ position: "sticky", top: 88 }}>
+              <div style={{ background: C.cardSolid, border: `1px solid ${C.borderSoft}`, borderRadius: 12, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 16 }}>
+                <div style={{ fontFamily: FONT, fontSize: 18, fontWeight: 700, color: C.fg, letterSpacing: "-0.01em" }}>Live Card Preview</div>
+                <LivePreviewCard draft={draft} fallbackName={agent.name} />
+                <button
+                  onClick={submitForReview}
+                  disabled={!canSubmit}
+                  style={{ fontFamily: FONT, fontSize: 14, fontWeight: 700, background: canSubmit ? C.lime : "rgba(221,234,77,0.25)", color: canSubmit ? C.limeText : "rgba(10,10,10,0.5)", border: "none", padding: "12px 18px", borderRadius: 10, cursor: canSubmit ? "pointer" : "not-allowed", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, width: "100%" }}
+                >
+                  Continue to Review <Icon.ext />
+                </button>
+                <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px", margin: 0 }}>
+                  Listing review runs on submit · Auto-approved if it passes. Unpublish any time — provisioned containers unaffected.
+                </p>
               </div>
-              {agent.hostMode === "connect" ? (
-                <>
-                  <div
-                    style={{
-                      fontFamily: FONT, fontSize: 12, fontWeight: 700,
-                      background: C.lime, color: C.limeText,
-                      border: "none",
-                      padding: "8px 12px", borderRadius: 8,
-                      display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
-                      width: "100%",
-                    }}
-                  >
-                    Try demo <Icon.ext />
-                  </div>
-                  <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-                    Points to your URL — you host, you own uptime.
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div
-                    style={{
-                      fontFamily: FONT, fontSize: 12, fontWeight: 700,
-                      background: C.lime, color: C.limeText,
-                      border: "none",
-                      padding: "8px 12px", borderRadius: 8,
-                      display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
-                      width: "100%",
-                    }}
-                  >
-                    Deploy your own <Icon.ext />
-                  </div>
-                  <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-                    Clones your image into the user's own account.
-                  </div>
-                </>
-              )}
-            </div>
-
-            <button
-              onClick={submitForReview}
-              disabled={!canSubmit}
-              style={{
-                marginTop: 4,
-                fontFamily: FONT, fontSize: 13, fontWeight: 700,
-                background: canSubmit ? C.lime : "rgba(221,234,77,0.25)",
-                color: canSubmit ? C.limeText : "rgba(10,10,10,0.5)",
-                border: "none",
-                padding: "10px 18px", borderRadius: 8,
-                cursor: canSubmit ? "pointer" : "not-allowed",
-                display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
-                width: "100%",
-              }}
-            >
-              Continue to Review <Icon.ext />
-            </button>
-
-            <p style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px", margin: 0, padding: "2px 2px" }}>
-              Listing review runs on submit · auto-approved if it passes. Unpublish anytime — provisioned containers unaffected.
-            </p>
-
-            {/* Image probe hint (only when Host on GMI + non-public image) */}
-            {agent.hostMode === "gmi" && (probe === "private" || probe === "missing") && (
-              <ProbeHint probe={probe} image={agent.dockerImage} />
-            )}
-          </aside>
-        </section>
+            </aside>
+          </div>
+        </div>
 
         <Footer />
       </div>
@@ -615,274 +377,47 @@ export default function ListClaw() {
   );
 }
 
-// ─── Lifecycle stepper (4 phases) ───────────────────────────────────────────
-type LifecycleStep = "register" | "list" | "review" | "live";
-function LifecycleStepper({ currentStep }: { currentStep: LifecycleStep }) {
-  const steps: { id: LifecycleStep; label: string; subtitle?: string }[] = [
-    { id: "register", label: "Register" },
-    { id: "list",     label: "List" },
-    { id: "review",   label: "Review", subtitle: "~1 business day" },
-    { id: "live",     label: "Live" },
-  ];
-  const idx = steps.findIndex((s) => s.id === currentStep);
+// ─── Section card — bordered rounded card with a title + optional REQUIRED
+//     badge, matching the List-an-Agent form layout. ───────────────────────
+function SectionCard({ title, subtitle, required, children }: { title: string; subtitle?: string; required?: boolean; children: React.ReactNode }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
-      {steps.map((s, i) => {
-        const isPast    = i < idx;
-        const isCurrent = i === idx;
-        const isFuture  = i > idx;
-        const fg =
-          isPast    ? C.ok
-          : isCurrent ? C.lime
-          : C.muted;
-        return (
-          <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 0 }}>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, minWidth: 64 }}>
-              <div
-                style={{
-                  width: 22, height: 22, borderRadius: "50%",
-                  background: isCurrent ? C.lime : isPast ? "rgba(52,211,153,0.15)" : "transparent",
-                  border: isFuture ? `1px dashed ${C.border}` : `1px solid ${fg}`,
-                  color: isCurrent ? C.limeText : fg,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontFamily: MONO, fontSize: 11, fontWeight: 700,
-                }}
-              >
-                {isPast ? <Icon.check /> : i + 1}
-              </div>
-              <div style={{ textAlign: "center" }}>
-                <div style={{ fontFamily: FONT, fontSize: 11, fontWeight: isCurrent ? 600 : 500, color: isCurrent ? C.fg : C.muted }}>
-                  {s.label}
-                </div>
-                {s.subtitle && (
-                  <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, marginTop: 1 }}>
-                    {s.subtitle}
-                  </div>
-                )}
-              </div>
-            </div>
-            {i < steps.length - 1 && (
-              <div
-                style={{
-                  width: 24, height: 1,
-                  background: i < idx ? C.ok : C.border,
-                  marginTop: -16,
-                  alignSelf: "center",
-                }}
-              />
-            )}
-          </div>
-        );
-      })}
+    <div style={{ background: C.cardSolid, border: `1px solid ${C.borderSoft}`, borderRadius: 12, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <h2 style={{ fontFamily: FONT, fontSize: 18, fontWeight: 700, margin: 0, color: C.fg, letterSpacing: "-0.01em" }}>{title}</h2>
+          {subtitle && <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, margin: "5px 0 0", lineHeight: "18px" }}>{subtitle}</p>}
+        </div>
+        {required && (
+          <span style={{ fontFamily: FONT, fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: C.muted, background: "rgba(255,255,255,0.06)", border: `1px solid ${C.border}`, padding: "3px 8px", borderRadius: 6, whiteSpace: "nowrap", flexShrink: 0 }}>Required</span>
+        )}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>{children}</div>
     </div>
   );
 }
 
-// ─── Template picker — "Link a Template" section (matches production) ──────
-// Lets the publisher pick which registered Agent this listing is for. After
-// selection, shows the auto-detected hosting mode + image (read-only) so the
-// publisher confirms what's being listed. PRD: every listing links to exactly
-// one registered template.
-function TemplatePicker({
-  agent, probe, onEditRegistration,
-}: {
-  agent: RegisteredAgent;
-  probe: ImageProbe;
-  onEditRegistration: () => void;
-}) {
-  const [, setLocation] = useLocation();
-  const allAgents: RegisteredAgent[] = useMemo(() => {
-    try { return JSON.parse(localStorage.getItem(REGISTERED_AGENTS_KEY) || "[]"); }
-    catch { return []; }
-  }, []);
-
-  const isConnect = agent.hostMode === "connect";
-
+// Sample Output uploader — a wide dashed drop target that reads one image to a
+// data URL (prototype stand-in for real upload).
+function SampleUploader({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => onChange(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  };
   return (
-    <FlatSection
-      title="Link a Template"
-      subtitle="Each listing links to exactly one registered Agent. Pick which one this listing represents."
-    >
-      <Field label="Linked Template" required>
-        <Select
-          value={agent.id}
-          onChange={(id) => setLocation(`/list-claw?agentId=${encodeURIComponent(id)}`)}
-          options={allAgents.map((a) => a.id)}
-          renderOption={(id) => {
-            const a = allAgents.find((x) => x.id === id);
-            return a ? `${a.name} · ${a.hostMode === "connect" ? "Connect with GMI" : "Host on GMI"}` : id;
-          }}
-          placeholder="Select a template"
-        />
-      </Field>
-
-      {/* Auto-detected info — confirms what user picked, lets them go modify */}
-      <div
-        style={{
-          display: "flex", alignItems: "center", gap: 8,
-          padding: "8px 10px",
-          background: "rgba(255,255,255,0.02)",
-          border: `1px solid ${C.borderSoft}`,
-          borderRadius: 6,
-          fontFamily: MONO, fontSize: 11,
-        }}
-      >
-        <span style={{ color: C.ok, display: "inline-flex" }}><Icon.check /></span>
-        <span
-          style={{
-            fontFamily: FONT, fontSize: 11, fontWeight: 500,
-            color: isConnect ? "#7dd3fc" : C.lime,
-            padding: "1px 6px", borderRadius: 4,
-            border: `1px solid ${isConnect ? "rgba(125,211,252,0.30)" : "rgba(221,234,77,0.30)"}`,
-            background: isConnect ? "rgba(125,211,252,0.06)" : "rgba(221,234,77,0.06)",
-          }}
-        >
-          {isConnect ? "Connect with GMI" : "Host on GMI"}
+    <label style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 96, border: `1px dashed ${C.border}`, borderRadius: 8, background: C.bg, cursor: "pointer", padding: 12 }}>
+      <input type="file" accept="image/png,image/jpeg" onChange={onFile} style={{ display: "none" }} />
+      {value ? (
+        <img src={value} alt="sample output" style={{ maxWidth: "100%", maxHeight: 160, borderRadius: 6 }} />
+      ) : (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 13, color: C.muted }}>
+          <Icon.upload /> Upload image (PNG, JPG)
         </span>
-        <span style={{ color: C.muted }}>·</span>
-        <span
-          style={{
-            color: C.muted, flex: 1, minWidth: 0,
-            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-          }}
-        >
-          {isConnect ? agent.accessUrl || "—" : agent.dockerImage || "—"}
-        </span>
-        <span
-          style={{
-            display: "inline-flex", alignItems: "center", gap: 4,
-            fontFamily: FONT, fontSize: 10, fontWeight: 600,
-            letterSpacing: "0.06em", textTransform: "uppercase",
-            color: C.fg,
-            padding: "2px 8px", borderRadius: 4,
-            background: "rgba(255,255,255,0.06)",
-            border: `1px solid ${C.border}`,
-            whiteSpace: "nowrap",
-          }}
-        >
-          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M5 12h14M13 5l7 7-7 7"/>
-          </svg>
-          {isConnect ? "Try demo" : "Deploy your own"}
-        </span>
-      </div>
-
-      {/* Plain-language explainer of what the chip means — what the consumer
-          actually does, who pays, who hosts. Teaches the Cloneable vs Try-demo
-          concept right where the publisher first sees it, so they don't have
-          to scroll down to the consent callout to understand. */}
-      <div
-        style={{
-          display: "flex", alignItems: "flex-start", gap: 8,
-          fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "18px",
-          padding: "0 2px",
-        }}
-      >
-        <span style={{ color: C.muted, marginTop: 1 }}>↳</span>
-        {isConnect ? (
-          <div>
-            <span style={{ color: C.fg }}>Just a link.</span> Users click your <code style={{ fontFamily: MONO, fontSize: 11, color: C.fg }}>Try demo ↗</code> button and visit a URL you provide — your agent's endpoint, docs, or landing page.<br />
-            Nothing is cloned <span style={{ color: C.muted }}>·</span> you keep hosting <span style={{ color: C.muted }}>·</span> users don't get your image or config.
-          </div>
-        ) : (
-          <div>
-            <span style={{ color: C.fg }}>Cloneable recipe.</span> Users click <code style={{ fontFamily: MONO, fontSize: 11, color: C.fg }}>Deploy your own ↗</code> and GMI copies your image + config into their account.<br />
-            They pay for compute <span style={{ color: C.muted }}>·</span> they bring their own GMI Models key <span style={{ color: C.muted }}>·</span> your secrets aren't copied.
-          </div>
-        )}
-      </div>
-    </FlatSection>
-  );
-}
-
-// ─── Section wrapper ────────────────────────────────────────────────────────
-// FlatSection: lighter, less "boxy" feel — title + horizontal rule instead of
-// the previous card-in-card chrome. Used for the essentials block.
-function FlatSection({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div style={{ paddingBottom: 8, borderBottom: `1px solid ${C.borderSoft}` }}>
-        <h2 style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, margin: 0, color: C.fg, letterSpacing: "-0.005em" }}>
-          {title}
-        </h2>
-        {subtitle && (
-          <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "3px 0 0", lineHeight: "18px" }}>
-            {subtitle}
-          </p>
-        )}
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-// CollapsibleSection: optional polish block. Shows a "+N filled" badge so the
-// user knows what they've already optionally completed without expanding.
-function CollapsibleSection({
-  title, subtitle, defaultOpen = false, badge = 0, children,
-}: {
-  title: string; subtitle?: string; defaultOpen?: boolean; badge?: number; children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: open ? 14 : 0 }}>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        style={{
-          background: "transparent",
-          border: "none",
-          padding: "8px 0",
-          borderBottom: `1px solid ${C.borderSoft}`,
-          cursor: "pointer",
-          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-          width: "100%", textAlign: "left",
-          color: C.fg,
-        }}
-      >
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <h2 style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, margin: 0, color: C.fg, letterSpacing: "-0.005em" }}>
-              {title}
-            </h2>
-            {badge > 0 && (
-              <span
-                style={{
-                  fontFamily: MONO, fontSize: 10, color: C.ok,
-                  padding: "1px 6px", borderRadius: 999,
-                  background: "rgba(52,211,153,0.08)",
-                  border: `1px solid rgba(52,211,153,0.3)`,
-                }}
-              >
-                {badge} filled
-              </span>
-            )}
-          </div>
-          {subtitle && (
-            <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "3px 0 0", lineHeight: "18px" }}>
-              {subtitle}
-            </p>
-          )}
-        </div>
-        <span style={{ color: C.muted, fontSize: 14, transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}>⌄</span>
-      </button>
-      {open && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {children}
-        </div>
       )}
-    </div>
+    </label>
   );
-}
-
-function countPolishFilled(d: ListingDraft): number {
-  let n = 0;
-  if (d.fullDesc.trim())        n++;
-  if (d.logoDataUrl)            n++;
-  if (d.tags.length > 0)        n++;
-  if (d.demoVideoUrl.trim())    n++;
-  return n;
 }
 
 function Row({ children }: { children: React.ReactNode }) {
@@ -1246,46 +781,6 @@ function ReassureLine({ text }: { text: string }) {
     <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 12, color: C.muted }}>
       <span style={{ color: C.ok, display: "inline-flex" }}><Icon.check /></span>
       {text}
-    </div>
-  );
-}
-
-// ─── Probe hint (only when GMI-hosted with non-public image) ────────────────
-function ProbeHint({ probe, image }: { probe: ImageProbe; image?: string }) {
-  if (probe === "ok" || probe === "n/a") return null;
-  const isPrivate = probe === "private";
-  const isMissing = probe === "missing";
-  const accent = isMissing ? C.err : C.warn;
-  const title  = isMissing
-    ? "Image not reachable"
-    : isPrivate
-      ? "Private image detected"
-      : "No image set";
-  const body  = isMissing
-    ? "We couldn't pull this image. Submitting will fail review until it's reachable."
-    : isPrivate
-      ? "Cloners can't pull this image. Your listing will surface as Try demo instead of Deploy your own."
-      : "Without a public image, your listing will run as demo-only.";
-  return (
-    <div
-      style={{
-        background: C.cardSolid,
-        border: `1px solid ${accent}55`,
-        borderRadius: 10,
-        padding: "10px 12px",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 6, color: accent, fontFamily: FONT, fontSize: 12, fontWeight: 600 }}>
-        {title}
-      </div>
-      <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, marginTop: 4, lineHeight: "16px" }}>
-        {body}
-      </div>
-      {image && (
-        <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, marginTop: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {image}
-        </div>
-      )}
     </div>
   );
 }

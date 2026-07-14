@@ -5,29 +5,15 @@ import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
 import CopyButton from "@/components/CopyButton";
+import { C as baseC, FONT, MONO } from "@/lib/tokens";
 
-// ─── Tokens ───────────────────────────────────────────────────────────────
-const FONT = "'Geist', system-ui, sans-serif";
-const MONO = "'GeistMono', ui-monospace, monospace";
+// ─── Tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const C = {
-  bg:           "#0a0a0a",
-  fg:           "#fafafa",
-  muted:        "#a3a3a3",
-  border:       "#404040",
-  borderSoft:   "#262626",
-  card:         "rgba(23,23,23,0.95)",
-  cardSolid:    "#171717",
+  ...baseC,
   warnBg:       "#1e1e1e",
-  pillBg:       "rgba(82,82,82,0.3)",
   selectedYel:  "rgba(99,105,35,0.3)",
   selectedYelB: "rgba(221,234,77,0.55)",
-  lime:         "#DDEA4D",
-  limeText:     "#0a0a0a",
-  link:         "#5b94f0",
-  warn:         "#fbbf24",
-  ok:           "#34d399",
-  err:          "#f87171",
-} as const;
+};
 
 const STEPS = [
   { id: 1, title: "Basics & Template" },
@@ -2682,93 +2668,47 @@ export default function DeployWizard() {
 
       <div style={{ marginLeft: 210, paddingTop: 40 }}>
 
-        {/* Page header */}
-        <header style={{ padding: "14px 24px 8px" }}>
-          <h1
-            style={{
-              fontFamily: FONT, fontSize: 24, fontWeight: 700, lineHeight: "30px",
-              color: C.fg, margin: 0, letterSpacing: "-0.02em",
-            }}
-          >
-            Register an Agent
-          </h1>
-          <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, margin: "2px 0 0" }}>
-            Configure infrastructure and register your Agent. List on the Agentbox after testing.
-          </p>
-        </header>
+        {/* Page header — title + compact host-mode segmented toggle (top-right) */}
+        <header style={{ padding: "14px 24px 12px", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 24, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 0 }}>
+            <h1 style={{ fontFamily: FONT, fontSize: 24, fontWeight: 700, lineHeight: "30px", color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>
+              Register an Agent
+            </h1>
+            <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, margin: "2px 0 0" }}>
+              Configure infrastructure and register your Agent. List on the Agentbox after testing.
+            </p>
+          </div>
 
-        {/* Host mode — two side-by-side cards (Host on GMI DEFAULT yellow border / Connect with GMI outline).
-            Matches the original List Agent path-picker pattern: equal-weight cards, selected
-            card gets the lime accent + yellow border, deselected stays muted. */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 12,
-            padding: "0 24px 12px",
-          }}
-        >
-          <button
-            onClick={() => setHostMode("gmi")}
-            style={{
-              textAlign: "left", cursor: "pointer",
-              background: hostMode === "gmi" ? "rgba(99,105,35,0.18)" : C.cardSolid,
-              border: hostMode === "gmi" ? `1.5px solid ${C.lime}` : `1px solid ${C.border}`,
-              borderRadius: 10,
-              padding: "12px 16px",
-              display: "flex", flexDirection: "column", gap: 4,
-              transition: "border-color .15s, background .15s",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ color: hostMode === "gmi" ? C.lime : C.muted, display: "inline-flex" }}>
-                <IconGlobe size={14} />
-              </span>
-              <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>
-                Host on GMI
-              </span>
-              {hostMode === "gmi" && (
-                <span
-                  style={{
-                    fontFamily: MONO, fontSize: 9, fontWeight: 600, letterSpacing: "0.08em",
-                    color: C.lime, background: "rgba(221,234,77,0.10)",
-                    border: `1px solid rgba(221,234,77,0.35)`,
-                    padding: "1px 6px", borderRadius: 4,
-                  }}
-                >
-                  DEFAULT
-                </span>
-              )}
-            </div>
-            <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "16px" }}>
-              We run your agent + optional GMI Models. Container, networking, lifecycle all handled.
-            </span>
-          </button>
-          <button
-            onClick={() => setHostMode("connect")}
-            style={{
-              textAlign: "left", cursor: "pointer",
-              background: hostMode === "connect" ? "rgba(99,105,35,0.18)" : C.cardSolid,
-              border: hostMode === "connect" ? `1.5px solid ${C.lime}` : `1px solid ${C.border}`,
-              borderRadius: 10,
-              padding: "12px 16px",
-              display: "flex", flexDirection: "column", gap: 4,
-              transition: "border-color .15s, background .15s",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ color: hostMode === "connect" ? C.lime : C.muted, display: "inline-flex" }}>
-                <IconUpload size={14} />
-              </span>
-              <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>
-                Connect with GMI
-              </span>
-            </div>
-            <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "16px" }}>
-              You run the agent on your infra; only connects to GMI Models. You own uptime.
-            </span>
-          </button>
-        </div>
+          <div style={{ display: "inline-flex", flexShrink: 0, border: `1px solid ${C.border}`, borderRadius: 10, background: C.cardSolid, padding: 3, gap: 3 }}>
+            <button
+              onClick={() => setHostMode("gmi")}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 7, cursor: "pointer",
+                fontFamily: FONT, fontSize: 13, fontWeight: 600, whiteSpace: "nowrap",
+                padding: "7px 12px", borderRadius: 7, border: "none",
+                background: hostMode === "gmi" ? "rgba(99,105,35,0.30)" : "transparent",
+                color: hostMode === "gmi" ? C.fg : C.muted,
+              }}
+            >
+              <span style={{ color: hostMode === "gmi" ? C.lime : C.muted, display: "inline-flex" }}><IconGlobe size={14} /></span>
+              Host on GMI
+              <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 600, letterSpacing: "0.08em", color: hostMode === "gmi" ? C.lime : C.muted, background: hostMode === "gmi" ? "rgba(221,234,77,0.10)" : "transparent", border: `1px solid ${hostMode === "gmi" ? "rgba(221,234,77,0.35)" : C.border}`, padding: "1px 5px", borderRadius: 4 }}>DEFAULT</span>
+            </button>
+            <button
+              onClick={() => setHostMode("connect")}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 7, cursor: "pointer",
+                fontFamily: FONT, fontSize: 13, fontWeight: 600, whiteSpace: "nowrap",
+                padding: "7px 12px", borderRadius: 7, border: "none",
+                background: hostMode === "connect" ? "rgba(99,105,35,0.30)" : "transparent",
+                color: hostMode === "connect" ? C.fg : C.muted,
+              }}
+            >
+              <span style={{ color: hostMode === "connect" ? C.lime : C.muted, display: "inline-flex" }}><IconUpload size={14} /></span>
+              Connect your agent
+            </button>
+          </div>
+        </header>
 
         {/* Pre-filled banner — visible when wizard was forked from a catalog template */}
         {forkedFrom && (

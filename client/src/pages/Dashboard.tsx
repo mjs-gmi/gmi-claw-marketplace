@@ -4,27 +4,16 @@ import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
 import CopyButton from "@/components/CopyButton";
+import { C as baseC, FONT, MONO } from "@/lib/tokens";
 
-// ─── Tokens (Geist Sans + GMI Console palette, verbatim from Figma JSON) ──
-const FONT = "'Geist', system-ui, sans-serif";
-const MONO = "'GeistMono', ui-monospace, monospace";
+// ─── Tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const C = {
-  bg:        "#0a0a0a",
-  fg:        "#fafafa",
-  muted:     "#a3a3a3",
-  border:    "#404040",
-  borderSoft:"#262626",
-  card:      "#171717",
-  cardSolid: "#171717",
-  pillBg:    "rgba(82,82,82,0.3)",
+  ...baseC,
+  card:      "#171717",              // page-specific (opaque, not translucent)
   activeBg:  "rgba(255,255,255,0.12)",
   selectedYellow: "rgba(99,105,35,0.3)",
-  ok:        "#34d399",
-  err:       "#ef4444",
-  warn:      "#fbbf24",
-  lime:      "#DDEA4D",
-  limeText:  "#0a0a0a",
-} as const;
+  err:       "#ef4444",              // page-specific
+};
 
 // ─── Mock data ────────────────────────────────────────────────────────────
 // Status enum matches PRD F-03 swagger: pending · creating · running · stopping · stopped · error · deleted
