@@ -86,8 +86,31 @@ function endpointFor(id: string): string {
   return `https://agentbox.gmi.cloud/t/${id.replace("inst_", "").slice(0, 12)}`;
 }
 
-// No seed instances — they were tied to seed agents which are now removed.
-const INITIAL_INSTANCES: Instance[] = [];
+// Seed instances for the demo "Hermes" agent so My Agents renders a populated
+// state matching the console: 2 running instances → Active 2, a populated
+// Instance Set table, and the row action (⋮) menu. fmtDate / endpointFor are
+// hoisted function declarations; new Date() at module load is fine in the browser.
+const _seedDaysAgo = (n: number): string => {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return fmtDate(d);
+};
+const INITIAL_INSTANCES: Instance[] = [
+  {
+    id: "8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36",
+    agentId: "agent_hermes",
+    status: "running",
+    created: _seedDaysAgo(5),
+    endpointUrl: endpointFor("8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36"),
+  },
+  {
+    id: "1e1bd452-9a3c-4b8e-bf21-7d40c9e6095a",
+    agentId: "agent_hermes",
+    status: "running",
+    created: _seedDaysAgo(6),
+    endpointUrl: endpointFor("1e1bd452-9a3c-4b8e-bf21-7d40c9e6095a"),
+  },
+];
 
 // Mock log tail (F-03 — `GET /tasks/{id}/logs`); deterministic from instance id
 function mockLogsFor(inst: Instance): string[] {
@@ -107,10 +130,31 @@ function mockLogsFor(inst: Instance): string[] {
   return lines;
 }
 
-function fmtNow(): string {
-  const d = new Date();
+function fmtDate(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+function fmtNow(): string {
+  return fmtDate(new Date());
+}
+
+// Relative "Nd ago" label for instance timestamps (matches the console's
+// Created column + Last provisioned card). Falls back to the raw string.
+function agoLabel(created: string): string {
+  const then = new Date(created.replace(" ", "T")).getTime();
+  if (Number.isNaN(then)) return created;
+  const mins = Math.floor((Date.now() - then) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+// Middle-truncate a long instance id → "8b62347b…3c36" (matches the console).
+function midId(id: string): string {
+  const s = id.replace(/^inst_/, "");
+  return s.length > 16 ? `${s.slice(0, 8)}…${s.slice(-4)}` : s;
 }
 
 function newInstanceId(): string {
@@ -937,7 +981,7 @@ function ListingActions({ agentId, state }: { agentId: string; state?: ListingSt
 // ─── Per-instance row ⋮ menu ─────────────────────────────────────────────
 // Reusable view actions (Detail / Log / Monitoring) live here so the inline
 // row stays focused on the net-new high-frequency actions (Open / Terminate).
-type RowPanel = "config" | "logs" | "metrics";
+type RowPanel = "config" | "logs" | "metrics" | "shell";
 function InstanceRowMenu({
   instId, activePanel, onSelect,
 }: {
@@ -957,9 +1001,10 @@ function InstanceRowMenu({
   }, [open]);
 
   const items: { key: RowPanel; label: string; icon: React.ReactNode }[] = [
-    { key: "config",  label: "View Detail",  icon: <IconConfig /> },
+    { key: "shell",   label: "Open Shell",   icon: <IconShell /> },
     { key: "logs",    label: "View Log",     icon: <IconLogs /> },
     { key: "metrics", label: "Monitoring",   icon: <IconChart /> },
+    { key: "config",  label: "View Detail",  icon: <IconConfig /> },
   ];
 
   return (
@@ -1523,25 +1568,25 @@ function MonitorPane({
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
           <MetricCard
             label="Active"
-            value={agg.active > 0 ? String(agg.active) : "—"}
+            value={String(agg.active)}
             helper="status = running"
             accent={C.ok}
           />
           <MetricCard
             label="Error"
-            value={agg.error > 0 ? String(agg.error) : "—"}
+            value={String(agg.error)}
             helper="red tab badge if > 0"
             accent={C.err}
           />
           <MetricCard
             label="Creating"
-            value={agg.creating > 0 ? String(agg.creating) : "—"}
+            value={String(agg.creating)}
             helper="status = creating"
             accent={C.warn}
           />
           <MetricCard
             label="Last provisioned"
-            value={agg.lastProvisioned ? agg.lastProvisioned.slice(11, 16) : "—"}
+            value={agg.lastProvisioned ? agoLabel(agg.lastProvisioned) : "—"}
             helper="max(createdAt)"
             accent={C.muted}
           />
@@ -1659,7 +1704,7 @@ function MonitorPane({
                       title={inst.config?.name || inst.id}
                       style={{ color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                     >
-                      {inst.config?.name || `${inst.id.slice(0, 14)}…`}
+                      {inst.config?.name || midId(inst.id)}
                     </div>
                     <div
                       title={inst.endpointUrl}
@@ -1667,17 +1712,25 @@ function MonitorPane({
                     >
                       {inst.endpointUrl ? inst.endpointUrl.replace(/^https?:\/\//, "") : "—"}
                     </div>
-                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ display: "inline-flex", alignItems: "center" }}>
                       <span
                         style={{
-                          width: 6, height: 6, borderRadius: 999,
-                          background: statusDot(inst.status),
-                          animation: inst.status === "creating" ? "pulse 1.2s ease-in-out infinite" : "none",
+                          display: "inline-flex", alignItems: "center", gap: 5,
+                          fontFamily: FONT, fontSize: 11, fontWeight: 600, lineHeight: "16px",
+                          letterSpacing: "0.04em", textTransform: "uppercase",
+                          color: statusDot(inst.status),
+                          background: `${statusDot(inst.status)}1f`,
+                          border: `1px solid ${statusDot(inst.status)}55`,
+                          padding: "2px 8px", borderRadius: 6,
                         }}
-                      />
-                      <span style={{ color: C.muted }}>{inst.status}</span>
+                      >
+                        {inst.status === "creating" && (
+                          <span style={{ width: 6, height: 6, borderRadius: 999, background: statusDot(inst.status), animation: "pulse 1.2s ease-in-out infinite" }} />
+                        )}
+                        {inst.status}
+                      </span>
                     </div>
-                    <div style={{ color: C.muted }}>{inst.created}</div>
+                    <div style={{ color: C.muted }}>{agoLabel(inst.created)}</div>
                     <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
                       {inst.status === "running" && inst.endpointUrl && (
                         <a
@@ -2208,7 +2261,7 @@ export default function Dashboard() {
                 cursor: "pointer",
               }}
             >
-              <IconPlus /> List an agent
+              List an agent
             </button>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
