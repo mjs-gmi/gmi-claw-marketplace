@@ -1,18 +1,11 @@
+import { useState } from "react";
 import { useParams, Link, useLocation } from "wouter";
-import { ArrowLeft, CheckCircle, ExternalLink, Tag, AlertCircle, Clock, Copy } from "lucide-react";
+import { ArrowLeft, CheckCircle, ExternalLink, AlertCircle, Clock } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
-import Footer from "@/components/Footer";
 import { ALL_CLAWS, getBadgeConfig } from "@/lib/clawData";
+import { FONT, C, TYPE_COLOR } from "@/lib/tokens";
 import { toast } from "sonner";
-
-const TYPE_CONFIG: Record<string, { color: string; bg: string }> = {
-  "Code & Dev Tools":     { color: "#7ec8ff", bg: "rgba(126,200,255,0.08)" },
-  "Data & Analytics":     { color: "#DDEA4D", bg: "rgba(221,234,77,0.08)" },
-  "Customer Support":     { color: "#34d399", bg: "rgba(52,211,153,0.08)" },
-  "Content & Marketing":  { color: "#f9a8d4", bg: "rgba(249,168,212,0.08)" },
-  "Research & Knowledge": { color: "#c084fc", bg: "rgba(192,132,252,0.08)" },
-};
 
 // Extended descriptions for detail page
 const FULL_DESCRIPTIONS: Record<string, string> = {
@@ -29,116 +22,180 @@ const FULL_DESCRIPTIONS: Record<string, string> = {
   "brand-voice-writer": "Generates on-brand copy for blogs, social media, and ad campaigns. Learns your brand voice from existing content and maintains consistency across all outputs. Supports 25+ output formats. Includes a tone calibration tool and a style guide compliance checker.",
 };
 
-// ─── Image pull pre-check (PRD M6.4 clone preflight) ────────────────────
-// Anonymous HEAD /v2/<name>/manifests/<ref>. Result governs whether the
-// "Deploy your own" path is offered as a real clone or downgraded to
-// "Try demo". The prototype maps each catalog claw to one of three
-// outcomes via a deterministic mock.
-type ImagePullState = "public" | "private" | "missing";
-function mockImagePullState(clawId: string): ImagePullState {
-  // Demo: one private, rest public. Easy to extend later.
-  if (clawId === "enterprise-rag-pipeline") return "private";
-  return "public";
+// ─── Full Description renderer ──────────────────────────────────────────
+// The publish form collects Full Description as Markdown. Dependency-free,
+// line-based parser: ## / ### headings, - / * bullet lists, blank-line
+// paragraphs, and inline **bold**. Handles the heading + paragraph + list
+// mix used by real listings without pulling in a markdown parser.
+const FD_FONT = FONT;
+
+function renderInline(s: string) {
+  return s.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+    part.startsWith("**") && part.endsWith("**") ? (
+      <strong key={i} style={{ color: C.fg, fontWeight: 600 }}>{part.slice(2, -2)}</strong>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
 }
 
-function ImagePullStatus({ state }: { state: ImagePullState }) {
-  if (state === "public") {
-    // Public is the happy path — surface as a small inline chip, not a card.
-    return (
-      <div
-        style={{
-          display: "inline-flex", alignItems: "center", gap: 6,
-          fontFamily: "'Geist', system-ui, sans-serif",
-          fontSize: 11, fontWeight: 500, lineHeight: "16px",
-          color: "#34d399",
-          background: "rgba(52,211,153,0.08)",
-          border: "1px solid rgba(52,211,153,0.30)",
-          padding: "3px 9px",
-          borderRadius: 999,
-        }}
-      >
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M20 6 9 17l-5-5"/>
-        </svg>
-        Cloneable · public image
-      </div>
-    );
+type FdBlock =
+  | { kind: "h"; level: 2 | 3; text: string }
+  | { kind: "p"; text: string }
+  | { kind: "ul"; items: string[] };
+
+function parseMarkdownLite(text: string): FdBlock[] {
+  const blocks: FdBlock[] = [];
+  let para: string[] = [];
+  let list: string[] = [];
+  const flushPara = () => { if (para.length) { blocks.push({ kind: "p", text: para.join(" ") }); para = []; } };
+  const flushList = () => { if (list.length) { blocks.push({ kind: "ul", items: list }); list = []; } };
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) { flushPara(); flushList(); continue; }
+    const heading = line.match(/^(#{2,3})\s+(.*)$/);
+    if (heading) {
+      flushPara(); flushList();
+      blocks.push({ kind: "h", level: heading[1].length as 2 | 3, text: heading[2] });
+      continue;
+    }
+    const bullet = line.match(/^[-*]\s+(.*)$/);
+    if (bullet) { flushPara(); list.push(bullet[1]); continue; }
+    flushList();
+    para.push(line);
   }
-  if (state === "private") {
-    // Structured warning card: title, body, fallback path.
-    return (
-      <div
-        style={{
-          background: "rgba(251,191,36,0.06)",
-          border: "1px solid rgba(251,191,36,0.30)",
-          borderRadius: 8,
-          padding: "12px 14px",
-          display: "flex", gap: 10, alignItems: "flex-start",
-          fontFamily: "'Geist', system-ui, sans-serif",
-        }}
-      >
-        <span
-          style={{
-            width: 22, height: 22, borderRadius: 999, flexShrink: 0,
-            background: "rgba(251,191,36,0.14)",
-            border: "1px solid rgba(251,191,36,0.45)",
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            color: "#fbbf24",
-            marginTop: 1,
-          }}
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-          </svg>
-        </span>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#fafafa", lineHeight: "18px" }}>
-            Private image
-          </div>
-          <div style={{ fontSize: 12, fontWeight: 400, color: "#a3a3a3", lineHeight: "17px", marginTop: 2 }}>
-            Image availability check returned 401/403 — only the publisher can pull this image.
-            Deploy-your-own won't work as a clone; you can still try the publisher's
-            running instance via <span style={{ color: "#fafafa" }}>Try demo</span> below.
-          </div>
-        </div>
-      </div>
-    );
-  }
+  flushPara(); flushList();
+  return blocks;
+}
+
+function FullDescription({ text }: { text: string }) {
+  const blocks = parseMarkdownLite(text);
   return (
-    <div
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {blocks.map((b, i) => {
+        if (b.kind === "h") {
+          // Sans subheading — matches the List-an-Agent form's typography.
+          return (
+            <div
+              key={i}
+              style={{
+                fontFamily: FONT,
+                fontSize: b.level === 2 ? 16 : 14,
+                fontWeight: 600,
+                color: C.fg,
+                lineHeight: "22px",
+                letterSpacing: "-0.01em",
+                marginTop: i === 0 ? 0 : 14,
+              }}
+            >
+              {b.text}
+            </div>
+          );
+        }
+        if (b.kind === "ul") {
+          return (
+            <ul key={i} style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 6 }}>
+              {b.items.map((it, j) => (
+                <li key={j} style={{ fontFamily: FD_FONT, fontSize: 14.5, lineHeight: "24px", color: "#c4c4c4" }}>
+                  {renderInline(it)}
+                </li>
+              ))}
+            </ul>
+          );
+        }
+        return (
+          <p key={i} style={{ fontFamily: FD_FONT, fontSize: 14.5, fontWeight: 400, lineHeight: "25px", color: "#c4c4c4", margin: 0, maxWidth: "70ch" }}>
+            {renderInline(b.text)}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+// The Short Description (hero tagline) and Full Description are separate
+// required fields, but publishers often make Full a superset of Short — which
+// reads as a duplicate on the page. Drop any leading Full sentences that are
+// already verbatim in Short so "About" starts with genuinely new detail.
+function aboutBody(full: string, short: string): string {
+  // Authored markdown (headings / bullets) is deliberate — never reflow it.
+  // The sentence-level de-dupe below is only safe on flat single-paragraph prose.
+  if (/(^|\n)\s*(#{1,3}\s|[-*]\s)/.test(full)) return full.trim();
+  const norm = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase().replace(/[.!?]+$/, "");
+  const shortSents = short.split(/(?<=[.!?])\s+/).map(norm).filter(Boolean);
+  // A leading Full sentence is redundant if it equals a hero sentence or merely
+  // extends one ("…Bitbucket." vs "…Bitbucket via webhooks.").
+  const redundant = (p: string) => {
+    const n = norm(p);
+    return shortSents.some((ss) => n === ss || n.startsWith(ss + " "));
+  };
+  const parts = full.split(/(?<=[.!?])\s+/);
+  let i = 0;
+  while (i < parts.length && redundant(parts[i])) i++;
+  return parts.slice(i).join(" ").trim();
+}
+
+// Tag chip — sharp, mono, hover→lime. The one interactive micro-detail on the
+// page; gives the body scannable structure beyond the prose paragraph.
+function TagChip({ label }: { label: string }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <span
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       style={{
-        background: "rgba(248,113,113,0.06)",
-        border: "1px solid rgba(248,113,113,0.30)",
-        borderRadius: 8,
-        padding: "12px 14px",
-        display: "flex", gap: 10, alignItems: "flex-start",
-        fontFamily: "'Geist', system-ui, sans-serif",
+        fontFamily: FONT,
+        fontSize: 12,
+        lineHeight: "16px",
+        color: hover ? C.lime : C.muted,
+        border: `1px solid ${hover ? C.lime : "#303030"}`,
+        background: hover ? "rgba(221,234,77,0.06)" : "rgba(255,255,255,0.02)",
+        padding: "5px 11px",
+        borderRadius: 6,
+        whiteSpace: "nowrap",
+        transition: "color 0.12s ease, border-color 0.12s ease, background 0.12s ease",
+        cursor: "default",
       }}
     >
-      <span
-        style={{
-          width: 22, height: 22, borderRadius: 999, flexShrink: 0,
-          background: "rgba(248,113,113,0.14)",
-          border: "1px solid rgba(248,113,113,0.45)",
-          display: "inline-flex", alignItems: "center", justifyContent: "center",
-          color: "#f87171",
-          marginTop: 1,
-        }}
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/>
-        </svg>
-      </span>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "#fafafa", lineHeight: "18px" }}>
-          Image not found
-        </div>
-        <div style={{ fontSize: 12, fontWeight: 400, color: "#a3a3a3", lineHeight: "17px", marginTop: 2 }}>
-          Image availability check returned 404 — the image reference is broken. Cloning is blocked
-          until the publisher fixes the listing.
-        </div>
-      </div>
-    </div>
+      {label}
+    </span>
+  );
+}
+
+// Publisher avatar — renders the uploaded Logo when present, else a monogram
+// fallback so the header always carries visual weight (logo is optional).
+function PublisherAvatar({ publisher, color, size = 34, logoUrl }: { publisher: string; color: string; size?: number; logoUrl?: string }) {
+  if (logoUrl) {
+    return (
+      <img
+        src={logoUrl}
+        alt={`${publisher} logo`}
+        width={size}
+        height={size}
+        style={{ width: size, height: size, flexShrink: 0, objectFit: "cover", border: "1px solid #303030", background: C.bg, borderRadius: 8 }}
+      />
+    );
+  }
+  const clean = publisher.replace(/[^a-zA-Z0-9]/g, "");
+  const display = clean ? clean[0].toUpperCase() + (clean[1] || "").toLowerCase() : "?";
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: size, height: size, flexShrink: 0,
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        borderRadius: 8,
+        background: `${color}1f`,
+        border: `1px solid ${color}59`,
+        color,
+        fontFamily: FONT,
+        fontSize: Math.round(size * 0.4),
+        fontWeight: 700,
+        letterSpacing: "-0.02em",
+      }}
+    >
+      {display}
+    </span>
   );
 }
 
@@ -163,8 +220,9 @@ export default function ClawDetail() {
   }
 
   const badge = getBadgeConfig(claw.infrastructurePath);
-  const typeStyle = TYPE_CONFIG[claw.typeLabel] || { color: "#888", bg: "rgba(136,136,136,0.08)" };
+  const typeColor = TYPE_COLOR[claw.typeLabel] ?? "#888";
   const fullDescription = FULL_DESCRIPTIONS[claw.id] || claw.description;
+  const about = aboutBody(fullDescription, claw.description);
 
   const handleAccess = () => {
     toast.success(`Connecting to ${claw.name}...`, {
@@ -196,154 +254,148 @@ export default function ClawDetail() {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
 
-              {/* Left: Main content — text-first layout (no media reserved) */}
+              {/* Left: Main content — content-first. The required fields carry
+                  the page (Category, Name, Publisher, Short Description as the
+                  hero line, then Full Description). Media is optional and only
+                  appears, below the fold, when the publisher provided one. */}
               <div className="lg:col-span-2" style={{ display: "flex", flexDirection: "column", gap: 24 }}>
 
-                {/* Header */}
-                <div>
-                  {/* Badges row */}
-                  <div className="flex items-center gap-2 mb-4 flex-wrap">
-                    {/* Infrastructure badge */}
+                {/* Identity panel — rounded card holding every required identity field
+                    (Category, Name, Publisher, Short Description) as one unit,
+                    so the page has a strong hero without needing any media. */}
+                <div
+                  style={{ border: "1px solid #262626", background: C.cardSolid, padding: "24px 26px", borderRadius: 10 }}
+                >
+                  {/* Category (+ Anthropic) — rounded pills */}
+                  <div className="flex items-center gap-2 flex-wrap" style={{ marginBottom: 18 }}>
                     <span
-                      className="inline-flex items-center gap-1.5 text-xs font-mono-gmi px-2.5 py-1"
+                      className="inline-flex items-center"
                       style={{
-                        background: badge.bg,
-                        color: badge.color,
-                        border: `1px solid ${badge.border}`,
-                      }}
-                      title={badge.tooltip}
-                    >
-                      <CheckCircle size={10} />
-                      {badge.label}
-                    </span>
-                    {/* Type label */}
-                    <span
-                      className="inline-flex items-center gap-1.5 text-xs font-mono-gmi px-2.5 py-1"
-                      style={{
-                        background: typeStyle.bg,
-                        color: typeStyle.color,
-                        border: `1px solid ${typeStyle.color}33`,
+                        gap: 6,
+                        fontFamily: FONT,
+                        fontSize: 12,
+                        fontWeight: 500,
+                        lineHeight: "16px",
+                        color: "#c4c4c4",
+                        background: "rgba(255,255,255,0.04)",
+                        border: "1px solid #303030",
+                        padding: "4px 10px",
+                        borderRadius: 6,
+                        whiteSpace: "nowrap",
                       }}
                     >
-                      <Tag size={10} />
+                      <span style={{ width: 7, height: 7, borderRadius: 2, background: typeColor, flexShrink: 0 }} />
                       {claw.typeLabel}
                     </span>
-                    {/* Built with Anthropic */}
-                    {claw.builtWithAnthropic && (
-                      <span
-                        className="inline-flex items-center gap-1.5 text-xs font-mono-gmi px-2.5 py-1"
-                        style={{
-                          background: "rgba(217,119,87,0.08)",
-                          color: "#d97757",
-                          border: "1px solid rgba(217,119,87,0.35)",
-                        }}
-                        title="Built with Anthropic — powered by Claude models"
-                      >
-                        <Tag size={10} />
-                        Built with Anthropic
-                      </span>
+                  </div>
+
+                  {/* Agent Name + verified check */}
+                  <div className="flex items-center gap-2.5 flex-wrap" style={{ marginBottom: 12 }}>
+                    <h1
+                      className="text-white"
+                      style={{
+                        fontFamily: FONT,
+                        fontSize: 32,
+                        fontWeight: 700,
+                        lineHeight: "38px",
+                        letterSpacing: "-0.025em",
+                      }}
+                    >
+                      {claw.name}
+                    </h1>
+                    {claw.infrastructurePath === "gmi_ce_maas" && (
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="#3b82f6" style={{ flexShrink: 0 }} aria-label="Verified" role="img">
+                        <title>{badge.tooltip}</title>
+                        <path d="M12 1l2.5 1.8 3-.4 1.2 2.8 2.8 1.2-.4 3L23 12l-1.8 2.5.4 3-2.8 1.2-1.2 2.8-3-.4L12 23l-2.5-1.8-3 .4-1.2-2.8L2.5 17.5l.4-3L1 12l1.9-2.5-.4-3 2.8-1.2L6.5 2.4l3 .4z" />
+                        <path d="M10.6 14.6l-2.2-2.2-1.4 1.4 3.6 3.6 6-6-1.4-1.4z" fill="#fff" />
+                      </svg>
                     )}
                   </div>
 
-                  <h1
-                    className="text-white mb-3"
+                  {/* Short Description — the hero tagline */}
+                  <p
                     style={{
-                      fontFamily: "'Geist', system-ui, sans-serif",
-                      fontSize: 24,
-                      fontWeight: 700,
-                      lineHeight: "30px",
-                      letterSpacing: "-0.02em",
+                      fontFamily: FONT,
+                      fontSize: 17,
+                      fontWeight: 400,
+                      lineHeight: "27px",
+                      color: "#c4c4c4",
+                      maxWidth: "58ch",
+                      margin: 0,
                     }}
                   >
-                    {claw.name}
-                  </h1>
+                    {claw.description}
+                  </p>
 
-                  <div className="flex items-center gap-2 font-mono-gmi text-sm text-gray-300">
-                    <span>by</span>
-                    <span className="text-gray-300">{claw.publisher}</span>
-                  </div>
-                </div>
+                  <div className="grid-line-h" style={{ margin: "22px 0" }} />
 
-                {/* Two-col band: prose (lead + optional long) | Details facts card.
-                    Both sides always carry content, so there's no empty half and
-                    no reserved image slot to leave a hole. */}
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "minmax(0, 1.6fr) minmax(0, 1fr)",
-                    gap: 24,
-                    alignItems: "start",
-                  }}
-                >
-                  {/* Prose — single substantial intro (richest text available),
-                      elevated to carry the visual weight in place of an image.
-                      Shown once so a superset fullDescription never repeats the
-                      opening sentences. */}
-                  <div style={{ minWidth: 0 }}>
-                    <p style={{
-                      fontFamily: "'Geist', system-ui, sans-serif",
-                      fontSize: 16, fontWeight: 400, lineHeight: "27px",
-                      color: "#e5e5e5", maxWidth: "62ch", margin: 0,
-                    }}>
-                      {fullDescription}
-                    </p>
-                  </div>
-
-                  {/* Details facts card — surfaces Pricing / Availability / Publisher
-                      and folds the old Infrastructure block into a caption. */}
-                  {(() => {
-                    const availLabel =
-                      claw.availability === "available" ? "Available" :
-                      claw.availability === "early_access" ? "Early access" : "Unavailable";
-                    const availColor =
-                      claw.availability === "available" ? "#DDEA4D" :
-                      claw.availability === "early_access" ? "#fb923c" : "#a3a3a3";
-                    const rows: { label: string; value: string; color: string }[] = [
-                      { label: "Pricing", value: claw.pricing, color: "#fafafa" },
-                      { label: "Availability", value: availLabel, color: availColor },
-                      { label: "Publisher", value: claw.publisher, color: "#fafafa" },
-                    ];
-                    return (
-                      <div style={{ background: "#0a0a0a", border: "1px solid #404040", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-                        <div style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: 13, fontWeight: 600, color: "#fafafa", lineHeight: "18px" }}>
-                          Details
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                          {rows.map((r) => (
-                            <div key={r.label} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
-                              <span style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: 12, color: "#a3a3a3", lineHeight: "18px" }}>{r.label}</span>
-                              <span style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: 13, fontWeight: 500, color: r.color, lineHeight: "18px", textAlign: "right" }}>{r.value}</span>
-                            </div>
-                          ))}
-                        </div>
-                        {/* Infrastructure — folded in as a caption */}
-                        <div style={{ borderTop: "1px solid #262626", paddingTop: 12, display: "flex", alignItems: "flex-start", gap: 8 }}>
-                          <span style={{ color: badge.color, display: "inline-flex", marginTop: 1, flexShrink: 0 }}><CheckCircle size={12} /></span>
-                          <div style={{ minWidth: 0 }}>
-                            <div className="font-mono-gmi" style={{ fontSize: 12, fontWeight: 700, color: badge.color, lineHeight: "16px" }}>{badge.label}</div>
-                            <div className="font-mono-gmi" style={{ fontSize: 11, color: "#a3a3a3", lineHeight: "16px", marginTop: 2 }}>{badge.tooltip}</div>
-                          </div>
-                        </div>
+                  {/* Datasheet meta — Publisher / Hosting */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                    <div>
+                      <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: "#8a8a8a", marginBottom: 8 }}>Publisher</div>
+                      <div className="flex items-center gap-2.5">
+                        <PublisherAvatar publisher={claw.publisher} color={typeColor} size={28} logoUrl={claw.logoUrl} />
+                        <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 500, color: "#e5e5e5", lineHeight: "18px" }}>
+                          {claw.publisher}
+                        </span>
                       </div>
-                    );
-                  })()}
+                    </div>
+                    <div>
+                      <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: "#8a8a8a", marginBottom: 8 }}>Hosting</div>
+                      <div className="flex items-center gap-2" style={{ minHeight: 28 }}>
+                        <span style={{ width: 7, height: 7, borderRadius: 2, flexShrink: 0, background: badge.color }} />
+                        <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 500, color: "#e5e5e5", lineHeight: "18px" }}>
+                          {badge.label}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
-                {/* Tags — full-width module */}
+                {/* About / Sample output / Tags — stacked in the main column so
+                    prose and images stay at a readable ~2/3 width, not full-bleed. */}
+                {about && (
+                  <div>
+                    <div style={{ fontFamily: FONT, fontSize: 18, fontWeight: 700, color: C.fg, letterSpacing: "-0.01em", marginBottom: 16 }}>
+                      About this Agent
+                    </div>
+                    <FullDescription text={about} />
+                    <a
+                      href={claw.docsUrl || `https://docs.gmicloud.ai/agents/${claw.id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5"
+                      style={{ marginTop: 20, fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.lime, textDecoration: "none" }}
+                    >
+                      View documentation
+                      <ExternalLink size={13} />
+                    </a>
+                  </div>
+                )}
+
+                {claw.sampleImages && claw.sampleImages.length > 0 && (
+                  <div>
+                    <div style={{ fontFamily: FONT, fontSize: 18, fontWeight: 700, color: C.fg, letterSpacing: "-0.01em", marginBottom: 16 }}>
+                      Sample output
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: claw.sampleImages.length > 1 ? "repeat(auto-fit, minmax(280px, 1fr))" : "1fr", gap: 16 }}>
+                      {claw.sampleImages.slice(0, 5).map((src, i) => (
+                        <div key={i} style={{ border: "1px solid #262626", background: C.bg, overflow: "hidden", borderRadius: 10 }}>
+                          <img src={src} alt={`${claw.name} sample output ${i + 1}`} loading="lazy" style={{ display: "block", width: "100%", height: "auto" }} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {claw.tags.length > 0 && (
                   <div>
-                    <div style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: 14, fontWeight: 600, color: "#fafafa", lineHeight: "20px", marginBottom: 10 }}>
+                    <div style={{ fontFamily: FONT, fontSize: 18, fontWeight: 700, color: C.fg, letterSpacing: "-0.01em", marginBottom: 14 }}>
                       Tags
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {claw.tags.map((tag) => (
-                        <span
-                          key={tag}
-                          className="text-xs font-mono-gmi px-2.5 py-1 text-gray-300"
-                          style={{ border: "1px solid #404040" }}
-                        >
-                          {tag}
-                        </span>
+                      {claw.tags.map((t) => (
+                        <TagChip key={t} label={t} />
                       ))}
                     </div>
                   </div>
@@ -351,121 +403,139 @@ export default function ClawDetail() {
 
               </div>
 
-              {/* Right: Pricing + CTA panel */}
+              {/* Right: sticky deploy + guarantees panel */}
               <div className="lg:col-span-1">
-                <div
-                  className="sticky top-24 p-6 space-y-6"
-                  style={{ background: "#0a0a0a", border: "1px solid #1e1e1e" }}
-                >
-                  {/* Availability status */}
-                  <div className="flex items-center gap-2 font-mono-gmi text-xs">
-                    {claw.availability === "available" && (
-                      <>
-                        <div className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "#DDEA4D" }} />
-                        <span style={{ color: "#DDEA4D" }}>Available</span>
-                      </>
-                    )}
-                    {claw.availability === "early_access" && (
-                      <>
-                        <div className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "#fb923c" }} />
-                        <span style={{ color: "#fb923c" }}>Early Access</span>
-                      </>
-                    )}
-                    {claw.availability === "unavailable" && (
-                      <>
-                        <div className="w-1.5 h-1.5 rounded-full" style={{ background: "#999" }} />
-                        <span className="text-[#a3a3a3]">Unavailable</span>
-                      </>
-                    )}
-                  </div>
+                <div className="sticky top-24" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
-                  {/* CTA — fork template into Register & List wizard */}
+                  {/* CTA — exactly ONE action, DERIVED from the linked template
+                      (not a manual choice): a template with secret/env fields or
+                      a private registry can't be cloned → "Try demo"; a clean,
+                      publishable template → "Deploy your own". */}
                   {claw.availability === "available" && (() => {
-                    const pullState = mockImagePullState(claw.id);
-                    const canClone = pullState !== "missing";
+                    const isDemo = !!(claw.templateHasSecrets || claw.templateSecretRegistry);
+                    if (isDemo) {
+                      const demoHref = claw.demoVideoUrl || claw.docsUrl || `https://docs.gmicloud.ai/agents/${claw.id}`;
+                      return (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                          <a
+                            href={demoHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="w-full flex items-center justify-center gap-2 transition-colors"
+                            style={{
+                              padding: "13px 16px",
+                              fontFamily: FONT,
+                              fontSize: 14, fontWeight: 600,
+                              borderRadius: 10,
+                              textDecoration: "none",
+                              background: C.lime,
+                              color: "#000000",
+                              border: `1px solid ${C.lime}`,
+                              cursor: "pointer",
+                            }}
+                            onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.background = "#c8d63a"; }}
+                            onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.background = C.lime; }}
+                          >
+                            Try demo
+                            <ExternalLink size={13} />
+                          </a>
+                          <p style={{ fontFamily: FONT, fontSize: 12, lineHeight: "17px", color: "#8a8a8a", margin: 0 }}>
+                            This template uses a private image / secrets, so it can't be cloned — opens the publisher's demo in a new tab.
+                          </p>
+                        </div>
+                      );
+                    }
                     return (
-                      <div className="space-y-3">
-                        <ImagePullStatus state={pullState} />
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                         <button
-                          disabled={!canClone}
-                          onClick={() => canClone && setLocation(`/deploy?use=${claw.id}`)}
-                          className="w-full py-3 font-bold text-sm flex items-center justify-center gap-2 transition-all"
+                          onClick={() => setLocation(`/deploy?use=${claw.id}`)}
+                          className="w-full flex items-center justify-center gap-2 transition-colors"
                           style={{
-                            background: canClone ? "#DDEA4D" : "#404040",
-                            color: canClone ? "#000000" : "#666",
-                            cursor: canClone ? "pointer" : "not-allowed",
+                            padding: "13px 16px",
+                            fontFamily: FONT,
+                            fontSize: 14, fontWeight: 600,
+                            borderRadius: 10,
+                            background: C.lime, color: "#000000", border: "1px solid #DDEA4D", cursor: "pointer",
                           }}
-                          onMouseEnter={(e) => { if (canClone) (e.currentTarget as HTMLButtonElement).style.background = "#e8f060"; }}
-                          onMouseLeave={(e) => { if (canClone) (e.currentTarget as HTMLButtonElement).style.background = "#DDEA4D"; }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#c8d63a"; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = C.lime; }}
                         >
-                          <Copy size={13} />
-                          {pullState === "private" ? "Try demo ↗" : "Deploy your own ↗"}
+                          Deploy your own
+                          <ExternalLink size={13} />
                         </button>
-                        <p className="text-xs text-[#a3a3a3] font-mono-gmi text-center mt-1">
-                          {pullState === "public"
-                            ? "Opens Register & List pre-filled with image, env declarations, and ports. You bring your own GMI key + billing."
-                            : pullState === "private"
-                              ? "Image is publisher-only — uses the publisher's running instance + their billing."
-                              : "Listing is broken; cloning is blocked until fixed."}
+                        <p style={{ fontFamily: FONT, fontSize: 12, lineHeight: "17px", color: "#8a8a8a", margin: 0 }}>
+                          Opens the deploy wizard with this template — bring your own GMI key.
                         </p>
                       </div>
                     );
                   })()}
 
                   {claw.availability === "early_access" && (
-                    <div className="space-y-3">
-                      <button
-                        onClick={handleEarlyAccess}
-                        className="w-full py-3 font-bold text-sm flex items-center justify-center gap-2 transition-all"
-                        style={{ border: "1px solid #fb923c", color: "#fb923c", background: "transparent" }}
-                        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(251,146,60,0.08)"; }}
-                        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
-                      >
-                        <Clock size={14} />
-                        Request Early Access
-                      </button>
-                      <p className="text-xs text-gray-300 font-mono-gmi text-center">
-                        Limited beta. Join the waitlist to be notified when access opens.
-                      </p>
-                    </div>
+                    <button
+                      onClick={handleEarlyAccess}
+                      className="w-full flex items-center justify-center gap-2 transition-colors"
+                      style={{
+                        padding: "13px 16px",
+                        fontFamily: FONT,
+                        fontSize: 14, fontWeight: 600, borderRadius: 10,
+                        border: "1px solid #fb923c", color: "#fb923c", background: "transparent",
+                      }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(251,146,60,0.08)"; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+                    >
+                      <Clock size={14} />
+                      Request early access
+                    </button>
                   )}
 
                   {claw.availability === "unavailable" && (
-                    <div>
-                      <div
-                        className="w-full py-3 text-sm flex items-center justify-center gap-2 cursor-not-allowed"
-                        style={{ background: "#111", color: "#999", border: "1px solid #404040" }}
-                      >
-                        <AlertCircle size={14} />
-                        Unavailable
-                      </div>
-                      <p className="text-xs text-gray-300 font-mono-gmi mt-2 text-center">
-                        This Claw is not currently accepting new users.
-                      </p>
+                    <div
+                      className="w-full flex items-center justify-center gap-2 cursor-not-allowed"
+                      style={{
+                        padding: "13px 16px",
+                        fontFamily: FONT,
+                        fontSize: 14, fontWeight: 600, borderRadius: 10,
+                        background: "#111", color: "#666", border: "1px solid #333",
+                      }}
+                    >
+                      <AlertCircle size={14} />
+                      Unavailable
                     </div>
                   )}
 
-                  {/* Trust info */}
-                  <div style={{ borderTop: "1px solid #1e1e1e" }} />
-                  <div className="space-y-2">
-                    <div className="flex items-start gap-2 text-xs text-[#a3a3a3] font-mono-gmi">
-                      <CheckCircle size={12} className="shrink-0 mt-0.5" style={{ color: badge.color }} />
-                      <span>{badge.tooltip}</span>
+                  {/* Trust card */}
+                  <div
+                    style={{
+                      background: C.cardSolid,
+                      border: "1px solid #262626",
+                      padding: "16px 18px",
+                      borderRadius: 10,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 12,
+                    }}
+                  >
+                    <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: "#8a8a8a" }}>Guarantees</div>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                      <CheckCircle size={14} className="shrink-0" style={{ color: C.lime, marginTop: 1 }} />
+                      <span style={{ fontFamily: FONT, fontSize: 13, color: "#c4c4c4", lineHeight: "19px" }}>
+                        {badge.tooltip}
+                      </span>
                     </div>
-                    <div className="flex items-start gap-2 text-xs text-[#a3a3a3] font-mono-gmi">
-                      <CheckCircle size={12} className="shrink-0 mt-0.5 text-gray-300" />
-                      <span>Browser-based. No SDK, API key, or installation required.</span>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                      <CheckCircle size={14} className="shrink-0" style={{ color: C.lime, marginTop: 1 }} />
+                      <span style={{ fontFamily: FONT, fontSize: 13, color: "#c4c4c4", lineHeight: "19px" }}>
+                        Browser-based. No SDK, API key, or installation required.
+                      </span>
                     </div>
-
                   </div>
                 </div>
               </div>
 
             </div>
+
           </div>
         </div>
-
-        <Footer />
       </div>
     </div>
   );

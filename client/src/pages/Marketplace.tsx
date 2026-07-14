@@ -4,50 +4,26 @@ import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
 import CopyButton from "@/components/CopyButton";
-import { ALL_CLAWS, TYPE_LABELS, ANTHROPIC_LABEL, getBadgeConfig, type Claw, type TypeLabel } from "@/lib/clawData";
+import { ALL_CLAWS, TYPE_LABELS, getBadgeConfig, type Claw, type TypeLabel } from "@/lib/clawData";
+import { C as baseC, FONT, TYPE_COLOR } from "@/lib/tokens";
 
-// ─── Design tokens — extracted verbatim from Figma JSON ──────────────────────
-// Geist Sans across the board. Mono only inside the terminal block.
-const FONT      = "'Geist', system-ui, sans-serif";
+// ─── Design tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const FONT_MONO = "'GeistMono', ui-monospace, 'SFMono-Regular', monospace";
-
-// Colors (lab/oklab from Figma → sRGB hex)
 const C = {
-  bg:        "#0a0a0a",                  // lab(2.75 0 0)
-  fg:        "#fafafa",                  // lab(98.26 0 0)
-  muted:     "#a3a3a3",                  // lab(66.13 …) — neutral-400
+  ...baseC,
   mutedSoft: "rgba(250,250,250,0.7)",    // sidebar section labels
-  border:    "#404040",                  // rgb(64,64,64) — neutral-700
-  borderSoft:"#262626",                  // neutral-800
-  card:      "rgba(23,23,23,0.6)",       // ~ neutral-900 / 60
-  cardSolid: "#171717",                  // neutral-900
-  pillBg:    "rgba(82,82,82,0.3)",       // search/input chrome
+  card:      "rgba(23,23,23,0.6)",       // ~ neutral-900 / 60 (page-specific)
   activeBg:  "rgba(255,255,255,0.12)",   // active filter pill
-  lime:      "#DDEA4D",                  // accent — GMI lime
-  limeText:  "#0a0a0a",
-  // Category accent (purple from "Da" avatar in Figma): lab(76.74 18.39 -37.07)
-  catAccent: "#c7a7ff",
-} as const;
+  catAccent: "#c7a7ff",                  // category accent avatar bg
+};
 
 // One real command: turns GMI Cloud into a provider inside an existing OpenClaw setup.
 const OPENCLAW_INSTALL_CMD = "openclaw plugins install clawhub:openclaw-gmicloud-provider";
 
-// "All" + functional categories, then the curated Anthropic filter pinned at the end.
-type FilterKey = TypeLabel | "All" | typeof ANTHROPIC_LABEL;
-const ALL_TYPES: FilterKey[] = ["All", ...TYPE_LABELS, ANTHROPIC_LABEL];
+// "All" + the functional categories.
+type FilterKey = TypeLabel | "All";
+const ALL_TYPES: FilterKey[] = ["All", ...TYPE_LABELS];
 
-// Anthropic brand accent (clay / terracotta).
-const ANTHROPIC_COLOR = "#d97757";
-
-// Subtle per-category accent. Avatar bg uses 12% alpha of the same.
-// Matched to production: Code & Dev Tools = purple, Content & Marketing = green
-const TYPE_COLOR: Record<TypeLabel, string> = {
-  "Code & Dev Tools":     "#c7a7ff", // violet/purple
-  "Data & Analytics":     C.lime,
-  "Customer Support":     "#7dd3fc", // sky-300
-  "Content & Marketing":  "#86efac", // green-300
-  "Research & Knowledge": "#f9a8d4", // pink-300
-};
 
 // ─── Icons (1.5-stroke lucide-style) ─────────────────────────────────────────
 const IconSearch = ({ size = 14 }: { size?: number }) => (
@@ -125,34 +101,6 @@ function CategoryTag({ type }: { type: TypeLabel }) {
   );
 }
 
-// Anthropic-style radial burst mark (clay), used to brand the tab / banner / tag.
-const AnthropicMark = ({ size = 14 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round">
-    <path d="M12 3v4.5M12 16.5V21M3 12h4.5M16.5 12H21M5.64 5.64l3.18 3.18M15.18 15.18l3.18 3.18M18.36 5.64l-3.18 3.18M8.82 15.18l-3.18 3.18" />
-  </svg>
-);
-
-function AnthropicTag() {
-  return (
-    <span
-      title="Built with Anthropic — runs on Claude models"
-      style={{
-        display: "inline-flex", alignItems: "center", gap: 5,
-        fontFamily: FONT, fontSize: 11, fontWeight: 600, lineHeight: "16px",
-        color: ANTHROPIC_COLOR,
-        background: "rgba(217,119,87,0.10)",
-        border: `1px solid rgba(217,119,87,0.40)`,
-        padding: "2px 8px",
-        borderRadius: 4,
-        whiteSpace: "nowrap",
-        alignSelf: "flex-start",
-      }}
-    >
-      <AnthropicMark size={11} />
-      Built with Anthropic
-    </span>
-  );
-}
 
 function Avatar({ publisher, color }: { publisher: string; color: string }) {
   const initials = publisher.replace(/[^a-zA-Z0-9]/g, "").slice(0, 2);
@@ -281,10 +229,9 @@ function AgentCard({ claw }: { claw: Claw }) {
         {claw.description}
       </p>
 
-      {/* Category chip (+ Anthropic tag) — anchored at the bottom of the card */}
+      {/* Category chip — anchored at the bottom of the card */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
         <CategoryTag type={claw.typeLabel} />
-        {claw.builtWithAnthropic && <AnthropicTag />}
       </div>
     </div>
   );
@@ -304,8 +251,7 @@ export default function Marketplace() {
         c.description.toLowerCase().includes(q) ||
         c.tags.some((t) => t.toLowerCase().includes(q));
       const matchesType =
-        activeType === "All" ||
-        (activeType === ANTHROPIC_LABEL ? !!c.builtWithAnthropic : c.typeLabel === activeType);
+        activeType === "All" || c.typeLabel === activeType;
       const matchesTrust = !verifiedOnly || c.infrastructurePath === "gmi_ce_maas";
       return matchesSearch && matchesType && matchesTrust;
     })
@@ -448,34 +394,6 @@ export default function Marketplace() {
               {ALL_TYPES.map((type) => {
                 const isActive = activeType === type;
 
-                // Curated Anthropic filter — set apart from the functional
-                // category tabs with a divider, the clay brand accent + mark.
-                if (type === ANTHROPIC_LABEL) {
-                  return (
-                    <div key={type} style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ width: 1, height: 20, background: C.border, borderRadius: 1 }} />
-                      <button
-                        onClick={() => setActiveType(type)}
-                        style={{
-                          display: "inline-flex", alignItems: "center", gap: 6,
-                          fontFamily: FONT, fontSize: 14, fontWeight: 600, lineHeight: "20px",
-                          background: isActive ? "rgba(217,119,87,0.14)" : "rgba(217,119,87,0.05)",
-                          color: isActive ? ANTHROPIC_COLOR : "rgba(217,119,87,0.82)",
-                          border: `1px solid ${isActive ? "rgba(217,119,87,0.55)" : "rgba(217,119,87,0.28)"}`,
-                          boxShadow: isActive ? "0 0 0 3px rgba(217,119,87,0.10)" : "none",
-                          padding: "6px 12px",
-                          borderRadius: 6,
-                          cursor: "pointer",
-                          transition: "background .15s ease, color .15s ease, border-color .15s ease, box-shadow .15s ease",
-                        }}
-                      >
-                        <AnthropicMark size={13} />
-                        {type}
-                      </button>
-                    </div>
-                  );
-                }
-
                 return (
                   <button
                     key={type}
@@ -546,53 +464,6 @@ export default function Marketplace() {
 
         {/* ── Catalog grid ───────────────────────────────────────────────── */}
         <section style={{ padding: "12px 32px 32px" }}>
-          {/* Curated Anthropic专区 header — only when the filter is active */}
-          {activeType === ANTHROPIC_LABEL && (
-            <div
-              style={{
-                display: "flex", alignItems: "center", gap: 16,
-                background: "linear-gradient(90deg, rgba(217,119,87,0.12), rgba(217,119,87,0.02))",
-                border: "1px solid rgba(217,119,87,0.30)",
-                borderRadius: 12,
-                padding: "16px 18px",
-                marginBottom: 18,
-              }}
-            >
-              <div
-                style={{
-                  width: 42, height: 42, borderRadius: 11, flexShrink: 0,
-                  background: "rgba(217,119,87,0.14)",
-                  border: "1px solid rgba(217,119,87,0.45)",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  color: ANTHROPIC_COLOR,
-                }}
-              >
-                <AnthropicMark size={22} />
-              </div>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  <span style={{ fontFamily: FONT, fontSize: 17, fontWeight: 700, color: C.fg, letterSpacing: "-0.01em" }}>
-                    Agents built with Anthropic
-                  </span>
-                  <span
-                    style={{
-                      fontFamily: FONT, fontSize: 11, fontWeight: 600, lineHeight: "16px",
-                      color: ANTHROPIC_COLOR,
-                      background: "rgba(217,119,87,0.12)",
-                      border: "1px solid rgba(217,119,87,0.40)",
-                      padding: "1px 8px", borderRadius: 999,
-                    }}
-                  >
-                    {filtered.length} agents
-                  </span>
-                </div>
-                <div style={{ fontFamily: FONT, fontSize: 13, fontWeight: 400, lineHeight: "18px", color: C.muted, marginTop: 4 }}>
-                  Enterprise-grade agents running on Claude — built for compliance, security, and long-context reasoning.
-                </div>
-              </div>
-            </div>
-          )}
-
           {filtered.length === 0 ? (
             <div style={{ textAlign: "center", padding: "64px 0", fontFamily: FONT }}>
               <div style={{ fontSize: 14, fontWeight: 500, color: C.fg, marginBottom: 6 }}>No agents found</div>

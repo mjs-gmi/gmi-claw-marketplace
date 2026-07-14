@@ -55,10 +55,6 @@ export const TYPE_LABELS: TypeLabel[] = [
   "Research & Knowledge",
 ];
 
-// Special curated filter — a cross-category dimension, not a functional type.
-// An agent can belong to any TypeLabel *and* be built with Anthropic.
-export const ANTHROPIC_LABEL = "Agent built with Anthropic" as const;
-
 export interface Claw {
   id: string;
   name: string;
@@ -69,10 +65,21 @@ export interface Claw {
   infrastructurePath: InfrastructurePath;
   availability: Availability;
   pricing: string;
-  // Curated flag: agent is built with Anthropic models (Claude).
-  // When true, it appears under the "Agent built with Anthropic" filter
-  // and carries the Anthropic tag on its card.
+  // Retained data flag (agent runs on Claude models). No longer rendered in
+  // the UI — kept for possible future use / filtering.
   builtWithAnthropic?: boolean;
+  // ── Optional listing fields, one-to-one with the Register & List form ──
+  logoUrl?: string;          // Logo (optional) — square ≥256px
+  sampleImages?: string[];   // Sample Output (optional) — up to 5 PNG/JPG
+  demoVideoUrl?: string;     // Demo Video URL (optional) — external
+  docsUrl?: string;          // Documentation Link (optional) — external
+
+  // ── Listing type is DERIVED from the linked template at publish time (NOT a
+  //    manual choice). A template that declares secret/env fields, or whose
+  //    image registry is private/secret, can't be cloned by others → it lists
+  //    as "Try demo". A clean, publishable template lists as "Deploy your own".
+  templateHasSecrets?: boolean;      // template declares secret / env fields
+  templateSecretRegistry?: boolean;  // template image lives in a private registry
 }
 
 export const ALL_CLAWS: Claw[] = [
@@ -98,6 +105,8 @@ export const ALL_CLAWS: Claw[] = [
     availability: "available",
     pricing: "Free",
     builtWithAnthropic: true,
+    sampleImages: ["/demos/code-review.svg"],
+    docsUrl: "https://docs.gmicloud.ai/agents/code-review",
   },
   {
     id: "enterprise-rag-pipeline",
@@ -110,6 +119,7 @@ export const ALL_CLAWS: Claw[] = [
     availability: "available",
     pricing: "Free",
     builtWithAnthropic: true,
+    templateSecretRegistry: true, // private image → lists as Try demo
   },
   {
     id: "model-benchmark-suite",
