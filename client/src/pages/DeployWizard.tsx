@@ -70,23 +70,23 @@ function persistRegisteredAgent(agent: RegisteredAgent) {
 // ─── Mock infra catalog ──────────────────────────────────────────────────
 interface Region { id: string; name: string; sub: string; popular?: boolean }
 const REGIONS: Region[] = [
-  { id: "us-ia-iowa-1",   name: "US Iowa data center", sub: "Iowa, USA",    popular: true },
-  { id: "us-or-portland", name: "Portland IDC-1",  sub: "US-OR, US" },
-  { id: "eu-de-frankfurt",name: "Frankfurt IDC-1", sub: "DE-HE, Germany" },
-  { id: "ap-sg-singapore",name: "Singapore IDC-1", sub: "SG, Singapore" },
+  { id: "us-ia-iowa-1",   name: "IOWA IDC-1",      sub: "US-IA · US",     popular: true },
+  { id: "us-or-portland", name: "Portland IDC-1",  sub: "US-OR · US" },
+  { id: "eu-de-frankfurt",name: "Frankfurt IDC-1", sub: "DE-HE · Germany" },
+  { id: "ap-sg-singapore",name: "Singapore IDC-1", sub: "SG · Singapore" },
 ];
 
 interface ComputeTier {
   id: string; name: string; sub: string;
-  cpu: string; ram: string; pricePerHr: number;
+  cpu: string; ram: string; storage: string; pricePerHr: number;
 }
 const COMPUTE_TIERS: ComputeTier[] = [
   { id: "container", name: "Container", sub: "Instance type for the Agentbox marketplace",
-    cpu: "2 vCPU", ram: "4 GB", pricePerHr: 0.0475 },
+    cpu: "0.5 Core CPU", ram: "800 MiB Memory", storage: "10 GiB OS Storage (Ephemeral)", pricePerHr: 0.0098 },
   { id: "standard",  name: "Standard",  sub: "Most production agents",
-    cpu: "4 vCPU", ram: "8 GB", pricePerHr: 0.094 },
+    cpu: "4 Core CPU", ram: "8 GiB Memory", storage: "40 GiB OS Storage", pricePerHr: 0.094 },
   { id: "performance", name: "Performance", sub: "High-throughput agents",
-    cpu: "8 vCPU", ram: "16 GB", pricePerHr: 0.182 },
+    cpu: "8 Core CPU", ram: "16 GiB Memory", storage: "80 GiB OS Storage", pricePerHr: 0.182 },
 ];
 
 interface ModelSpec {
@@ -270,6 +270,68 @@ function FieldLabel({ children, required }: { children: React.ReactNode; require
     <label style={{ fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px", color: C.fg }}>
       {children}{required && <span style={{ color: C.lime, marginLeft: 2 }}>*</span>}
     </label>
+  );
+}
+
+// Labeled "key · value" summary chip used in collapsed section rows.
+// Matches the production console: muted label + bold value inside one pill.
+function SpecChip({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex", alignItems: "baseline", gap: 6,
+        background: "rgba(255,255,255,0.03)",
+        border: `1px solid ${C.border}`,
+        borderRadius: 6,
+        padding: "4px 10px",
+        fontFamily: FONT, fontSize: 12, lineHeight: "16px",
+        maxWidth: "100%",
+      }}
+    >
+      <span style={{ color: C.muted, flexShrink: 0 }}>{label}</span>
+      <span style={{ color: C.fg, fontWeight: 600, fontFamily: mono ? MONO : FONT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {value}
+      </span>
+    </span>
+  );
+}
+
+// Lime "Customize →" affordance shown on the right of each collapsed section.
+function CustomizeLink({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        flexShrink: 0,
+        display: "inline-flex", alignItems: "center", gap: 4,
+        fontFamily: FONT, fontSize: 12, fontWeight: 600,
+        background: "transparent", color: C.lime,
+        border: "none", padding: 0, cursor: "pointer",
+      }}
+    >
+      Customize
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 5l7 7-7 7" /></svg>
+    </button>
+  );
+}
+
+// Shared shell for a collapsed section: chips on the left, Customize on the right.
+function CollapsedRow({ children, onCustomize }: { children: React.ReactNode; onCustomize: () => void }) {
+  return (
+    <div
+      style={{
+        background: C.card,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: "12px 16px",
+        display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12,
+      }}
+    >
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, flex: 1, minWidth: 0 }}>
+        {children}
+      </div>
+      <CustomizeLink onClick={onCustomize} />
+    </div>
   );
 }
 
@@ -685,8 +747,9 @@ function SectionHeader({
         style={{
           width: 22, height: 22,
           borderRadius: 6,
-          background: C.lime,
-          color: C.limeText,
+          background: "transparent",
+          color: C.lime,
+          border: `1px solid ${C.lime}`,
           display: "inline-flex", alignItems: "center", justifyContent: "center",
           fontFamily: FONT, fontSize: 12, fontWeight: 700, lineHeight: "16px",
           flexShrink: 0,
@@ -703,8 +766,7 @@ function SectionHeader({
 
 // ─── Right sticky panel — cost + Register CTA (single-page mode) ──────────
 function RegisterPanel({
-  computeRate, canRegister, onCancel, onRegister, ctaLabel = "Register Agent", hideComputeCost = false,
-  maxLifetime, idleTimeout,
+  computeRate, canRegister, onCancel, onRegister, ctaLabel = "Register", hideComputeCost = false,
 }: {
   computeRate: number;
   canRegister: boolean;
@@ -712,80 +774,87 @@ function RegisterPanel({
   onRegister: () => void;
   ctaLabel?: string;
   hideComputeCost?: boolean;
-  maxLifetime?: string;
-  idleTimeout?: string;
 }) {
   return (
-    <aside style={{ display: "flex", flexDirection: "column", gap: 8, position: "sticky", top: 48 }}>
-      {!hideComputeCost && (
-        <div
-          style={{
-            background: C.card,
-            border: `1px solid ${C.border}`,
-            borderRadius: 8,
-            padding: "10px 14px",
-            display: "flex", flexDirection: "column", gap: 2,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-            <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>Live Cost</span>
-            <span style={{ fontFamily: FONT, fontSize: 20, fontWeight: 700, lineHeight: "24px", color: C.fg, letterSpacing: "-0.02em" }}>
-              ${computeRate.toFixed(4)}<span style={{ fontSize: 12, fontWeight: 500, color: C.muted }}>/hr</span>
-            </span>
-          </div>
-          <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>Container · per active instance · MaaS pay-per-token</div>
+    <aside style={{ display: "flex", flexDirection: "column", gap: 12, position: "sticky", top: 56 }}>
+      {/* Live Cost Estimate */}
+      <div
+        style={{
+          background: C.card,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          padding: "18px 20px",
+          display: "flex", flexDirection: "column", gap: 6,
+        }}
+      >
+        <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Live Cost Estimate</div>
+        {hideComputeCost ? (
+          <>
+            <div style={{ fontFamily: FONT, fontSize: 22, fontWeight: 700, lineHeight: "28px", color: C.fg, letterSpacing: "-0.02em" }}>You own compute</div>
+            <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>GMI hosts nothing — you run the Agent on your own infrastructure.</div>
+          </>
+        ) : (
+          <>
+            <div style={{ fontFamily: FONT, fontSize: 30, fontWeight: 700, lineHeight: "36px", color: C.fg, letterSpacing: "-0.02em" }}>
+              ${computeRate.toFixed(4)}<span style={{ fontSize: 16, fontWeight: 500, color: C.muted }}>/hr</span>
+            </div>
+            <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>Container tier · per active instance</div>
+          </>
+        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, paddingTop: 10, borderTop: `1px solid ${C.borderSoft}` }}>
+          <span style={{ width: 6, height: 6, background: C.muted, borderRadius: 2 }} />
+          <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted }}>MaaS: pay per token used</span>
         </div>
-      )}
+      </div>
 
+      {/* Tip */}
       <div
         style={{
           background: C.cardSolid,
           border: `1px solid ${C.border}`,
-          borderRadius: 8,
-          padding: "8px 12px",
-          fontFamily: FONT, fontSize: 11, fontWeight: 400, color: C.muted, lineHeight: "14px",
-          display: "flex", gap: 6, alignItems: "flex-start",
+          borderRadius: 10,
+          padding: "12px 14px",
+          fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px",
+          display: "flex", gap: 8, alignItems: "flex-start",
         }}
       >
-        <span style={{ color: C.muted, marginTop: 1 }}><IconInfo size={11} /></span>
+        <span style={{ color: C.muted, marginTop: 1, flexShrink: 0 }}><IconInfo size={12} /></span>
         <span>
           {hideComputeCost
-            ? <><span style={{ color: C.fg, fontWeight: 600 }}>Connect with GMI</span> — you own compute & uptime. GMI auto-checks URL + key, then lists.</>
-            : <><span style={{ color: C.fg, fontWeight: 600 }}>Registered, not yet listed</span> — list publicly later from Dashboard.</>
+            ? <><span style={{ color: C.fg, fontWeight: 600 }}>Connect with GMI</span> — GMI auto-checks your access URL + key, then lists it. You own uptime.</>
+            : <><span style={{ color: C.fg, fontWeight: 600 }}>Tip</span> — Standard tier covers most production agents. Bump to Performance only if you regularly hit CPU saturation or need 25 Gbps egress.</>
           }
         </span>
       </div>
 
-      <button
-        onClick={onRegister}
-        disabled={!canRegister}
-        style={{
-          width: "100%",
-          fontFamily: FONT, fontSize: 13, fontWeight: 600, lineHeight: "18px",
-          background: canRegister ? C.lime : "#3a3a1f",
-          color: canRegister ? C.limeText : "#666",
-          border: "none",
-          padding: "8px 14px",
-          borderRadius: 8,
-          cursor: canRegister ? "pointer" : "not-allowed",
-        }}
-      >
-        {ctaLabel}
-      </button>
-      <button
-        onClick={onCancel}
-        style={{
-          width: "100%",
-          fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
-          background: "transparent",
-          color: C.muted,
-          border: "none",
-          padding: "2px 0",
-          cursor: "pointer",
-        }}
-      >
-        Cancel
-      </button>
+      {/* Cancel + Register */}
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button
+          onClick={onCancel}
+          style={{
+            fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
+            background: "transparent", color: C.fg,
+            border: `1px solid ${C.border}`,
+            padding: "8px 18px", borderRadius: 8, cursor: "pointer",
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          onClick={onRegister}
+          disabled={!canRegister}
+          style={{
+            fontFamily: FONT, fontSize: 14, fontWeight: 600, lineHeight: "20px",
+            background: canRegister ? C.lime : "#3a3a1f",
+            color: canRegister ? C.limeText : "#666",
+            border: "none",
+            padding: "8px 18px", borderRadius: 8,
+            cursor: canRegister ? "pointer" : "not-allowed",
+          }}
+        >
+          {ctaLabel}
+        </button>
+      </div>
     </aside>
   );
 }
@@ -842,9 +911,9 @@ function StepBasics({
           <a
             href="#"
             onClick={(e) => e.preventDefault()}
-            style={{ color: C.link, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 3, marginLeft: "auto" }}
+            style={{ color: C.lime, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 3, marginLeft: "auto" }}
           >
-            Setup guide
+            View setup guide
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M5 12h14M13 5l7 7-7 7"/>
             </svg>
@@ -903,60 +972,28 @@ function StepInfrastructure({
     maxLifetime   === "1h" &&
     idleTimeout   === "5min" &&
     addModels     === true &&
-    selectedModel === "";
+    selectedModel === "deepseek-v4-flash";
   const [userExpanded, setUserExpanded] = useState(false);
   const collapsed = !userExpanded && (allDefault || forkedFromTemplate);
 
   if (collapsed) {
-    const imageChip = dockerImage.trim().length === 0
-      ? "Image required"
-      : dockerImage.length > 28 ? dockerImage.slice(0, 26) + "…" : dockerImage;
-    const chips: string[] = forkedFromTemplate
-      ? ["Pre-filled from template"]
-      : [
-          imageChip,
-          "Compute size",
-          "US Iowa",
-          "GMI Models on",
-        ];
+    const tier = COMPUTE_TIERS.find((t) => t.id === computeTier);
+    const reg = REGIONS.find((r) => r.id === region);
+    const model = MODELS.find((m) => m.id === selectedModel);
     return (
-      <div
-        style={{
-          background: C.card,
-          border: `1px solid ${C.border}`,
-          borderRadius: 10,
-          padding: "12px 16px",
-          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-        }}
-      >
-        {chips.map((c) => (
-          <span
-            key={c}
-            style={{
-              fontFamily: FONT, fontSize: 11, fontWeight: 500, lineHeight: "14px",
-              color: C.fg,
-              background: "rgba(255,255,255,0.04)",
-              border: `1px solid ${C.border}`,
-              padding: "1px 8px",
-              borderRadius: 999,
-            }}
-          >
-            {c}
-          </span>
-        ))}
-        <button
-          onClick={() => setUserExpanded(true)}
-          style={{
-            marginLeft: "auto",
-            display: "inline-flex", alignItems: "center", gap: 3,
-            fontFamily: FONT, fontSize: 11, fontWeight: 500,
-            background: "transparent", color: C.muted,
-            border: "none", padding: 0, cursor: "pointer",
-          }}
-        >
-          Customize <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 5l7 7-7 7" /></svg>
-        </button>
-      </div>
+      <CollapsedRow onCustomize={() => setUserExpanded(true)}>
+        {forkedFromTemplate ? (
+          <SpecChip label="Template" value="Pre-filled" />
+        ) : (
+          <>
+            <SpecChip label="Docker Image" value={dockerImage.trim() || "Not set"} mono={!!dockerImage.trim()} />
+            <SpecChip label="Registry Credentials" value={enableCreds ? "Configured" : "Public image"} />
+            <SpecChip label="Compute Tier" value={tier ? `${tier.name} · ${tier.cpu} · ${tier.ram} · ${tier.storage}` : "—"} />
+            <SpecChip label="Data Center Region" value={reg ? `${reg.name} · ${reg.sub}` : "—"} />
+            <SpecChip label="MaaS" value={addModels ? (model ? model.name : "Not selected") : "Off"} />
+          </>
+        )}
+      </CollapsedRow>
     );
   }
 
@@ -969,7 +1006,7 @@ function StepInfrastructure({
     setMaxLifetime("1h");
     setIdleTimeout("5min");
     setAddModels(true);
-    setSelectedModel("");
+    setSelectedModel("deepseek-v4-flash");
     setUserExpanded(false);
   };
 
@@ -1259,47 +1296,15 @@ function StepNetworking({
   };
 
   if (collapsed) {
-    const chipLabels = forkedFromTemplate
-      ? ["Pre-filled from template"]
-      : ["Public URL provided", "HTTPS/2 :8080 (web)"];
+    const portsVal = ports.length
+      ? ports.map((p) => `${p.protocol} ${p.internal || "?"} (${p.name || "port"})`).join(", ")
+      : "None";
     return (
-      <div
-        style={{
-          background: C.card,
-          border: `1px solid ${C.border}`,
-          borderRadius: 10,
-          padding: "12px 16px",
-          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-        }}
-      >
-        {chipLabels.map((c) => (
-          <span
-            key={c}
-            style={{
-              fontFamily: FONT, fontSize: 11, fontWeight: 500, lineHeight: "14px",
-              color: C.fg,
-              background: "rgba(255,255,255,0.04)",
-              border: `1px solid ${C.border}`,
-              padding: "1px 8px",
-              borderRadius: 999,
-            }}
-          >
-            {c}
-          </span>
-        ))}
-        <button
-          onClick={() => setUserExpanded(true)}
-          style={{
-            marginLeft: "auto",
-            display: "inline-flex", alignItems: "center", gap: 3,
-            fontFamily: FONT, fontSize: 11, fontWeight: 500,
-            background: "transparent", color: C.muted,
-            border: "none", padding: 0, cursor: "pointer",
-          }}
-        >
-          Customize <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 5l7 7-7 7" /></svg>
-        </button>
-      </div>
+      <CollapsedRow onCustomize={() => setUserExpanded(true)}>
+        {forkedFromTemplate
+          ? <SpecChip label="Template" value="Pre-filled" />
+          : <SpecChip label="Port Mappings" value={portsVal} />}
+      </CollapsedRow>
     );
   }
 
@@ -1512,52 +1517,12 @@ function StepEnvVars({
   const resetToDefaults = () => { setCustomEnvs([]); setUserExpanded(false); };
 
   if (collapsed) {
-    const chipList = forkedFromTemplate
-      ? [{ l: "Pre-filled from template", mono: false }]
-      : [
-          { l: "GMI_MAAS_API_KEY",  mono: true },
-          { l: "GMI_MAAS_BASE_URL", mono: true },
-          { l: "No custom vars",    mono: false },
-        ];
     return (
-      <div
-        style={{
-          background: C.card,
-          border: `1px solid ${C.border}`,
-          borderRadius: 10,
-          padding: "12px 16px",
-          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-        }}
-      >
-        {chipList.map((c) => (
-          <span
-            key={c.l}
-            style={{
-              fontFamily: c.mono ? "'GeistMono', monospace" : FONT,
-              fontSize: 11, fontWeight: 500, lineHeight: "14px",
-              color: C.fg,
-              background: "rgba(255,255,255,0.04)",
-              border: `1px solid ${C.border}`,
-              padding: "1px 8px",
-              borderRadius: 999,
-            }}
-          >
-            {c.l}
-          </span>
-        ))}
-        <button
-          onClick={() => setUserExpanded(true)}
-          style={{
-            marginLeft: "auto",
-            display: "inline-flex", alignItems: "center", gap: 3,
-            fontFamily: FONT, fontSize: 11, fontWeight: 500,
-            background: "transparent", color: C.muted,
-            border: "none", padding: 0, cursor: "pointer",
-          }}
-        >
-          Customize <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 5l7 7-7 7" /></svg>
-        </button>
-      </div>
+      <CollapsedRow onCustomize={() => setUserExpanded(true)}>
+        {forkedFromTemplate
+          ? <SpecChip label="Template" value="Pre-filled" />
+          : <SpecChip label="Custom Env Vars" value={customEnvs.length ? `${customEnvs.length} set` : "Not set"} />}
+      </CollapsedRow>
     );
   }
 
@@ -2512,7 +2477,7 @@ export default function DeployWizard() {
   const [region, setRegion] = useState("us-ia-iowa-1");
   const [computeTier, setComputeTier] = useState("container");
   const [addModels, setAddModels] = useState(true);
-  const [selectedModel, setSelectedModel] = useState("");
+  const [selectedModel, setSelectedModel] = useState("deepseek-v4-flash");
 
   // Step 2 — PRD F-09: lifecycle TTL (template default; per-task override via SDK)
   const [maxLifetime, setMaxLifetime] = useState("1h");
@@ -2609,7 +2574,7 @@ export default function DeployWizard() {
     computeTier === "container" &&
     maxLifetime === "1h" &&
     idleTimeout === "5min" &&
-    addModels && selectedModel === "";
+    addModels && selectedModel === "deepseek-v4-flash";
 
   const step3AllDefault =
     ports.length === 1 &&
@@ -2675,7 +2640,7 @@ export default function DeployWizard() {
               Register an Agent
             </h1>
             <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, margin: "2px 0 0" }}>
-              Configure infrastructure and register your Agent. List on the Agentbox after testing.
+              Configure infrastructure and register your Agent. List it on the Agentbox after testing.
             </p>
           </div>
 
@@ -2759,7 +2724,7 @@ export default function DeployWizard() {
           <section
             style={{
               display: "grid",
-              gridTemplateColumns: "minmax(0, 1fr) 260px",
+              gridTemplateColumns: "minmax(0, 1fr) 300px",
               gap: 16,
               padding: "8px 24px 16px",
               alignItems: "start",
@@ -2856,8 +2821,6 @@ export default function DeployWizard() {
             <RegisterPanel
               computeRate={computeRate}
               hideComputeCost={hostMode === "connect"}
-              maxLifetime={maxLifetime}
-              idleTimeout={idleTimeout}
               canRegister={
                 // M6.4: block publish when the image is known-missing (404).
                 // Private (401/403) and public both allowed — review gate handles them.
@@ -2865,7 +2828,7 @@ export default function DeployWizard() {
                   ? projectName.trim().length > 1 && probePublishImage(dockerImage) !== "missing" && dockerImage.trim().length > 0
                   : projectName.trim().length > 1 && /^https:\/\//i.test(accessUrl.trim())
               }
-              ctaLabel={hostMode === "connect" ? "Submit" : "Register Agent"}
+              ctaLabel={hostMode === "connect" ? "Submit" : "Register"}
               onCancel={() => setLocation("/marketplace")}
               onRegister={() => {
                 if (hostMode === "connect") {
