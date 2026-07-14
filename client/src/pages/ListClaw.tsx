@@ -5,6 +5,7 @@ import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
 import { TYPE_LABELS, type TypeLabel } from "@/lib/clawData";
 import { FONT, MONO, C, TYPE_COLOR } from "@/lib/tokens";
+import { SEED_AGENTS } from "@/lib/seedAgents";
 
 // ─── Storage keys (shared with DeployWizard / Dashboard) ────────────────────
 const REGISTERED_AGENTS_KEY = "gmi:registered-agents";
@@ -66,13 +67,16 @@ function loadAgent(): RegisteredAgent | null {
   try {
     const params = new URLSearchParams(window.location.search);
     const wantedId = params.get("agentId");
-    const arr: RegisteredAgent[] = JSON.parse(localStorage.getItem(REGISTERED_AGENTS_KEY) || "[]");
-    if (!Array.isArray(arr) || arr.length === 0) return null;
+    const stored: RegisteredAgent[] = JSON.parse(localStorage.getItem(REGISTERED_AGENTS_KEY) || "[]");
+    // Merge localStorage agents (registered this session) with the shared demo
+    // seed so the register-first guard matches what Dashboard's My Agents shows.
+    const all: RegisteredAgent[] = [...(Array.isArray(stored) ? stored : []), ...SEED_AGENTS];
+    if (all.length === 0) return null;
     if (wantedId) {
-      const match = arr.find((a) => a.id === wantedId);
+      const match = all.find((a) => a.id === wantedId);
       if (match) return match;
     }
-    return arr[0];
+    return all[0];
   } catch { return null; }
 }
 
@@ -187,10 +191,13 @@ export default function ListClaw() {
     saveListing(draft);
   }, [draft]);
 
-  // All registered agents — for the "Linked Template" picker.
+  // All registered agents — for the "Linked Template" picker. localStorage
+  // agents first, then the shared demo seed (same source as Dashboard).
   const allAgents = useMemo<RegisteredAgent[]>(() => {
-    try { return JSON.parse(localStorage.getItem(REGISTERED_AGENTS_KEY) || "[]"); }
-    catch { return []; }
+    try {
+      const stored = JSON.parse(localStorage.getItem(REGISTERED_AGENTS_KEY) || "[]");
+      return [...(Array.isArray(stored) ? stored : []), ...SEED_AGENTS];
+    } catch { return [...SEED_AGENTS]; }
   }, []);
 
   // Empty state — no registered agent → show register-first guard.

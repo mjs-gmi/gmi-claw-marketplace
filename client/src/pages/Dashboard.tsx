@@ -5,6 +5,7 @@ import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
 import CopyButton from "@/components/CopyButton";
 import { C as baseC, FONT, MONO } from "@/lib/tokens";
+import { SEED_AGENTS } from "@/lib/seedAgents";
 
 // ─── Tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const C = {
@@ -54,24 +55,9 @@ function loadRegisteredAgents(): MyAgent[] {
 // Demo seed deployments so the prototype renders a populated state (mirrors the
 // GMI Console "My Agents" reference). The new-user empty-state logic below is
 // retained — it simply doesn't trigger while these demo agents are present.
-const MY_DEPLOYMENTS: MyAgent[] = [
-  {
-    id: "agent_openclaw",
-    name: "Openclaw test",
-    templateId: "d8772394-1a69-4cfd-8b97-f3c895db9e85",
-    category: "Code & Dev Tools",
-    verified: true,
-    displayStatus: "running",
-  },
-  {
-    id: "agent_hermes",
-    name: "Hermes",
-    templateId: "a14f0c52-6b9d-4e71-9a83-2c1e7f4db0aa",
-    category: "Code & Dev Tools",
-    verified: true,
-    displayStatus: "running",
-  },
-];
+// Sourced from the shared SEED_AGENTS so ListClaw's register-first guard stays
+// in sync (both views agree the user already has these agents).
+const MY_DEPLOYMENTS: MyAgent[] = SEED_AGENTS;
 
 interface InstanceConfig {
   name?: string;         // optional instance name (e.g. "prod-worker-1")
