@@ -6,6 +6,8 @@ import Footer from "@/components/Footer";
 import CopyButton from "@/components/CopyButton";
 import { C as baseC, FONT, MONO } from "@/lib/tokens";
 import { SEED_AGENTS } from "@/lib/seedAgents";
+import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
+import { discountPriceString, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
 
 // ─── Tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const C = {
@@ -1456,6 +1458,23 @@ function ProvisionModal({
             </code>
           </section>
 
+          {/* Model & pricing — Coding Agent Plan (repeat funnel at launch) */}
+          {(() => {
+            const d = discountPriceString(CODING_AGENT_PLAN.featuredModelInPrice);
+            return (
+              <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>Model</span>
+                  <PlanBadge />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, background: "rgba(221,234,77,0.05)", border: "1px solid rgba(221,234,77,0.25)", borderRadius: 8, padding: "8px 12px" }}>
+                  <span style={{ fontFamily: FONT, fontSize: 13, color: C.fg }}>{CODING_AGENT_PLAN.featuredModelName}</span>
+                  {d && <DiscountedPrice original={d.original} discounted={d.discounted} size={13} />}
+                </div>
+              </section>
+            );
+          })()}
+
           {/* Name — optional */}
           <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>
@@ -2260,6 +2279,30 @@ function IntegrationPane({ agent }: { agent: MyAgent }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Current model & Plan eligibility — Coding Agent Plan (ongoing management) */}
+      {(() => {
+        const d = discountPriceString(CODING_AGENT_PLAN.featuredModelInPrice);
+        return (
+          <section style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: 0 }}>Model &amp; Plan</h3>
+              <PlanBadge />
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 13 }}>
+              <span style={{ color: C.muted }}>Current model</span>
+              <span style={{ color: C.fg }}>{CODING_AGENT_PLAN.featuredModelName}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, fontFamily: FONT, fontSize: 13 }}>
+              <span style={{ color: C.muted }}>Your token price</span>
+              {d && <DiscountedPrice original={d.original} discounted={d.discounted} size={13} />}
+            </div>
+            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+              {CODING_AGENT_PLAN.name} is active — {CODING_AGENT_PLAN.discountPct}% off is applied automatically at billing.
+            </span>
+          </section>
+        );
+      })()}
+
       <section>
         <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: "0 0 4px" }}>
           Template ID
