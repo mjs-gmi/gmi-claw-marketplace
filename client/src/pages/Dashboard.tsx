@@ -19,8 +19,33 @@ const C = {
 // ─── Mock data ────────────────────────────────────────────────────────────
 // Status enum matches PRD F-03 swagger: pending · creating · running · stopping · stopped · error · deleted
 // "idle" is a derived agent-level rollup (no instances), not a task status.
-type TaskStatus = "pending" | "creating" | "running" | "stopping" | "stopped" | "error" | "deleted";
+// Runtime 2.0 lifecycle states (PRD §4.1). "stopping"/"stopped" retained for
+// legacy log helpers; the R1 lifecycle uses suspend/resume/delete semantics.
+type TaskStatus =
+  | "pending" | "creating" | "running"
+  | "suspending" | "suspended" | "resuming"
+  | "deleting" | "deleted" | "error"
+  | "stopping" | "stopped";
 type AgentStatus = TaskStatus | "idle";
+
+// Normalized Console label mapping (PRD §4.1 — API states are authoritative,
+// Console labels are presentation only).
+function statusLabel(status: AgentStatus): string {
+  switch (status) {
+    case "pending":
+    case "creating":   return "CREATING";
+    case "running":    return "RUNNING";
+    case "suspending": return "SUSPENDING";
+    case "suspended":  return "SUSPENDED";
+    case "resuming":   return "RESUMING";
+    case "deleting":   return "DELETING";
+    case "deleted":    return "DELETED";
+    case "error":      return "ERROR";
+    case "idle":       return "IDLE";
+    case "stopping":   return "SUSPENDING";
+    case "stopped":    return "SUSPENDED";
+  }
+}
 
 // Per PRD M4: a registered agent lives in one of four listing states until human
 // review approves it. Default after Register = "draft" (only visible to owner).
@@ -73,12 +98,21 @@ interface Instance {
   created: string;
   endpointUrl?: string;       // populated when status=running (per swagger F-03)
   config?: InstanceConfig;    // per-task override (PRD F-04 / F-09 — empty = template defaults)
+  // ── Runtime 2.0 lifecycle (PRD §2) ──────────────────────────────────────
+  maxActive?: string;             // F-02 Maximum active runtime: "1h"|"6h"|"24h"|"48h"|"off"
+  maxRuntimeAction?: "suspend" | "delete"; // F-02 default action at the limit
+  lifecycleStartedAt?: string;    // anchor for active-time-remaining countdown
+  suspendedAt?: string;           // F-05 retention clock start (set on entering suspended)
+  retentionDays?: number;         // F-05 suspended-disk retention window
+  keep?: boolean;                 // F-05 Keep from auto-deletion (pauses retention)
+  lastError?: string;             // §5.4 Activity and errors
+  unconfirmed?: boolean;          // §4.1 unknown provider outcome
 }
 
 const TEMPLATE_DEFAULT_CONFIG: InstanceConfig = {
   envOverrides: [],
-  maxLifetime: "1h",
-  idleTimeout: "5min",
+  maxLifetime: "1h",   // F-02 / Q1 — Organization fallback default
+  idleTimeout: "off",  // F-03 — inactivity policy Off by default
 };
 
 function endpointFor(id: string): string {
@@ -95,6 +129,11 @@ const _seedDaysAgo = (n: number): string => {
   d.setDate(d.getDate() - n);
   return fmtDate(d);
 };
+const _seedMinsAgo = (n: number): string => {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - n);
+  return fmtDate(d);
+};
 const INITIAL_INSTANCES: Instance[] = [
   {
     id: "8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36",
@@ -102,6 +141,9 @@ const INITIAL_INSTANCES: Instance[] = [
     status: "running",
     created: _seedDaysAgo(5),
     endpointUrl: endpointFor("8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36"),
+    maxActive: "1h",
+    maxRuntimeAction: "suspend",
+    lifecycleStartedAt: _seedMinsAgo(17), // ~43 min active time remaining
   },
   {
     id: "1e1bd452-9a3c-4b8e-bf21-7d40c9e6095a",
@@ -109,6 +151,8 @@ const INITIAL_INSTANCES: Instance[] = [
     status: "running",
     created: _seedDaysAgo(6),
     endpointUrl: endpointFor("1e1bd452-9a3c-4b8e-bf21-7d40c9e6095a"),
+    maxActive: "off",
+    maxRuntimeAction: "suspend",
   },
 ];
 
@@ -155,6 +199,49 @@ function agoLabel(created: string): string {
 function midId(id: string): string {
   const s = id.replace(/^inst_/, "");
   return s.length > 16 ? `${s.slice(0, 8)}…${s.slice(-4)}` : s;
+}
+
+// Parse a duration token ("15min"|"1h"|"48h"|"off") → minutes (0 = off/none).
+function durationMins(v?: string): number {
+  if (!v || v === "off") return 0;
+  const m = /^(\d+)\s*(min|h)$/.exec(v.trim());
+  if (!m) return 0;
+  return m[2] === "h" ? Number(m[1]) * 60 : Number(m[1]);
+}
+// Human label for a duration token, for policy helper text.
+function durationLabel(v?: string): string {
+  if (!v || v === "off") return "No automatic limit";
+  const m = /^(\d+)\s*(min|h)$/.exec(v.trim());
+  if (!m) return v;
+  const n = Number(m[1]);
+  return m[2] === "h" ? `${n} hour${n > 1 ? "s" : ""}` : `${n} min`;
+}
+// Round a minute count up to a coarse "N min / N h remaining" label.
+function remainingLabel(mins: number): string {
+  if (mins <= 0) return "limit reached";
+  if (mins < 60) return `${mins} min remaining`;
+  const h = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem ? `${h}h ${rem}m remaining` : `${h}h remaining`;
+}
+
+// F-02 Lifecycle column — active-time remaining for a Running runtime.
+function activeRemaining(inst: Instance): string {
+  const total = durationMins(inst.maxActive);
+  if (total === 0) return "No automatic limit";
+  const start = inst.lifecycleStartedAt ? new Date(inst.lifecycleStartedAt.replace(" ", "T")).getTime() : Date.now();
+  const elapsed = Math.floor((Date.now() - start) / 60000);
+  return `${remainingLabel(total - elapsed)} active`;
+}
+
+// F-05 Lifecycle column — retention state for a Suspended runtime.
+function retentionState(inst: Instance): string {
+  if (inst.keep) return "Kept from auto-deletion";
+  const days = inst.retentionDays ?? 30;
+  const start = inst.suspendedAt ? new Date(inst.suspendedAt.replace(" ", "T")).getTime() : Date.now();
+  const elapsedDays = Math.floor((Date.now() - start) / 86400000);
+  const left = Math.max(0, days - elapsedDays);
+  return `Deletes in ${left} day${left === 1 ? "" : "s"}`;
 }
 
 function newInstanceId(): string {
@@ -221,6 +308,31 @@ const IconConfig = ({ size = 11 }: { size?: number }) => (
 const IconCopy = ({ size = 12 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" />
+  </svg>
+);
+const IconSnapshot = ({ size = 11 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 2 2 7l10 5 10-5-10-5z" /><path d="m2 17 10 5 10-5" /><path d="m2 12 10 5 10-5" />
+  </svg>
+);
+const IconKeep = ({ size = 11 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 17v5" /><path d="M9 10.76V6a3 3 0 0 1 6 0v4.76a2 2 0 0 0 .89 1.66l1.2.8A2 2 0 0 1 18 14.9V15a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-.1a2 2 0 0 1 .91-1.68l1.2-.8A2 2 0 0 0 9 10.76z" />
+  </svg>
+);
+const IconSuspend = ({ size = 11 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" />
+  </svg>
+);
+const IconResume = ({ size = 11 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M6 4l14 8-14 8V4z" />
+  </svg>
+);
+const IconTrash = ({ size = 11 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
   </svg>
 );
 
@@ -324,15 +436,72 @@ function PillSegmented<T extends string>({
 
 function statusDot(status: AgentStatus): string {
   switch (status) {
-    case "running":  return C.ok;       // green
-    case "error":    return C.err;      // red
-    case "pending":  return "#a3a3a3";  // neutral
-    case "creating": return "#fbbf24";  // amber
-    case "stopping": return "#fb923c";  // orange
-    case "stopped":  return "#737373";  // grey
-    case "deleted":  return "#525252";  // darker grey
-    case "idle":     return "#737373";
+    case "running":    return C.ok;       // green
+    case "error":      return C.err;      // red
+    case "pending":    return "#a3a3a3";  // neutral
+    case "creating":   return "#fbbf24";  // amber
+    case "suspending": return "#fbbf24";  // amber (transitioning)
+    case "resuming":   return "#fbbf24";  // amber (transitioning)
+    case "suspended":  return "#60a5fa";  // blue — compute stopped, disk retained
+    case "deleting":   return "#fb923c";  // orange
+    case "stopping":   return "#fb923c";  // orange
+    case "stopped":    return "#737373";  // grey
+    case "deleted":    return "#525252";  // darker grey
+    case "idle":       return "#737373";
   }
+}
+
+// ─── NEW feature badge — small lime pill marking Runtime 2.0 additions ──────
+function NewBadge({ style }: { style?: React.CSSProperties }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex", alignItems: "center",
+        fontFamily: FONT, fontSize: 9, fontWeight: 700, lineHeight: "12px",
+        letterSpacing: "0.08em",
+        color: C.limeText, background: C.lime,
+        padding: "1px 5px", borderRadius: 4,
+        verticalAlign: "middle",
+        ...style,
+      }}
+    >
+      NEW
+    </span>
+  );
+}
+
+// ─── Lifecycle timeline — 3-stage visual (Active → Suspended → Auto-delete).
+// Mirrors how Codespaces / Daytona frame "when does my runtime go away".
+// durationLabel is a hoisted function declaration (defined later in the module).
+function LifecycleTimeline({ maxActive, retentionDays = 30 }: { maxActive?: string; retentionDays?: number }) {
+  const activeSub = !maxActive || maxActive === "off" ? "No limit" : `≤ ${durationLabel(maxActive)}`;
+  const stages = [
+    { label: "Active",      sub: activeSub,                    color: C.ok },
+    { label: "Suspended",   sub: `Disk kept ${retentionDays}d`, color: "#60a5fa" },
+    { label: "Auto-delete", sub: "After retention",            color: C.muted },
+  ];
+  return (
+    <div
+      style={{
+        display: "flex", alignItems: "flex-start",
+        background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`,
+        borderRadius: 8, padding: "12px 14px 10px",
+      }}
+    >
+      {stages.map((s, i) => (
+        <div key={s.label} style={{ display: "flex", alignItems: "flex-start", flex: i < stages.length - 1 ? 1 : "0 0 auto" }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, width: 88, flexShrink: 0 }}>
+            <span style={{ width: 12, height: 12, borderRadius: 999, background: s.color, boxShadow: `0 0 0 3px ${s.color}22` }} />
+            <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.fg, lineHeight: "16px" }}>{s.label}</span>
+            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, textAlign: "center", lineHeight: "14px" }}>{s.sub}</span>
+          </div>
+          {i < stages.length - 1 && (
+            <div style={{ flex: 1, height: 2, background: C.border, marginTop: 5, borderRadius: 2 }} />
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // ─── Left agent list item ─────────────────────────────────────────────────
@@ -823,53 +992,14 @@ function Sparkline({ label, current, suffix, data, color }: {
   );
 }
 
-// ─── Config pane — show per-instance overrides (read-only) ─────────────
-function ConfigPane({ inst }: { inst: Instance }) {
-  const cfg = inst.config;
-  const usedDefaults =
-    !cfg ||
-    (cfg.envOverrides.length === 0 &&
-      cfg.maxLifetime === TEMPLATE_DEFAULT_CONFIG.maxLifetime &&
-      cfg.idleTimeout === TEMPLATE_DEFAULT_CONFIG.idleTimeout);
+// ─── Runtime Detail pane (PRD §5.4) — Overview / Lifecycle / Persistence /
+//     Activity. Opened via the row ⋮ "View Detail" action.
+function DetailRow({ label, value, accent }: { label: string; value: React.ReactNode; accent?: string }) {
   return (
-    <>
-      <div style={{ marginBottom: 8 }}>
-        <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-          Per-task config · overrides over template
-        </span>
-      </div>
-      {usedDefaults ? (
-        <div style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 6, padding: "14px 16px", fontFamily: FONT, fontSize: 13, color: C.muted }}>
-          Used template defaults — no per-task overrides.
-        </div>
-      ) : (
-        <div style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 6, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 12, lineHeight: "18px" }}>
-              <span style={{ color: C.muted }}>max_lifetime</span>
-              <span style={{ color: cfg!.maxLifetime !== TEMPLATE_DEFAULT_CONFIG.maxLifetime ? C.lime : C.fg, fontFamily: "'GeistMono', monospace" }}>{cfg!.maxLifetime}</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 12, lineHeight: "18px" }}>
-              <span style={{ color: C.muted }}>idle_timeout</span>
-              <span style={{ color: cfg!.idleTimeout !== TEMPLATE_DEFAULT_CONFIG.idleTimeout ? C.lime : C.fg, fontFamily: "'GeistMono', monospace" }}>{cfg!.idleTimeout}</span>
-            </div>
-          </div>
-          {cfg!.envOverrides.length > 0 && (
-            <div style={{ borderTop: `1px solid ${C.borderSoft}`, paddingTop: 8 }}>
-              <div style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 6 }}>
-                env overrides · {cfg!.envOverrides.length}
-              </div>
-              {cfg!.envOverrides.map((e) => (
-                <div key={e.id} style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 12, fontFamily: "'GeistMono', monospace", fontSize: 12, lineHeight: "20px" }}>
-                  <span style={{ color: C.lime }}>{e.key || "—"}</span>
-                  <span style={{ color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.value || "—"}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </>
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: FONT, fontSize: 12, lineHeight: "20px" }}>
+      <span style={{ color: C.muted, flexShrink: 0 }}>{label}</span>
+      <span style={{ color: accent || C.fg, textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</span>
+    </div>
   );
 }
 
@@ -982,12 +1112,18 @@ function ListingActions({ agentId, state }: { agentId: string; state?: ListingSt
 // Reusable view actions (Detail / Log / Monitoring) live here so the inline
 // row stays focused on the net-new high-frequency actions (Open / Terminate).
 type RowPanel = "config" | "logs" | "metrics" | "shell";
+// Runtime 2.0 row actions (PRD §5.3 "More actions").
+type RowAction = "suspend" | "resume" | "keep" | "delete" | "snapshot" | "convert";
+
 function InstanceRowMenu({
-  instId, activePanel, onSelect,
+  inst, activePanel, onSelect, onAction, canConvert = false, dropUp = false,
 }: {
-  instId: string;
+  inst: Instance;
   activePanel: "logs" | "shell" | "metrics" | "config" | null;
   onSelect: (panel: RowPanel) => void;
+  onAction: (id: string, action: RowAction) => void;
+  canConvert?: boolean;
+  dropUp?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -1000,17 +1136,39 @@ function InstanceRowMenu({
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  const items: { key: RowPanel; label: string; icon: React.ReactNode }[] = [
+  // Lifecycle actions by state (PRD §5.3). Panels (view-only) always listed below.
+  type MenuAction = { action: RowAction; label: string; icon: React.ReactNode; isNew?: boolean; danger?: boolean };
+  const lifecycle: MenuAction[] = [];
+  if (inst.status === "running") {
+    lifecycle.push({ action: "snapshot", label: "Create snapshot", icon: <IconSnapshot />, isNew: true });
+  }
+  if (inst.status === "suspended") {
+    lifecycle.push({ action: "keep", label: inst.keep ? "Cancel Keep" : "Keep", icon: <IconKeep />, isNew: true });
+    if (canConvert) lifecycle.push({ action: "convert", label: "Convert to snapshot", icon: <IconSnapshot />, isNew: true });
+  }
+  const canDelete = inst.status === "running" || inst.status === "suspended" || inst.status === "error";
+  if (canDelete) lifecycle.push({ action: "delete", label: "Delete", icon: <IconTrash />, danger: true });
+
+  const panels: { key: RowPanel; label: string; icon: React.ReactNode }[] = [
     { key: "shell",   label: "Open Shell",   icon: <IconShell /> },
     { key: "logs",    label: "View Log",     icon: <IconLogs /> },
     { key: "metrics", label: "Monitoring",   icon: <IconChart /> },
     { key: "config",  label: "View Detail",  icon: <IconConfig /> },
   ];
 
+  const itemStyle = (active: boolean, danger?: boolean): React.CSSProperties => ({
+    display: "inline-flex", alignItems: "center", gap: 8,
+    fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "18px",
+    color: danger ? C.err : active ? C.lime : C.fg,
+    background: active ? "rgba(221,234,77,0.08)" : "transparent",
+    border: "none", padding: "6px 10px", borderRadius: 6,
+    cursor: "pointer", textAlign: "left", width: "100%",
+  });
+
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <button
-        aria-label={`Instance ${instId.slice(0, 8)} actions`}
+        aria-label={`Instance ${inst.id.slice(0, 8)} actions`}
         onClick={() => setOpen((o) => !o)}
         style={{
           width: 26, height: 24,
@@ -1028,36 +1186,37 @@ function InstanceRowMenu({
       {open && (
         <div
           style={{
-            position: "absolute", top: "calc(100% + 4px)", right: 0,
+            position: "absolute",
+            ...(dropUp ? { bottom: "calc(100% + 4px)" } : { top: "calc(100% + 4px)" }),
+            right: 0,
             background: C.cardSolid,
             border: `1px solid ${C.border}`,
             borderRadius: 8,
             padding: 4,
-            minWidth: 152,
+            minWidth: 172,
             zIndex: 30,
             boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
             display: "flex", flexDirection: "column",
           }}
         >
-          {items.map((it) => {
+          {lifecycle.map((it) => (
+            <button
+              key={it.action}
+              onClick={() => { setOpen(false); onAction(inst.id, it.action); }}
+              style={itemStyle(false, it.danger)}
+            >
+              {it.icon}
+              <span style={{ flex: 1 }}>{it.label}</span>
+              {it.isNew && <NewBadge />}
+            </button>
+          ))}
+          {lifecycle.length > 0 && (
+            <div style={{ height: 1, background: C.borderSoft, margin: "4px 6px" }} />
+          )}
+          {panels.map((it) => {
             const active = activePanel === it.key;
             return (
-              <button
-                key={it.key}
-                onClick={() => { setOpen(false); onSelect(it.key); }}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 8,
-                  fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "18px",
-                  color: active ? C.lime : C.fg,
-                  background: active ? "rgba(221,234,77,0.08)" : "transparent",
-                  border: "none",
-                  padding: "6px 10px",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  textAlign: "left",
-                  width: "100%",
-                }}
-              >
+              <button key={it.key} onClick={() => { setOpen(false); onSelect(it.key); }} style={itemStyle(active)}>
                 {it.icon} {it.label}
               </button>
             );
@@ -1180,6 +1339,8 @@ function ProvisionModal({
   ]);
   const [maxLifetime, setMaxLifetime] = useState(TEMPLATE_DEFAULT_CONFIG.maxLifetime);
   const [idleTimeout, setIdleTimeout] = useState(TEMPLATE_DEFAULT_CONFIG.idleTimeout);
+  // Lifecycle defaults to a collapsed timeline + summary; controls reveal on Customize.
+  const [showLifecycle, setShowLifecycle] = useState(false);
   // .env import — parse KEY=VALUE lines into override rows
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
@@ -1217,6 +1378,7 @@ function ProvisionModal({
     setEnv([{ id: "e0", key: "", value: "" }]);
     setMaxLifetime(TEMPLATE_DEFAULT_CONFIG.maxLifetime);
     setIdleTimeout(TEMPLATE_DEFAULT_CONFIG.idleTimeout);
+    setShowLifecycle(false);
     setImportOpen(false);
     setImportText("");
   };
@@ -1305,6 +1467,90 @@ function ProvisionModal({
               placeholder="e.g. prod-worker-1"
               style={{ ...inputStyle, fontFamily: FONT, fontSize: 13 }}
             />
+          </section>
+
+          {/* Lifecycle — Runtime 2.0 F-02 / F-03 / F-05 (PRD §5.2) */}
+          <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Lifecycle</label>
+              <NewBadge />
+            </div>
+
+            {/* Stage timeline — always visible; updates live with the selected settings */}
+            <LifecycleTimeline maxActive={maxLifetime} retentionDays={30} />
+
+            {!showLifecycle ? (
+              /* Collapsed — one-line summary + Customize (defaults-first) */
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "16px" }}>
+                  {durationLabel(maxLifetime)} active · suspend &amp; keep disk · 30-day retention
+                  {idleTimeout !== "off" && <> · idle-suspend {durationLabel(idleTimeout)}</>}
+                  <span style={{ color: C.borderSoft }}> · </span>Organization default
+                </span>
+                <button
+                  onClick={() => setShowLifecycle(true)}
+                  style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4, fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.lime, background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
+                >
+                  Customize
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+                </button>
+              </div>
+            ) : (
+              /* Expanded — the two editable controls + read-only policy rows */
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {/* Maximum active runtime (F-02) */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg }}>Maximum active runtime</span>
+                  <select value={maxLifetime} onChange={(e) => setMaxLifetime(e.target.value)} style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "pointer" }}>
+                    <option value="1h">1 hour</option>
+                    <option value="6h">6 hours</option>
+                    <option value="24h">24 hours</option>
+                    <option value="48h">48 hours</option>
+                  </select>
+                  <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+                    {maxLifetime === "48h" ? "Maximum 48 hours · Set by your organization" : `${durationLabel(maxLifetime)} · Organization default`}
+                  </span>
+                </div>
+
+                {/* Inactivity policy (F-03) */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg }}>
+                    When inactive for <span style={{ color: C.muted, fontWeight: 400 }}>· optional</span>
+                  </span>
+                  <select value={idleTimeout} onChange={(e) => setIdleTimeout(e.target.value)} style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "pointer" }}>
+                    <option value="off">Off</option>
+                    <option value="15min">15 min → Suspend</option>
+                    <option value="30min">30 min → Suspend</option>
+                    <option value="1h">1 hour → Suspend</option>
+                  </select>
+                  {idleTimeout !== "off" && (
+                    <span style={{ fontFamily: FONT, fontSize: 11, color: C.warn, lineHeight: "16px" }}>
+                      Only AgentBox command execution counts as activity in this release. Endpoint traffic and open connections do not reset the timer.
+                    </span>
+                  )}
+                </div>
+
+                {/* Read-only policy rows (F-02 action + F-05 retention) */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 6, padding: "10px 12px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 12 }}>
+                    <span style={{ color: C.muted }}>When the limit is reached</span>
+                    <span style={{ color: C.fg, display: "inline-flex", alignItems: "center", gap: 5 }}><IconSuspend size={11} /> Suspend &amp; keep disk</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 12 }}>
+                    <span style={{ color: C.muted }}>Suspended disk retention</span>
+                    <span style={{ color: C.fg }}>30 days · Enforced by org</span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => { setShowLifecycle(false); setMaxLifetime(TEMPLATE_DEFAULT_CONFIG.maxLifetime); setIdleTimeout(TEMPLATE_DEFAULT_CONFIG.idleTimeout); }}
+                  style={{ alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: 4, fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted, background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m18 15-6-6-6 6" /></svg>
+                  Collapse · use organization defaults
+                </button>
+              </div>
+            )}
           </section>
 
           {/* Environment variables — table */}
@@ -1522,21 +1768,165 @@ function MetricsPane({ inst }: { inst: Instance }) {
   );
 }
 
+// ─── Instance Detail modal (PRD §5.4) — matches the console's Instance Detail
+//     popup, plus Runtime 2.0 Lifecycle & Persistence sections (NEW).
+function InstanceDetailModal({
+  inst, deploymentName, onClose,
+}: {
+  inst: Instance | null;
+  deploymentName: string;
+  onClose: () => void;
+}) {
+  if (!inst) return null;
+  const totalMins = durationMins(inst.maxActive);
+  const start = inst.lifecycleStartedAt ? new Date(inst.lifecycleStartedAt.replace(" ", "T")).getTime() : null;
+  const usedMins = start ? Math.max(0, Math.floor((Date.now() - start) / 60000)) : 0;
+  const health =
+    inst.status === "running" ? { label: "HEALTHY", color: C.ok }
+    : inst.status === "error" ? { label: "UNHEALTHY", color: C.err }
+    : { label: "—", color: C.muted };
+
+  const lockedEnv = [
+    { key: "GMI_MODELS",        value: "58e99bbf-78ba-4807-9be5-53e762de9212" },
+    { key: "GMI_MAAS_API_KEY",  value: "gmi_••••••••••••••••" },
+    { key: "GMI_MAAS_BASE_URL", value: "https://api.gmi-serving.com" },
+    { key: "DEPLOYMENT_TYPE",   value: "gmi-ce" },
+  ];
+  const overrides = inst.config?.envOverrides ?? [];
+
+  const row = (label: string, value: React.ReactNode, mono = false) => (
+    <div style={{ display: "grid", gridTemplateColumns: "150px 1fr", gap: 12, padding: "9px 0", borderTop: `1px solid ${C.borderSoft}`, alignItems: "center" }}>
+      <span style={{ fontFamily: FONT, fontSize: 13, color: C.muted }}>{label}</span>
+      <span style={{ fontFamily: mono ? "'GeistMono', monospace" : FONT, fontSize: 13, color: C.fg, fontWeight: 500, wordBreak: "break-all" }}>{value}</span>
+    </div>
+  );
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 1000,
+        background: "rgba(0,0,0,0.78)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)",
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 560, maxWidth: "100%", background: C.cardSolid,
+          border: `1px solid ${C.border}`, borderRadius: 10,
+          display: "flex", flexDirection: "column", maxHeight: "90vh", overflow: "hidden",
+        }}
+      >
+        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}` }}>
+          <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>Instance Detail</h3>
+          <p style={{ fontFamily: "'GeistMono', monospace", fontSize: 12, color: C.muted, margin: "4px 0 0" }}>{inst.id}</p>
+        </div>
+
+        <div style={{ padding: "8px 20px 16px", overflowY: "auto" }}>
+          {/* Console fields */}
+          {row("Task ID", inst.id, true)}
+          {row("Display name", inst.config?.name || "—")}
+          {row("Status", <span style={{ color: statusDot(inst.status), fontWeight: 600 }}>{statusLabel(inst.status)}</span>)}
+          {row("Health", <span style={{ display: "inline-flex", fontFamily: FONT, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", color: health.color, background: `${health.color}1f`, border: `1px solid ${health.color}55`, padding: "2px 8px", borderRadius: 6 }}>{health.label}</span>)}
+          {row("Endpoint URL", inst.status === "suspended" ? "Unavailable while suspended" : (inst.endpointUrl || "—"), inst.status !== "suspended")}
+          {row("Public IP", "—")}
+          {row("IDC", "us-central-iowa1")}
+          {row("Product", "gmi.container.intel.x4660.large", true)}
+          {row("Container ID", inst.id, true)}
+          {row("Deployment", deploymentName || "—")}
+          {row("Created at", inst.created, true)}
+          {row("Updated at", inst.created, true)}
+
+          {/* Runtime 2.0 — Lifecycle (NEW) */}
+          <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <h4 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: 0 }}>Lifecycle</h4>
+              <NewBadge />
+            </div>
+            <DetailRow label="Maximum active runtime" value={durationLabel(inst.maxActive)} />
+            <DetailRow label="Active time used" value={totalMins ? `${usedMins} min` : "—"} />
+            <DetailRow label="Remaining" value={totalMins ? remainingLabel(totalMins - usedMins) : "No automatic limit"} />
+            <DetailRow label="At the limit" value="Suspend & keep disk" />
+            <DetailRow label="Inactivity policy" value={inst.config?.idleTimeout && inst.config.idleTimeout !== "off" ? `Suspend after ${durationLabel(inst.config.idleTimeout)}` : "Off"} />
+          </div>
+
+          {/* Runtime 2.0 — Persistence (NEW) */}
+          <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <h4 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: 0 }}>Persistence</h4>
+              <NewBadge />
+            </div>
+            <DetailRow label="Disk retention" value={inst.status === "suspended" ? retentionState(inst) : "Not retained (running)"} accent={inst.keep ? C.lime : undefined} />
+            <DetailRow label="Keep status" value={inst.keep ? "Kept — retention paused" : "Not kept"} accent={inst.keep ? C.lime : undefined} />
+            <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px", marginTop: 2 }}>
+              Storage charges apply while this disk is retained. Detailed charges remain in Usage &amp; Billing.
+            </div>
+          </div>
+
+          {/* Environment Variables */}
+          <div style={{ marginTop: 18 }}>
+            <h4 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: "0 0 2px" }}>Environment Variables</h4>
+            <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "0 0 10px", lineHeight: "16px" }}>
+              Environment variables this container instance was provisioned with.
+            </p>
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 6, overflow: "hidden" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 0.7fr", gap: 6, padding: "8px 10px", background: "rgba(255,255,255,0.02)", borderBottom: `1px solid ${C.borderSoft}`, fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted }}>
+                <span>Key</span><span>Value</span><span>Type</span>
+              </div>
+              {lockedEnv.map((e) => (
+                <div key={e.key} style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 0.7fr", gap: 6, padding: "8px 10px", alignItems: "center", borderBottom: `1px solid ${C.borderSoft}`, fontFamily: "'GeistMono', monospace", fontSize: 12 }}>
+                  <span style={{ color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.key}</span>
+                  <span style={{ color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.value}</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: FONT, fontSize: 11, color: C.muted }}>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    Locked
+                  </span>
+                </div>
+              ))}
+              {overrides.map((e) => (
+                <div key={e.id} style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 0.7fr", gap: 6, padding: "8px 10px", alignItems: "center", borderBottom: `1px solid ${C.borderSoft}`, fontFamily: "'GeistMono', monospace", fontSize: 12 }}>
+                  <span style={{ color: C.lime, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.key || "—"}</span>
+                  <span style={{ color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.value || "—"}</span>
+                  <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>Custom</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", padding: "12px 20px", borderTop: `1px solid ${C.borderSoft}` }}>
+          <button
+            onClick={onClose}
+            style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, background: C.lime, color: C.limeText, border: "none", padding: "6px 18px", borderRadius: 8, cursor: "pointer" }}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Monitor pane ─────────────────────────────────────────────────────────
 function MonitorPane({
-  agent, instances, onProvision, onTerminate,
+  agent, instances, onProvision, onAction, canConvert = false,
 }: {
   agent: MyAgent;
   instances: Instance[];
   onProvision: (agentId: string) => void;
-  onTerminate: (instanceId: string) => void;
+  onAction: (id: string, action: RowAction) => void;
+  canConvert?: boolean;
 }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "running" | "error" | "creating">("all");
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc"); // Created column sort
+  // "config" (View Detail) opens the Instance Detail modal; the rest are inline panels.
   type PanelKind = "logs" | "shell" | "metrics" | "config";
   const [expanded, setExpanded] = useState<{ id: string; panel: PanelKind } | null>(null);
+  const [detailInst, setDetailInst] = useState<Instance | null>(null);
   const togglePanel = (id: string, panel: PanelKind) => {
+    if (panel === "config") { setDetailInst(instances.find((i) => i.id === id) ?? null); return; }
     setExpanded((curr) => (curr && curr.id === id && curr.panel === panel ? null : { id, panel }));
   };
 
@@ -1642,22 +2032,26 @@ function MonitorPane({
             background: C.card,
             border: `1px solid ${C.border}`,
             borderRadius: 10,
-            overflow: "hidden",
+            // overflow must stay visible so the row ⋮ action menu (absolutely
+            // positioned, taller than the table) isn't clipped by the container.
+            overflow: "visible",
           }}
         >
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "1.3fr 1.7fr 0.9fr 1.1fr 1.3fr",
+              gridTemplateColumns: "1.2fr 1.5fr 0.9fr 1.35fr 0.85fr 1.25fr",
               padding: "10px 16px",
               borderBottom: `1px solid ${C.border}`,
               background: "rgba(255,255,255,0.02)",
               fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted, lineHeight: "16px",
+              alignItems: "center",
             }}
           >
             <div>Instance Name</div>
             <div>Endpoint</div>
             <div>Status</div>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Lifecycle <NewBadge /></div>
             <button
               onClick={() => setSortDir((d) => (d === "desc" ? "asc" : "desc"))}
               title={`Sort by created — ${sortDir === "desc" ? "newest first" : "oldest first"}`}
@@ -1692,7 +2086,7 @@ function MonitorPane({
                   <div
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "1.3fr 1.7fr 0.9fr 1.1fr 1.3fr",
+                      gridTemplateColumns: "1.2fr 1.5fr 0.9fr 1.35fr 0.85fr 1.25fr",
                       padding: "10px 16px",
                       borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`,
                       fontFamily: FONT, fontSize: 13, fontWeight: 400, color: C.fg, lineHeight: "20px",
@@ -1707,10 +2101,11 @@ function MonitorPane({
                       {inst.config?.name || midId(inst.id)}
                     </div>
                     <div
-                      title={inst.endpointUrl}
-                      style={{ fontFamily: "'GeistMono', monospace", fontSize: 12, color: inst.endpointUrl ? C.muted : C.borderSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      title={inst.status === "suspended" ? "Endpoint is unavailable while suspended" : inst.endpointUrl}
+                      style={{ fontFamily: inst.status === "suspended" ? FONT : "'GeistMono', monospace", fontSize: 12, color: inst.endpointUrl && inst.status !== "suspended" ? C.muted : C.borderSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                     >
-                      {inst.endpointUrl ? inst.endpointUrl.replace(/^https?:\/\//, "") : "—"}
+                      {inst.status === "suspended" ? "Unavailable while suspended"
+                        : inst.endpointUrl ? inst.endpointUrl.replace(/^https?:\/\//, "") : "—"}
                     </div>
                     <div style={{ display: "inline-flex", alignItems: "center" }}>
                       <span
@@ -1724,11 +2119,20 @@ function MonitorPane({
                           padding: "2px 8px", borderRadius: 6,
                         }}
                       >
-                        {inst.status === "creating" && (
+                        {(inst.status === "creating" || inst.status === "suspending" || inst.status === "resuming" || inst.status === "deleting") && (
                           <span style={{ width: 6, height: 6, borderRadius: 999, background: statusDot(inst.status), animation: "pulse 1.2s ease-in-out infinite" }} />
                         )}
-                        {inst.status}
+                        {statusLabel(inst.status)}
                       </span>
+                    </div>
+                    {/* Lifecycle — F-02 active-time (Running) / F-05 retention (Suspended) */}
+                    <div
+                      title={inst.status === "running" ? activeRemaining(inst) : inst.status === "suspended" ? retentionState(inst) : ""}
+                      style={{ fontSize: 12, color: inst.keep ? C.lime : C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    >
+                      {inst.status === "running" ? activeRemaining(inst)
+                        : inst.status === "suspended" ? retentionState(inst)
+                        : "—"}
                     </div>
                     <div style={{ color: C.muted }}>{agoLabel(inst.created)}</div>
                     <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
@@ -1741,12 +2145,9 @@ function MonitorPane({
                           style={{
                             display: "inline-flex", alignItems: "center", gap: 4,
                             fontFamily: FONT, fontSize: 11, fontWeight: 500,
-                            color: C.fg,
-                            background: "transparent",
+                            color: C.fg, background: "transparent",
                             border: `1px solid ${C.border}`,
-                            padding: "3px 9px",
-                            borderRadius: 6,
-                            textDecoration: "none",
+                            padding: "3px 9px", borderRadius: 6, textDecoration: "none",
                           }}
                         >
                           Open
@@ -1755,24 +2156,57 @@ function MonitorPane({
                           </svg>
                         </a>
                       )}
-                      <button
-                        onClick={() => onTerminate(inst.id)}
-                        style={{
-                          fontFamily: FONT, fontSize: 11, fontWeight: 500,
-                          background: "transparent",
-                          color: C.err,
-                          border: `1px solid ${C.border}`,
-                          padding: "3px 9px",
-                          borderRadius: 6,
-                          cursor: "pointer",
-                        }}
-                      >
-                        Terminate
-                      </button>
+                      {/* Primary lifecycle action per state (PRD §5.3) */}
+                      {inst.status === "running" && (
+                        <button
+                          onClick={() => onAction(inst.id, "suspend")}
+                          title="Suspend compute and keep the runtime disk."
+                          style={{
+                            display: "inline-flex", alignItems: "center", gap: 4,
+                            fontFamily: FONT, fontSize: 11, fontWeight: 500,
+                            color: C.fg, background: "transparent",
+                            border: `1px solid ${C.border}`,
+                            padding: "3px 9px", borderRadius: 6, cursor: "pointer",
+                          }}
+                        >
+                          <IconSuspend /> Suspend
+                        </button>
+                      )}
+                      {inst.status === "suspended" && (
+                        <button
+                          onClick={() => onAction(inst.id, "resume")}
+                          title="Resume the runtime from its retained disk."
+                          style={{
+                            display: "inline-flex", alignItems: "center", gap: 4,
+                            fontFamily: FONT, fontSize: 11, fontWeight: 600,
+                            color: C.limeText, background: C.lime,
+                            border: "none",
+                            padding: "3px 10px", borderRadius: 6, cursor: "pointer",
+                          }}
+                        >
+                          <IconResume /> Resume
+                        </button>
+                      )}
+                      {inst.status === "error" && (
+                        <button
+                          onClick={() => togglePanel(inst.id, "config")}
+                          style={{
+                            fontFamily: FONT, fontSize: 11, fontWeight: 500,
+                            color: C.fg, background: "transparent",
+                            border: `1px solid ${C.border}`,
+                            padding: "3px 9px", borderRadius: 6, cursor: "pointer",
+                          }}
+                        >
+                          View error
+                        </button>
+                      )}
                       <InstanceRowMenu
-                        instId={inst.id}
+                        inst={inst}
+                        canConvert={canConvert}
+                        dropUp={filtered.length > 1 && i >= filtered.length - 1}
                         activePanel={expanded?.id === inst.id ? expanded.panel : null}
                         onSelect={(panel) => togglePanel(inst.id, panel)}
+                        onAction={onAction}
                       />
                     </div>
                   </div>
@@ -1788,7 +2222,6 @@ function MonitorPane({
                       {expanded.panel === "logs"    && <LogsPane inst={inst} />}
                       {expanded.panel === "shell"   && <ShellPane inst={inst} />}
                       {expanded.panel === "metrics" && <MetricsPane inst={inst} />}
-                      {expanded.panel === "config"  && <ConfigPane inst={inst} />}
                     </div>
                   )}
                 </div>
@@ -1797,6 +2230,12 @@ function MonitorPane({
           )}
         </div>
       </section>
+
+      <InstanceDetailModal
+        inst={detailInst}
+        deploymentName={agent.name}
+        onClose={() => setDetailInst(null)}
+      />
     </div>
   );
 }
@@ -1921,12 +2360,13 @@ function AnalyticsPane() {
 
 // ─── Right detail pane ────────────────────────────────────────────────────
 function AgentDetailPane({
-  agent, instances, onProvision, onTerminate,
+  agent, instances, onProvision, onAction, canConvert = false,
 }: {
   agent: MyAgent;
   instances: Instance[];
   onProvision: (agentId: string) => void;
-  onTerminate: (instanceId: string) => void;
+  onAction: (id: string, action: RowAction) => void;
+  canConvert?: boolean;
 }) {
   const [tab, setTab] = useState<"monitor" | "integration" | "analytics">("monitor");
   // + Instance + Listing ▼ now share the top-right of the agent header.
@@ -2048,7 +2488,8 @@ function AgentDetailPane({
           agent={agent}
           instances={instances}
           onProvision={onProvision}
-          onTerminate={onTerminate}
+          onAction={onAction}
+          canConvert={canConvert}
         />
       )}
       {tab === "integration" && <IntegrationPane agent={agent} />}
@@ -2129,6 +2570,8 @@ export default function Dashboard() {
       status: "creating",
       created: fmtNow(),
       config,
+      maxActive: config.maxLifetime,          // F-02 Maximum active runtime
+      maxRuntimeAction: "suspend",            // F-02 default action at the limit
     };
     setInstances((prev) => [newInst, ...prev]);
     setProvisionForAgentId(null);
@@ -2137,31 +2580,97 @@ export default function Dashboard() {
     setTimeout(() => {
       setInstances((prev) =>
         prev.map((i) =>
-          i.id === id ? { ...i, status: "running", endpointUrl: endpointFor(id) } : i,
+          i.id === id ? { ...i, status: "running", endpointUrl: endpointFor(id), lifecycleStartedAt: fmtNow() } : i,
         ),
       );
     }, 1500);
   };
 
-  const performTerminate = (instanceId: string) => {
-    setInstances((prev) => prev.filter((i) => i.id !== instanceId));
+  // ── Runtime 2.0 lifecycle mutations (PRD §2). Simulated provider timing. ──
+  const patchInstance = (id: string, patch: Partial<Instance>) =>
+    setInstances((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)));
+
+  const performSuspend = (id: string) => {
+    // running → suspending → suspended (F-04); disk retained, retention clock starts (F-05)
+    patchInstance(id, { status: "suspending" });
+    setTimeout(() => patchInstance(id, {
+      status: "suspended", endpointUrl: undefined,
+      suspendedAt: fmtNow(), retentionDays: 30, keep: false,
+    }), 1200);
   };
-  const handleTerminate = (instanceId: string) => {
-    const inst = instances.find((i) => i.id === instanceId);
-    const shortId = instanceId.slice(0, 20);
-    setConfirm({
-      title: "Terminate instance?",
-      body: (
-        <>
-          The running task <span style={{ color: C.fg, fontFamily: MONO }}>{shortId}…</span>{" "}
-          will stop immediately and its endpoint will go offline. Any in-flight requests will fail.
-          {inst?.config?.envOverrides?.length ? " Per-task env overrides will be lost." : ""}
-        </>
-      ),
-      confirmLabel: "Terminate",
-      destructive: true,
-      onConfirm: () => performTerminate(instanceId),
-    });
+  const performResume = (id: string) => {
+    // suspended → resuming → running (F-04); new endpoint, Keep cleared
+    patchInstance(id, { status: "resuming" });
+    setTimeout(() => setInstances((prev) => prev.map((i) =>
+      i.id === id
+        ? { ...i, status: "running", endpointUrl: endpointFor(i.id), keep: false, suspendedAt: undefined, lifecycleStartedAt: fmtNow() }
+        : i,
+    )), 1500);
+  };
+  const performDelete = (id: string) => {
+    // running/suspended/failed → deleting → deleted (F-06); deleted is hidden by default
+    patchInstance(id, { status: "deleting" });
+    setTimeout(() => setInstances((prev) => prev.filter((i) => i.id !== id)), 1200);
+  };
+
+  const handleAction = (id: string, action: RowAction) => {
+    const inst = instances.find((i) => i.id === id);
+    const shortId = midId(id);
+    switch (action) {
+      case "suspend":
+        setConfirm({
+          title: "Suspend this runtime?",
+          body: (
+            <>
+              Compute will stop and the disk will be retained. Memory, running processes, and
+              live connections will not be preserved. Configured startup behavior will run on resume.
+            </>
+          ),
+          confirmLabel: "Suspend",
+          destructive: false,
+          onConfirm: () => performSuspend(id),
+        });
+        break;
+      case "resume":
+        performResume(id);
+        break;
+      case "keep":
+        // F-05 Keep pauses retention; cleared automatically on a successful Resume.
+        patchInstance(id, { keep: !inst?.keep });
+        break;
+      case "delete":
+        setConfirm({
+          title: "Delete this runtime?",
+          body: (
+            <>
+              Runtime <span style={{ color: C.fg, fontFamily: MONO }}>{shortId}</span> will be
+              permanently deleted, including its retained disk. This cannot be undone.
+              {inst?.status === "running" ? " Tip — create a snapshot first if you may need this state again." : ""}
+            </>
+          ),
+          confirmLabel: "Delete",
+          destructive: true,
+          onConfirm: () => performDelete(id),
+        });
+        break;
+      case "snapshot":
+      case "convert":
+        // Snapshot lifecycle (F-07 / F-08 / F-11) ships in the next stage.
+        setConfirm({
+          title: "Snapshots — coming next",
+          body: (
+            <>
+              {action === "convert" ? "Convert to snapshot" : "Create snapshot"} is part of the
+              Snapshot Lifecycle (PRD §3), landing in the next Runtime 2.0 update alongside the
+              Organization Snapshots page.
+            </>
+          ),
+          confirmLabel: "Got it",
+          destructive: false,
+          onConfirm: () => {},
+        });
+        break;
+    }
   };
 
   const list = useMemo(() => {
@@ -2290,7 +2799,7 @@ export default function Dashboard() {
               agent={selected}
               instances={instances}
               onProvision={handleProvision}
-              onTerminate={handleTerminate}
+              onAction={handleAction}
             />
           ) : allAgents.length === 0 ? (
             <NewUserWelcome
