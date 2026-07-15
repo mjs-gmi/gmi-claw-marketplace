@@ -7,7 +7,7 @@ import CopyButton from "@/components/CopyButton";
 import { ALL_CLAWS, TYPE_LABELS, getBadgeConfig, type Claw, type TypeLabel } from "@/lib/clawData";
 import { C as baseC, FONT, TYPE_COLOR } from "@/lib/tokens";
 import { PlanBadge } from "@/components/PlanUI";
-import { isPlanEligibleAgent } from "@/lib/modelsPlan";
+import { isPlanEligibleAgent, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
 
 // ─── Design tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const FONT_MONO = "'GeistMono', ui-monospace, 'SFMono-Regular', monospace";
@@ -245,7 +245,6 @@ export default function Marketplace() {
   const [search, setSearch] = useState("");
   const [activeType, setActiveType] = useState<FilterKey>("All");
   const [verifiedOnly, setVerifiedOnly] = useState(false);
-  const [planOnly, setPlanOnly] = useState(false);
 
   const filtered = ALL_CLAWS
     .filter((c) => {
@@ -257,8 +256,7 @@ export default function Marketplace() {
       const matchesType =
         activeType === "All" || c.typeLabel === activeType;
       const matchesTrust = !verifiedOnly || c.infrastructurePath === "gmi_ce_maas";
-      const matchesPlan = !planOnly || isPlanEligibleAgent(c.typeLabel);
-      return matchesSearch && matchesType && matchesTrust && matchesPlan;
+      return matchesSearch && matchesType && matchesTrust;
     })
     .sort((a, b) => {
       const aV = a.infrastructurePath === "gmi_ce_maas" ? 0 : 1;
@@ -403,7 +401,9 @@ export default function Marketplace() {
                   <button
                     key={type}
                     onClick={() => setActiveType(type)}
+                    title={isPlanEligibleAgent(type) ? `${CODING_AGENT_PLAN.name} eligible` : undefined}
                     style={{
+                      display: "inline-flex", alignItems: "center", gap: 5,
                       fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
                       background: isActive ? "rgba(255,255,255,0.06)" : "transparent",
                       color: isActive ? C.fg : C.muted,
@@ -415,6 +415,9 @@ export default function Marketplace() {
                     }}
                   >
                     {type}
+                    {isPlanEligibleAgent(type) && (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill={C.lime} aria-hidden="true" style={{ flexShrink: 0 }}><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5z" /></svg>
+                    )}
                   </button>
                 );
               })}
@@ -464,35 +467,19 @@ export default function Marketplace() {
                 />
               </span>
             </label>
-
-            {/* Coding Agent Plan — eligible-only filter */}
-            <label
-              onClick={() => setPlanOnly((v) => !v)}
-              style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}
-            >
-              <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px", color: C.lime, display: "inline-flex", alignItems: "center", gap: 5 }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5z" /></svg>
-                Plan eligible
-              </span>
-              <span
-                style={{
-                  width: 32, height: 18,
-                  background: planOnly ? C.lime : C.border,
-                  borderRadius: 999, position: "relative", transition: "background .15s ease", marginLeft: 4,
-                }}
-              >
-                <span
-                  style={{
-                    position: "absolute", top: 2, left: planOnly ? 16 : 2,
-                    width: 14, height: 14,
-                    background: planOnly ? "#0a0a0a" : "#fafafa",
-                    borderRadius: 999, transition: "left .15s ease",
-                  }}
-                />
-              </span>
-            </label>
           </div>
         </section>
+
+        {/* Coding Agent Plan banner — shown when a plan-eligible category tab is active
+            (leverages the existing category tab instead of a separate toggle). */}
+        {isPlanEligibleAgent(activeType) && (
+          <div style={{ margin: "0 32px", display: "flex", alignItems: "center", gap: 10, background: "rgba(221,234,77,0.06)", border: "1px solid rgba(221,234,77,0.30)", borderRadius: 8, padding: "10px 14px" }}>
+            <PlanBadge text={CODING_AGENT_PLAN.name} />
+            <span style={{ fontFamily: FONT, fontSize: 13, color: C.fg }}>
+              These agents run coding models at <span style={{ color: C.lime, fontWeight: 600 }}>{CODING_AGENT_PLAN.discountPct}% off</span> token pricing with the {CODING_AGENT_PLAN.name}.
+            </span>
+          </div>
+        )}
 
         {/* ── Catalog grid ───────────────────────────────────────────────── */}
         <section style={{ padding: "12px 32px 32px" }}>
