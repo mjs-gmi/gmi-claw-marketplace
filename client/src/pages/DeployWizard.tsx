@@ -6,6 +6,8 @@ import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
 import CopyButton from "@/components/CopyButton";
 import { C as baseC, FONT, MONO } from "@/lib/tokens";
+import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
+import { isPlanEligibleModel, discountPriceString, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
 
 // ─── Tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const C = {
@@ -1165,6 +1167,13 @@ function StepInfrastructure({
 
         {addModels && (
           <>
+            {/* Coding Agent Plan — adoption callout: featured model pinned, discounted */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", background: "rgba(221,234,77,0.05)", border: "1px solid rgba(221,234,77,0.30)", borderRadius: 8, padding: "8px 12px" }}>
+              <PlanBadge text={CODING_AGENT_PLAN.name} />
+              <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg }}>
+                {CODING_AGENT_PLAN.discountPct}% off coding models — <span style={{ color: C.lime, fontWeight: 600 }}>{CODING_AGENT_PLAN.featuredModelName}</span> recommended for this agent.
+              </span>
+            </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <FieldLabel>Select Model</FieldLabel>
               <Select
@@ -1192,7 +1201,13 @@ function StepInfrastructure({
                       fontFamily: FONT,
                     }}
                   >
-                    <div style={{ fontSize: 14, fontWeight: 600, color: C.fg, lineHeight: "20px" }}>{m.name}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: C.fg, lineHeight: "20px" }}>{m.name}</div>
+                      {m.id === CODING_AGENT_PLAN.featuredModelId && (
+                        <span style={{ fontFamily: FONT, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", color: C.limeText, background: C.lime, padding: "1px 6px", borderRadius: 4 }}>FEATURED</span>
+                      )}
+                      {isPlanEligibleModel(m.id) && <PlanBadge />}
+                    </div>
                     <div
                       style={{
                         display: "inline-flex", alignSelf: "flex-start",
@@ -1204,9 +1219,19 @@ function StepInfrastructure({
                     >
                       {m.ctx}
                     </div>
-                    <div style={{ fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "18px", marginTop: 2 }}>
-                      Input {m.inPrice}
-                    </div>
+                    {(() => {
+                      const d = isPlanEligibleModel(m.id) ? discountPriceString(m.inPrice) : null;
+                      return d ? (
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 2, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 12, color: C.muted }}>Input</span>
+                          <DiscountedPrice original={d.original} discounted={d.discounted} size={12} />
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "18px", marginTop: 2 }}>
+                          Input {m.inPrice}
+                        </div>
+                      );
+                    })()}
                     {m.outPrice && (
                       <div style={{ fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "18px" }}>
                         Output {m.outPrice}

@@ -6,6 +6,8 @@ import Footer from "@/components/Footer";
 import CopyButton from "@/components/CopyButton";
 import { ALL_CLAWS, TYPE_LABELS, getBadgeConfig, type Claw, type TypeLabel } from "@/lib/clawData";
 import { C as baseC, FONT, TYPE_COLOR } from "@/lib/tokens";
+import { PlanBadge } from "@/components/PlanUI";
+import { isPlanEligibleAgent } from "@/lib/modelsPlan";
 
 // ─── Design tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const FONT_MONO = "'GeistMono', ui-monospace, 'SFMono-Regular', monospace";
@@ -229,9 +231,10 @@ function AgentCard({ claw }: { claw: Claw }) {
         {claw.description}
       </p>
 
-      {/* Category chip — anchored at the bottom of the card */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {/* Category chip + Plan eligible badge — anchored at the bottom of the card */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
         <CategoryTag type={claw.typeLabel} />
+        {isPlanEligibleAgent(claw.typeLabel) && <PlanBadge />}
       </div>
     </div>
   );
@@ -242,6 +245,7 @@ export default function Marketplace() {
   const [search, setSearch] = useState("");
   const [activeType, setActiveType] = useState<FilterKey>("All");
   const [verifiedOnly, setVerifiedOnly] = useState(false);
+  const [planOnly, setPlanOnly] = useState(false);
 
   const filtered = ALL_CLAWS
     .filter((c) => {
@@ -253,7 +257,8 @@ export default function Marketplace() {
       const matchesType =
         activeType === "All" || c.typeLabel === activeType;
       const matchesTrust = !verifiedOnly || c.infrastructurePath === "gmi_ce_maas";
-      return matchesSearch && matchesType && matchesTrust;
+      const matchesPlan = !planOnly || isPlanEligibleAgent(c.typeLabel);
+      return matchesSearch && matchesType && matchesTrust && matchesPlan;
     })
     .sort((a, b) => {
       const aV = a.infrastructurePath === "gmi_ce_maas" ? 0 : 1;
@@ -455,6 +460,33 @@ export default function Marketplace() {
                     background: verifiedOnly ? "#0a0a0a" : "#fafafa",
                     borderRadius: 999,
                     transition: "left .15s ease",
+                  }}
+                />
+              </span>
+            </label>
+
+            {/* Coding Agent Plan — eligible-only filter */}
+            <label
+              onClick={() => setPlanOnly((v) => !v)}
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}
+            >
+              <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px", color: C.lime, display: "inline-flex", alignItems: "center", gap: 5 }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5z" /></svg>
+                Plan eligible
+              </span>
+              <span
+                style={{
+                  width: 32, height: 18,
+                  background: planOnly ? C.lime : C.border,
+                  borderRadius: 999, position: "relative", transition: "background .15s ease", marginLeft: 4,
+                }}
+              >
+                <span
+                  style={{
+                    position: "absolute", top: 2, left: planOnly ? 16 : 2,
+                    width: 14, height: 14,
+                    background: planOnly ? "#0a0a0a" : "#fafafa",
+                    borderRadius: 999, transition: "left .15s ease",
                   }}
                 />
               </span>

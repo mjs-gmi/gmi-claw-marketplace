@@ -5,6 +5,8 @@ import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
 import { ALL_CLAWS, getBadgeConfig } from "@/lib/clawData";
 import { FONT, C, TYPE_COLOR } from "@/lib/tokens";
+import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
+import { isPlanEligibleAgent, discountPriceString, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
 import { toast } from "sonner";
 
 // Extended descriptions for detail page
@@ -466,6 +468,44 @@ export default function ClawDetail() {
                         <p style={{ fontFamily: FONT, fontSize: 12, lineHeight: "17px", color: "#8a8a8a", margin: 0 }}>
                           Opens the deploy wizard with this template — bring your own GMI key.
                         </p>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Models & billing scope (Agent Detail) + your account price
+                      (Access) + auto-discount note (Billing) — Coding Agent Plan */}
+                  {claw.availability === "available" && (() => {
+                    const eligible = isPlanEligibleAgent(claw.typeLabel);
+                    const d = eligible ? discountPriceString(CODING_AGENT_PLAN.featuredModelInPrice) : null;
+                    return (
+                      <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                          <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Models &amp; billing</span>
+                          {eligible && <PlanBadge />}
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 12 }}>
+                          <span style={{ color: C.muted }}>Runs on</span>
+                          <span style={{ color: C.fg }}>GMI MaaS · {CODING_AGENT_PLAN.featuredModelName}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 12 }}>
+                          <span style={{ color: C.muted }}>Billing scope</span>
+                          <span style={{ color: C.fg }}>Pay per token used</span>
+                        </div>
+                        {eligible && d ? (
+                          <div style={{ borderTop: `1px solid ${C.borderSoft}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
+                            <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Your price with {CODING_AGENT_PLAN.name}</span>
+                            <DiscountedPrice original={d.original} discounted={d.discounted} size={14} />
+                            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+                              Discount is applied automatically at billing for your account.
+                            </span>
+                          </div>
+                        ) : (
+                          <div style={{ borderTop: `1px solid ${C.borderSoft}`, paddingTop: 10 }}>
+                            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+                              Standard token pricing. Not covered by the {CODING_AGENT_PLAN.name}.
+                            </span>
+                          </div>
+                        )}
                       </div>
                     );
                   })()}

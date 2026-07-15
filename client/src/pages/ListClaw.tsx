@@ -6,6 +6,8 @@ import Footer from "@/components/Footer";
 import { TYPE_LABELS, type TypeLabel } from "@/lib/clawData";
 import { FONT, MONO, C, TYPE_COLOR } from "@/lib/tokens";
 import { SEED_AGENTS } from "@/lib/seedAgents";
+import { PlanBadge } from "@/components/PlanUI";
+import { isPlanEligibleAgent, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
 
 // ─── Storage keys (shared with DeployWizard / Dashboard) ────────────────────
 const REGISTERED_AGENTS_KEY = "gmi:registered-agents";
@@ -330,6 +332,17 @@ export default function ListClaw() {
                     <TagInput tags={draft.tags} onChange={(t) => update("tags", t)} max={TAG_MAX} />
                   </Field>
                 </Row>
+                {/* Coding Agent Plan — category-driven recommendation (second nudge) */}
+                {isPlanEligibleAgent(draft.category) && (
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(221,234,77,0.05)", border: "1px solid rgba(221,234,77,0.30)", borderRadius: 8, padding: "10px 12px" }}>
+                    <PlanBadge text={CODING_AGENT_PLAN.name} />
+                    <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "18px" }}>
+                      Coding agents qualify for the {CODING_AGENT_PLAN.name}. Pairing with{" "}
+                      <span style={{ color: C.lime, fontWeight: 600 }}>{CODING_AGENT_PLAN.featuredModelName}</span>{" "}
+                      lets adopters run it at {CODING_AGENT_PLAN.discountPct}% off token pricing — a strong listing signal.
+                    </span>
+                  </div>
+                )}
                 <Row>
                   <Field label="Logo (optional)" hint="Square PNG/JPG, at least 256px. Auto-generated from name + category if blank.">
                     <LogoUploader value={draft.logoDataUrl} onChange={(v) => update("logoDataUrl", v)} fallbackName={draft.name || agent.name} fallbackColor={draft.category ? TYPE_COLOR[draft.category as TypeLabel] : C.lime} />
