@@ -2778,18 +2778,31 @@ export default function DeployWizard() {
                           </div>
                         )}
                         {s.id === 2 && (
-                          <StepInfrastructure
-                            dockerSource={dockerSource} setDockerSource={setDockerSource}
-                            dockerImage={dockerImage} setDockerImage={setDockerImage}
-                            enableCreds={enableCreds} setEnableCreds={setEnableCreds}
-                            region={region} setRegion={setRegion}
-                            computeTier={computeTier} setComputeTier={setComputeTier}
-                            maxLifetime={maxLifetime} setMaxLifetime={setMaxLifetime}
-                            idleTimeout={idleTimeout} setIdleTimeout={setIdleTimeout}
-                            addModels={addModels} setAddModels={setAddModels}
-                            selectedModel={selectedModel} setSelectedModel={setSelectedModel}
-                            forkedFromTemplate={!!forkedFrom}
-                          />
+                          <>
+                            <StepInfrastructure
+                              dockerSource={dockerSource} setDockerSource={setDockerSource}
+                              dockerImage={dockerImage} setDockerImage={setDockerImage}
+                              enableCreds={enableCreds} setEnableCreds={setEnableCreds}
+                              region={region} setRegion={setRegion}
+                              computeTier={computeTier} setComputeTier={setComputeTier}
+                              maxLifetime={maxLifetime} setMaxLifetime={setMaxLifetime}
+                              idleTimeout={idleTimeout} setIdleTimeout={setIdleTimeout}
+                              addModels={addModels} setAddModels={setAddModels}
+                              selectedModel={selectedModel} setSelectedModel={setSelectedModel}
+                              forkedFromTemplate={!!forkedFrom}
+                            />
+                            {/* R1 decision: Register does NOT set runtime lifecycle — it's
+                                configured per instance at Launch (org default prefilled). */}
+                            <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "flex-start", background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "9px 12px" }}>
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ color: C.muted, flexShrink: 0, marginTop: 1 }}>
+                                <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
+                              </svg>
+                              <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "18px" }}>
+                                <span style={{ color: C.fg, fontWeight: 600 }}>Runtime lifecycle is configured per instance at Launch</span> — maximum active runtime, inactivity, and disk retention use your Organization default and can be customized when you launch an instance (not here).{" "}
+                                <span style={{ color: C.muted }}>Register defines how the Agent runs; Launch defines how long each instance runs.</span>
+                              </span>
+                            </div>
+                          </>
                         )}
                         {s.id === 3 && (
                           <StepNetworking
