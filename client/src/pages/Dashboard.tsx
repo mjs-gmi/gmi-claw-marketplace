@@ -2699,7 +2699,7 @@ function RestoreSnapshotModal({
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.78)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: 520, maxWidth: "100%", background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 10, display: "flex", flexDirection: "column", maxHeight: "90vh", overflow: "hidden" }}>
         <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}` }}>
-          <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>Create Runtime from snapshot</h3>
+          <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>Launch from Snapshot</h3>
           <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "4px 0 0" }}>
             <span style={{ fontFamily: MONO }}>{snapshot.name}</span> · restores filesystem state into a compatible Agent
           </p>
@@ -2735,6 +2735,29 @@ function RestoreSnapshotModal({
               </button>
             );
           })}
+
+          {/* What restores / re-applied · secrets · cost · permission (PRD F-08 / §4.4) */}
+          {anyCompatible && (() => {
+            const d = discountPriceString(CODING_AGENT_PLAN.featuredModelInPrice);
+            return (
+              <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 9, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "11px 12px" }}>
+                <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px" }}>
+                  <span style={{ color: C.fg, fontWeight: 600 }}>Snapshot provides</span> filesystem state · <span style={{ color: C.fg, fontWeight: 600 }}>Target Agent provides</span> resources, env, startup &amp; endpoints. The new runtime gets a fresh ID, endpoints and tokens.
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "flex-start", fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px" }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1, color: C.warn }}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+                  <span><span style={{ color: C.fg, fontWeight: 600 }}>Secrets are not restored</span> — re-bound from the Target Agent's current authorization, never from the snapshot.</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, fontFamily: FONT, fontSize: 12 }}>
+                  <span style={{ color: C.muted }}>Est. cost</span>
+                  <span style={{ color: C.fg }}>Target compute + MaaS{d ? <> · <span style={{ color: C.lime, fontWeight: 600 }}>{d.discounted}</span></> : ""}</span>
+                </div>
+                <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
+                  Requires permission on both the snapshot and the Target Agent.
+                </div>
+              </div>
+            );
+          })()}
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "12px 20px", borderTop: `1px solid ${C.borderSoft}` }}>
           <button onClick={onClose} style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, background: "transparent", color: C.fg, border: `1px solid ${C.border}`, padding: "6px 14px", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
@@ -2743,7 +2766,7 @@ function RestoreSnapshotModal({
             disabled={!targetId}
             style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, background: targetId ? C.lime : "#3a3a1f", color: targetId ? C.limeText : "#666", border: "none", padding: "6px 16px", borderRadius: 8, cursor: targetId ? "pointer" : "not-allowed" }}
           >
-            Create Runtime
+            Launch from Snapshot
           </button>
         </div>
       </div>
@@ -2795,7 +2818,7 @@ function OrganizationSnapshots({
                   {s.status}
                 </span>
                 {s.status === "ready" && (
-                  <button onClick={() => onRestore(s)} style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.limeText, background: C.lime, border: "none", padding: "3px 10px", borderRadius: 6, cursor: "pointer" }}>Create Runtime</button>
+                  <button onClick={() => onRestore(s)} style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.limeText, background: C.lime, border: "none", padding: "3px 10px", borderRadius: 6, cursor: "pointer" }}>Launch from Snapshot</button>
                 )}
                 {(s.status === "ready" || s.status === "failed") && (
                   <button onClick={() => onDelete(s.id)} style={{ fontFamily: FONT, fontSize: 11, fontWeight: 500, color: C.err, background: "transparent", border: `1px solid ${C.border}`, padding: "3px 9px", borderRadius: 6, cursor: "pointer" }}>Delete</button>
@@ -3086,12 +3109,28 @@ export default function Dashboard() {
       settleToast(t, "success", "Snapshot deleted");
     }, 900);
   };
+  const confirmDeleteSnapshot = (sid: string) => {
+    const snap = snapshots.find((s) => s.id === sid);
+    setConfirm({
+      title: "Delete snapshot?",
+      body: (
+        <>
+          Snapshot <span style={{ color: C.fg, fontFamily: MONO }}>{snap?.name ?? sid}</span> will be
+          permanently deleted. This cannot be undone, and any runtime already launched from it is unaffected.
+        </>
+      ),
+      confirmLabel: "Delete snapshot",
+      destructive: true,
+      onConfirm: () => deleteSnapshot(sid),
+    });
+  };
   const launchFromSnapshot = (snapshot: Snapshot, targetAgentId: string) => {
     // F-08 — new runtime with a fresh identity, target Agent config authoritative.
     setRestoreSnapshot(null);
     setTopTab("deployments");
     setSelectedId(targetAgentId);
     actuallyProvision(targetAgentId, { ...TEMPLATE_DEFAULT_CONFIG, name: `from-${snapshot.name}` });
+    pushToast("success", "Launching runtime from snapshot — see My Agents");
   };
 
   const list = useMemo(() => {
@@ -3149,7 +3188,7 @@ export default function Dashboard() {
             <OrganizationSnapshots
               snapshots={snapshots}
               onRestore={(s) => setRestoreSnapshot(s)}
-              onDelete={deleteSnapshot}
+              onDelete={confirmDeleteSnapshot}
             />
           </div>
         )}
