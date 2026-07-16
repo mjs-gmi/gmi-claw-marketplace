@@ -338,11 +338,56 @@ const INITIAL_SNAPSHOTS: Snapshot[] = [
     retentionDays: 30,
     status: "ready",
   },
+  {
+    id: "snap_2b8d47f1c9a0",
+    name: "hermes-preupgrade",
+    sourceAgentId: "agent_hermes",
+    sourceAgentName: "Hermes",
+    sourceRuntimeId: "1e1bd452-9a3c-4b8e-bf21-7d40c9e6095a",
+    category: "Code & Dev Tools",
+    createdAt: _seedDaysAgo(27),  // 30-day retention → ~3 days left (risk tier)
+    sizeGiB: 3.1,
+    retentionDays: 30,
+    status: "ready",
+  },
 ];
 // F-10 snapshot size estimate → "Requires up to X GiB" (mock: OS + used bytes + margin).
 function estimateSnapshotGiB(): number {
   return 4.2;
 }
+// Snapshot retention expiry (F-10) — days left + 7/3/1 risk color, mirrors runtimes.
+function snapshotDaysLeft(s: Snapshot): number {
+  const start = new Date(s.createdAt.replace(" ", "T")).getTime();
+  const elapsed = Math.floor((Date.now() - start) / 86400000);
+  return Math.max(0, s.retentionDays - elapsed);
+}
+function riskColor(daysLeft: number): { color: string; warn: boolean } {
+  if (daysLeft <= 1) return { color: C.err, warn: true };
+  if (daysLeft <= 3) return { color: "#fb923c", warn: true };
+  if (daysLeft <= 7) return { color: C.warn, warn: true };
+  return { color: C.muted, warn: false };
+}
+
+// ─── Cost estimates (PRD §4.5 metering; exact billing lives in Usage & Billing) ──
+// Mock rates — the reliability of a $/month figure is a Decision needed (review).
+const SUSPENDED_STORAGE_PER_GIB_MO = 0.08;
+const SNAPSHOT_STORAGE_PER_GIB_MO = 0.05;
+const SUSPENDED_DISK_GIB = 10;   // mock retained-disk size per suspended runtime
+const HRS_PER_MONTH = 730;
+const CONTAINER_RATE_HR = 0.0098; // Container tier $/hr (matches Register's Live Cost)
+interface CostBreakdown { computeMo: number; suspendedMo: number; snapMo: number; total: number; suspendedGiB: number; snapGiB: number }
+function agentCostBreakdown(agentId: string, instances: Instance[], snapshots: Snapshot[]): CostBreakdown {
+  const rate = CONTAINER_RATE_HR;
+  const mine = instances.filter((i) => i.agentId === agentId);
+  const activeCompute = mine.filter((i) => i.status === "running" || i.status === "resuming" || i.status === "suspending").length;
+  const computeMo = activeCompute * rate * HRS_PER_MONTH;
+  const suspendedGiB = mine.filter((i) => i.status === "suspended").length * SUSPENDED_DISK_GIB;
+  const suspendedMo = suspendedGiB * SUSPENDED_STORAGE_PER_GIB_MO;
+  const snapGiB = snapshots.filter((s) => s.sourceAgentId === agentId && s.status === "ready").reduce((a, s) => a + s.sizeGiB, 0);
+  const snapMo = snapGiB * SNAPSHOT_STORAGE_PER_GIB_MO;
+  return { computeMo, suspendedMo, snapMo, total: computeMo + suspendedMo + snapMo, suspendedGiB, snapGiB };
+}
+const usd = (n: number) => `$${n.toFixed(2)}`;
 
 interface AgentAggregate {
   active: number;
@@ -1968,7 +2013,14 @@ function InstanceDetailModal({
               <h4 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: 0 }}>Persistence</h4>
               <NewBadge />
             </div>
-            <DetailRow label="Disk retention" value={inst.status === "suspended" ? retentionState(inst) : "Not retained (running)"} accent={inst.keep ? C.lime : undefined} />
+            <DetailRow
+              label="Disk retention"
+              value={inst.status === "suspended" ? retentionState(inst) : "Not retained (running)"}
+              accent={inst.status === "suspended" ? retentionRisk(inst).color : undefined}
+            />
+            {inst.status === "suspended" && !inst.keep && (
+              <DetailRow label="Expiry" value={retentionExpiry(inst)} accent={retentionRisk(inst).color} />
+            )}
             <DetailRow label="Keep status" value={inst.keep ? "Kept — retention paused" : "Not kept"} accent={inst.keep ? C.lime : undefined} />
             <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px", marginTop: 2 }}>
               Storage charges apply while this disk is retained. Detailed charges remain in Usage &amp; Billing.
@@ -2021,10 +2073,11 @@ function InstanceDetailModal({
 
 // ─── Monitor pane ─────────────────────────────────────────────────────────
 function MonitorPane({
-  agent, instances, onProvision, onAction, canConvert = false,
+  agent, instances, snapshots, onProvision, onAction, canConvert = false,
 }: {
   agent: MyAgent;
   instances: Instance[];
+  snapshots: Snapshot[];
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
   canConvert?: boolean;
@@ -2093,6 +2146,38 @@ function MonitorPane({
           />
         </div>
       </section>
+
+      {/* Est. cost — compute / suspended storage / snapshot storage (PRD §4.5).
+          Estimate only; exact charges live in Usage & Billing. */}
+      {(() => {
+        const cost = agentCostBreakdown(agent.id, instances, snapshots);
+        const lines = [
+          { label: "Compute", note: "running · per active instance", val: cost.computeMo },
+          { label: "Suspended storage", note: `retained disks · ${cost.suspendedGiB} GiB`, val: cost.suspendedMo },
+          { label: "Snapshot storage", note: `${cost.snapGiB.toFixed(1)} GiB`, val: cost.snapMo },
+        ];
+        return (
+          <section>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", margin: "0 0 12px" }}>
+              <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: 0 }}>Est. cost</h3>
+              <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>estimate · MaaS pay-per-token billed separately</span>
+            </div>
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+              {lines.map((l) => (
+                <div key={l.label} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+                  <span style={{ fontFamily: FONT, fontSize: 13, color: C.fg }}>{l.label} <span style={{ color: C.muted, fontSize: 11 }}>· {l.note}</span></span>
+                  <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: l.val > 0 ? C.fg : C.muted }}>{usd(l.val)}<span style={{ fontSize: 11, fontWeight: 500, color: C.muted }}>/mo</span></span>
+                </div>
+              ))}
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, borderTop: `1px solid ${C.borderSoft}`, paddingTop: 8, marginTop: 2 }}>
+                <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Est. total</span>
+                <span style={{ fontFamily: FONT, fontSize: 16, fontWeight: 700, color: C.fg, letterSpacing: "-0.01em" }}>{usd(cost.total)}<span style={{ fontSize: 12, fontWeight: 500, color: C.muted }}>/mo</span></span>
+              </div>
+              <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>Exact charges in Usage &amp; Billing.</span>
+            </div>
+          </section>
+        );
+      })()}
 
       {/* Instance Set — header is just a label now; "+ Instance" lives in
           the agent detail header next to Listing ▼. */}
@@ -2528,10 +2613,11 @@ function AnalyticsPane() {
 
 // ─── Right detail pane ────────────────────────────────────────────────────
 function AgentDetailPane({
-  agent, instances, onProvision, onAction, canConvert = false,
+  agent, instances, snapshots, onProvision, onAction, canConvert = false,
 }: {
   agent: MyAgent;
   instances: Instance[];
+  snapshots: Snapshot[];
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
   canConvert?: boolean;
@@ -2655,6 +2741,7 @@ function AgentDetailPane({
         <MonitorPane
           agent={agent}
           instances={instances}
+          snapshots={snapshots}
           onProvision={onProvision}
           onAction={onAction}
           canConvert={canConvert}
@@ -2811,7 +2898,17 @@ function OrganizationSnapshots({
               </div>
               <div style={{ color: C.muted }}>{agoLabel(s.createdAt)}</div>
               <div style={{ color: C.muted }}>{s.status === "ready" ? `${s.sizeGiB} GiB` : "—"}</div>
-              <div style={{ color: C.muted }}>{s.status === "ready" ? `${s.retentionDays}d` : "—"}</div>
+              {(() => {
+                if (s.status !== "ready") return <div style={{ color: C.muted }}>—</div>;
+                const left = snapshotDaysLeft(s);
+                const r = riskColor(left);
+                return (
+                  <div title={`Deletes in ${left} day${left === 1 ? "" : "s"}`} style={{ display: "inline-flex", alignItems: "center", gap: 4, color: r.color }}>
+                    {r.warn && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h16.9a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 17h.01" /></svg>}
+                    {left}d left
+                  </div>
+                );
+              })()}
               <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: FONT, fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: snapshotColor(s.status), background: `${snapshotColor(s.status)}1f`, border: `1px solid ${snapshotColor(s.status)}55`, padding: "2px 8px", borderRadius: 6, marginRight: 4 }}>
                   {s.status === "creating" && <span style={{ width: 6, height: 6, borderRadius: 999, background: snapshotColor(s.status), animation: "pulse 1.2s ease-in-out infinite" }} />}
@@ -2849,6 +2946,70 @@ function Toaster({ toasts }: { toasts: ToastMsg[] }) {
           <span style={{ fontFamily: FONT, fontSize: 13, color: C.fg, lineHeight: "18px" }}>{t.msg}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ─── Notification entry (PRD §4.3) — resources nearing auto-deletion ────────
+function NotificationBell({
+  instances, snapshots, onOpenSnapshots,
+}: {
+  instances: Instance[];
+  snapshots: Snapshot[];
+  onOpenSnapshots: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+
+  const items = [
+    ...instances.filter((i) => i.status === "suspended" && !i.keep && retentionDaysLeft(i) <= 7)
+      .map((i) => ({ id: i.id, kind: "Runtime disk", name: midId(i.id), left: retentionDaysLeft(i), snapshot: false })),
+    ...snapshots.filter((s) => s.status === "ready" && snapshotDaysLeft(s) <= 7)
+      .map((s) => ({ id: s.id, kind: "Snapshot", name: s.name, left: snapshotDaysLeft(s), snapshot: true })),
+  ].sort((a, b) => a.left - b.left);
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        title={items.length ? `${items.length} resource${items.length === 1 ? "" : "s"} nearing auto-deletion` : "No expiring resources"}
+        style={{ position: "relative", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, background: open ? "rgba(255,255,255,0.06)" : "transparent", color: items.length ? C.warn : C.muted, border: `1px solid ${open ? C.border : "transparent"}`, borderRadius: 8, cursor: "pointer" }}
+      >
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></svg>
+        {items.length > 0 && (
+          <span style={{ position: "absolute", top: 3, right: 3, minWidth: 15, height: 15, padding: "0 3px", background: C.err, color: "#fff", fontFamily: FONT, fontSize: 9, fontWeight: 700, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{items.length}</span>
+        )}
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, width: 320, background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.5)", zIndex: 50, overflow: "hidden" }}>
+          <div style={{ padding: "10px 14px", borderBottom: `1px solid ${C.borderSoft}`, fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Expiring soon</div>
+          <div style={{ maxHeight: 280, overflowY: "auto" }}>
+            {items.length === 0 ? (
+              <div style={{ padding: "18px 14px", fontFamily: FONT, fontSize: 12, color: C.muted, textAlign: "center" }}>Nothing scheduled for auto-deletion.</div>
+            ) : items.map((it) => {
+              const r = riskColor(it.left);
+              return (
+                <button key={it.id} onClick={() => { setOpen(false); if (it.snapshot) onOpenSnapshots(); }} style={{ width: "100%", textAlign: "left", display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "transparent", border: "none", borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={r.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h16.9a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: "block", fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.kind} · {it.name}</span>
+                    <span style={{ fontFamily: FONT, fontSize: 11, color: r.color }}>Deletes in {it.left} day{it.left === 1 ? "" : "s"}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ padding: "8px 14px", fontFamily: FONT, fontSize: 10.5, color: C.muted, lineHeight: "15px" }}>
+            We attempt to notify you before automated deletion. Delivery is not guaranteed — the Console expiry time is authoritative.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3152,8 +3313,9 @@ export default function Dashboard() {
 
       <div style={{ marginLeft: 210, paddingTop: 40, display: "flex", flexDirection: "column", minHeight: "100vh" }}>
 
-        {/* Top tabs (My Deployments & Listings / Agents I Use) */}
-        <div style={{ display: "flex", borderBottom: `1px solid ${C.border}`, padding: "0 32px" }}>
+        {/* Top tabs + expiry notification entry */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: `1px solid ${C.border}`, padding: "0 32px" }}>
+          <div style={{ display: "flex" }}>
           {[
             { id: "deployments" as const, label: "My Deployments & Listings", isNew: false },
             { id: "uses" as const, label: "Agents I Use", isNew: false },
@@ -3181,6 +3343,8 @@ export default function Dashboard() {
               </button>
             );
           })}
+          </div>
+          <NotificationBell instances={instances} snapshots={snapshots} onOpenSnapshots={() => setTopTab("snapshots")} />
         </div>
 
         {topTab === "snapshots" && (
@@ -3273,6 +3437,7 @@ export default function Dashboard() {
             <AgentDetailPane
               agent={selected}
               instances={instances}
+              snapshots={snapshots}
               onProvision={handleProvision}
               onAction={handleAction}
               canConvert
