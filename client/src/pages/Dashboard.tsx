@@ -251,6 +251,46 @@ function newInstanceId(): string {
   const r = () => Math.random().toString(16).slice(2, 10);
   return `inst_${r()}-${r().slice(0, 4)}-${r().slice(0, 4)}-${r().slice(0, 4)}-${r()}${r().slice(0, 4)}`;
 }
+function newSnapshotId(): string {
+  const r = () => Math.random().toString(16).slice(2, 10);
+  return `snap_${r()}${r().slice(0, 4)}`;
+}
+
+// ─── Snapshot lifecycle (PRD §3 / §5.5) ─────────────────────────────────────
+// Organization-owned, independent copies of a runtime disk. creating → ready.
+type SnapshotStatus = "creating" | "ready" | "failed" | "deleting";
+interface Snapshot {
+  id: string;
+  name: string;
+  sourceAgentId: string;
+  sourceAgentName: string;
+  sourceRuntimeId: string;
+  sourceDeleted?: boolean;   // source runtime/agent gone — snapshot still usable (F-08)
+  category: string;          // captured runtime category — drives restore compatibility
+  createdAt: string;
+  sizeGiB: number;
+  retentionDays: number;     // F-10 retention window
+  status: SnapshotStatus;
+  error?: string;
+}
+const INITIAL_SNAPSHOTS: Snapshot[] = [
+  {
+    id: "snap_7c3f9a21b8e4",
+    name: "hermes-baseline",
+    sourceAgentId: "agent_hermes",
+    sourceAgentName: "Hermes",
+    sourceRuntimeId: "8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36",
+    category: "Code & Dev Tools",
+    createdAt: _seedDaysAgo(3),
+    sizeGiB: 4.2,
+    retentionDays: 30,
+    status: "ready",
+  },
+];
+// F-10 snapshot size estimate → "Requires up to X GiB" (mock: OS + used bytes + margin).
+function estimateSnapshotGiB(): number {
+  return 4.2;
+}
 
 interface AgentAggregate {
   active: number;
@@ -2541,6 +2581,149 @@ function AgentDetailPane({
   );
 }
 
+// ─── Snapshot status color + label ─────────────────────────────────────────
+function snapshotColor(s: SnapshotStatus): string {
+  switch (s) {
+    case "ready":    return C.ok;
+    case "creating": return "#fbbf24";
+    case "failed":   return C.err;
+    case "deleting": return "#fb923c";
+  }
+}
+
+// ─── Restore modal — Create Runtime from a snapshot (PRD F-08 / §5.5) ───────
+function RestoreSnapshotModal({
+  snapshot, agents, onClose, onLaunch,
+}: {
+  snapshot: Snapshot | null;
+  agents: MyAgent[];
+  onClose: () => void;
+  onLaunch: (targetAgentId: string) => void;
+}) {
+  const [targetId, setTargetId] = useState<string | null>(null);
+  if (!snapshot) return null;
+  // Compatibility: the target Agent must match the snapshot's captured category.
+  const withCompat = agents.map((a) => ({
+    agent: a,
+    compatible: a.category === snapshot.category,
+    reason: a.category === snapshot.category ? "" : `Incompatible — captured a ${snapshot.category} runtime`,
+  })).sort((a, b) => Number(b.compatible) - Number(a.compatible));
+  const anyCompatible = withCompat.some((x) => x.compatible);
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.78)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 520, maxWidth: "100%", background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 10, display: "flex", flexDirection: "column", maxHeight: "90vh", overflow: "hidden" }}>
+        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}` }}>
+          <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>Create Runtime from snapshot</h3>
+          <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "4px 0 0" }}>
+            <span style={{ fontFamily: MONO }}>{snapshot.name}</span> · restores filesystem state into a compatible Agent
+          </p>
+        </div>
+        <div style={{ padding: "14px 20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
+          <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.fg }}>Target Agent</span>
+          {!anyCompatible && (
+            <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "10px 12px", lineHeight: "18px" }}>
+              No compatible Agent is available. Create New Agent from Snapshot is not supported in this release.
+            </div>
+          )}
+          {withCompat.map(({ agent, compatible, reason }) => {
+            const selected = targetId === agent.id;
+            return (
+              <button
+                key={agent.id}
+                disabled={!compatible}
+                onClick={() => compatible && setTargetId(agent.id)}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, textAlign: "left",
+                  background: selected ? "rgba(221,234,77,0.10)" : "rgba(255,255,255,0.02)",
+                  border: `1px solid ${selected ? C.lime : C.borderSoft}`,
+                  borderRadius: 8, padding: "10px 12px",
+                  cursor: compatible ? "pointer" : "not-allowed", opacity: compatible ? 1 : 0.5,
+                  fontFamily: FONT,
+                }}
+              >
+                <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: C.fg }}>{agent.name}</span>
+                  <span style={{ fontSize: 11, color: compatible ? C.muted : C.err }}>{compatible ? agent.category : reason}</span>
+                </span>
+                {compatible && <span style={{ fontSize: 11, fontWeight: 600, color: C.lime }}>Compatible</span>}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "12px 20px", borderTop: `1px solid ${C.borderSoft}` }}>
+          <button onClick={onClose} style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, background: "transparent", color: C.fg, border: `1px solid ${C.border}`, padding: "6px 14px", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
+          <button
+            onClick={() => targetId && onLaunch(targetId)}
+            disabled={!targetId}
+            style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, background: targetId ? C.lime : "#3a3a1f", color: targetId ? C.limeText : "#666", border: "none", padding: "6px 16px", borderRadius: 8, cursor: targetId ? "pointer" : "not-allowed" }}
+          >
+            Create Runtime
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Organization Snapshots view (PRD §5.5) ─────────────────────────────────
+function OrganizationSnapshots({
+  snapshots, onRestore, onDelete,
+}: {
+  snapshots: Snapshot[];
+  onRestore: (s: Snapshot) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <section style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <h1 style={{ fontFamily: FONT, fontSize: 24, fontWeight: 700, lineHeight: "30px", color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>Organization Snapshots</h1>
+        <NewBadge />
+      </div>
+      <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, margin: 0 }}>
+        Reusable, independent copies of a runtime disk — restore into a compatible Agent. Snapshots outlive their source runtime.
+      </p>
+
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "visible", marginTop: 4 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1.5fr 0.9fr 0.7fr 1fr 1fr", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, background: "rgba(255,255,255,0.02)", fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>
+          <div>Snapshot</div><div>Source</div><div>Created</div><div>Size</div><div>Expiry</div><div style={{ textAlign: "right" }}>Actions</div>
+        </div>
+        {snapshots.length === 0 ? (
+          <div style={{ padding: "48px 16px", textAlign: "center", fontFamily: FONT, fontSize: 13, color: C.muted }}>
+            No snapshots yet. Create one from a running runtime in My Agents.
+          </div>
+        ) : (
+          snapshots.map((s, i) => (
+            <div key={s.id} style={{ display: "grid", gridTemplateColumns: "1.3fr 1.5fr 0.9fr 0.7fr 1fr 1fr", padding: "12px 16px", borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`, alignItems: "center", fontFamily: FONT, fontSize: 13, color: C.fg }}>
+              <div style={{ fontFamily: MONO, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</div>
+              <div style={{ color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {s.sourceAgentName}
+                {s.sourceDeleted && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 600, color: C.muted, background: "rgba(255,255,255,0.05)", border: `1px solid ${C.border}`, padding: "0 5px", borderRadius: 4 }}>Deleted</span>}
+                <span style={{ display: "block", fontFamily: MONO, fontSize: 11, color: C.borderSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{midId(s.sourceRuntimeId)}</span>
+              </div>
+              <div style={{ color: C.muted }}>{agoLabel(s.createdAt)}</div>
+              <div style={{ color: C.muted }}>{s.status === "ready" ? `${s.sizeGiB} GiB` : "—"}</div>
+              <div style={{ color: C.muted }}>{s.status === "ready" ? `${s.retentionDays}d` : "—"}</div>
+              <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: FONT, fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: snapshotColor(s.status), background: `${snapshotColor(s.status)}1f`, border: `1px solid ${snapshotColor(s.status)}55`, padding: "2px 8px", borderRadius: 6, marginRight: 4 }}>
+                  {s.status === "creating" && <span style={{ width: 6, height: 6, borderRadius: 999, background: snapshotColor(s.status), animation: "pulse 1.2s ease-in-out infinite" }} />}
+                  {s.status}
+                </span>
+                {s.status === "ready" && (
+                  <button onClick={() => onRestore(s)} style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.limeText, background: C.lime, border: "none", padding: "3px 10px", borderRadius: 6, cursor: "pointer" }}>Create Runtime</button>
+                )}
+                {(s.status === "ready" || s.status === "failed") && (
+                  <button onClick={() => onDelete(s.id)} style={{ fontFamily: FONT, fontSize: 11, fontWeight: 500, color: C.err, background: "transparent", border: `1px solid ${C.border}`, padding: "3px 9px", borderRadius: 6, cursor: "pointer" }}>Delete</button>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [, setLocation] = useLocation();
@@ -2599,6 +2782,10 @@ export default function Dashboard() {
   // allAgents may be empty for a brand-new user — no fallback to MY_DEPLOYMENTS now that it's empty.
   const [selectedId, setSelectedId] = useState<string>(allAgents[0]?.id ?? "");
   const [instances, setInstances] = useState<Instance[]>(INITIAL_INSTANCES);
+  // Snapshot lifecycle (PRD §3 / §5.5)
+  const [snapshots, setSnapshots] = useState<Snapshot[]>(INITIAL_SNAPSHOTS);
+  const [resourceView, setResourceView] = useState<"agents" | "snapshots">("agents");
+  const [restoreSnapshot, setRestoreSnapshot] = useState<Snapshot | null>(null);
 
   // Provision modal — open per-task override modal first, then provision on submit
   const [provisionForAgentId, setProvisionForAgentId] = useState<string | null>(null);
@@ -2697,23 +2884,61 @@ export default function Dashboard() {
         });
         break;
       case "snapshot":
-      case "convert":
-        // Snapshot lifecycle (F-07 / F-08 / F-11) ships in the next stage.
+      case "convert": {
+        // F-07 Create snapshot (from Running) / F-11 Convert (from Suspended).
+        const est = estimateSnapshotGiB();
         setConfirm({
-          title: "Snapshots — coming next",
+          title: action === "convert" ? "Convert to snapshot?" : "Create snapshot?",
           body: (
             <>
-              {action === "convert" ? "Convert to snapshot" : "Create snapshot"} is part of the
-              Snapshot Lifecycle (PRD §3), landing in the next Runtime 2.0 update alongside the
-              Organization Snapshots page.
+              A reusable, independent snapshot of this runtime's disk will be created.
+              Requires up to <span style={{ color: C.fg, fontWeight: 600 }}>{est} GiB</span> of snapshot capacity;
+              billing starts when it reaches Ready.
+              {action === "convert" ? " The runtime stays suspended." : " The source runtime is unaffected."}
             </>
           ),
-          confirmLabel: "Got it",
+          confirmLabel: action === "convert" ? "Convert" : "Create snapshot",
           destructive: false,
-          onConfirm: () => {},
+          onConfirm: () => createSnapshotFrom(id),
         });
         break;
+      }
     }
+  };
+
+  // ── Snapshot mutations (PRD §3) ──────────────────────────────────────────
+  const createSnapshotFrom = (instanceId: string) => {
+    const inst = instances.find((i) => i.id === instanceId);
+    if (!inst) return;
+    const agent = allAgents.find((a) => a.id === inst.agentId);
+    const sid = newSnapshotId();
+    const snap: Snapshot = {
+      id: sid,
+      name: `${(agent?.name || "runtime").toLowerCase().replace(/\s+/g, "-")}-${sid.slice(-4)}`,
+      sourceAgentId: inst.agentId,
+      sourceAgentName: agent?.name || "—",
+      sourceRuntimeId: inst.id,
+      category: agent?.category || "Code & Dev Tools",
+      createdAt: fmtNow(),
+      sizeGiB: estimateSnapshotGiB(),
+      retentionDays: 30,
+      status: "creating",
+    };
+    setSnapshots((prev) => [snap, ...prev]);
+    setResourceView("snapshots"); // jump to Organization Snapshots so the user sees it
+    // Billing starts only at Ready (F-07): creating → ready after ~1.6s.
+    setTimeout(() => setSnapshots((prev) => prev.map((s) => (s.id === sid ? { ...s, status: "ready" } : s))), 1600);
+  };
+  const deleteSnapshot = (sid: string) => {
+    setSnapshots((prev) => prev.map((s) => (s.id === sid ? { ...s, status: "deleting" } : s)));
+    setTimeout(() => setSnapshots((prev) => prev.filter((s) => s.id !== sid)), 900);
+  };
+  const launchFromSnapshot = (snapshot: Snapshot, targetAgentId: string) => {
+    // F-08 — new runtime with a fresh identity, target Agent config authoritative.
+    setRestoreSnapshot(null);
+    setResourceView("agents");
+    setSelectedId(targetAgentId);
+    actuallyProvision(targetAgentId, { ...TEMPLATE_DEFAULT_CONFIG, name: `from-${snapshot.name}` });
   };
 
   const list = useMemo(() => {
@@ -2762,7 +2987,42 @@ export default function Dashboard() {
           })}
         </div>
 
+        {/* Resource view toggle — Agents / Organization Snapshots (PRD §5.5) */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "12px 32px 0" }}>
+          {(["agents", "snapshots"] as const).map((v) => {
+            const active = resourceView === v;
+            return (
+              <button
+                key={v}
+                onClick={() => setResourceView(v)}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  fontFamily: FONT, fontSize: 13, fontWeight: 600,
+                  color: active ? C.fg : C.muted,
+                  background: active ? "rgba(255,255,255,0.06)" : "transparent",
+                  border: `1px solid ${active ? C.border : "transparent"}`,
+                  padding: "6px 12px", borderRadius: 8, cursor: "pointer",
+                }}
+              >
+                {v === "agents" ? "Agents" : "Organization Snapshots"}
+                {v === "snapshots" && <NewBadge />}
+              </button>
+            );
+          })}
+        </div>
+
+        {resourceView === "snapshots" && (
+          <div style={{ padding: "16px 32px 32px", flex: 1, minHeight: 0 }}>
+            <OrganizationSnapshots
+              snapshots={snapshots}
+              onRestore={(s) => setRestoreSnapshot(s)}
+              onDelete={deleteSnapshot}
+            />
+          </div>
+        )}
+
         {/* Body: split — left list pane / right detail pane */}
+        {resourceView === "agents" && (
         <div
           style={{
             display: "grid",
@@ -2843,6 +3103,7 @@ export default function Dashboard() {
               instances={instances}
               onProvision={handleProvision}
               onAction={handleAction}
+              canConvert
             />
           ) : allAgents.length === 0 ? (
             <NewUserWelcome
@@ -2855,9 +3116,17 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+        )}
 
         <Footer />
       </div>
+
+      <RestoreSnapshotModal
+        snapshot={restoreSnapshot}
+        agents={allAgents}
+        onClose={() => setRestoreSnapshot(null)}
+        onLaunch={(targetAgentId) => restoreSnapshot && launchFromSnapshot(restoreSnapshot, targetAgentId)}
+      />
 
       <ProvisionModal
         open={provisionForAgentId !== null}
