@@ -156,6 +156,39 @@ const INITIAL_INSTANCES: Instance[] = [
     maxActive: "off",
     maxRuntimeAction: "suspend",
   },
+  // Suspended runtime near its retention expiry — drives the 7/3/1 risk state.
+  {
+    id: "3f9a2c74-1b6d-4e8a-9c05-2a7f1e4b8d10",
+    agentId: "agent_hermes",
+    status: "suspended",
+    created: _seedDaysAgo(20),
+    maxActive: "1h",
+    maxRuntimeAction: "suspend",
+    suspendedAt: _seedDaysAgo(28), // 30-day retention → ~2 days left (danger tier)
+    retentionDays: 30,
+  },
+  // Failed creation (§4.2) — record remains deletable, Retry available.
+  {
+    id: "a1c8e5f2-7d34-4b90-8e16-9f2b3c6a0d55",
+    agentId: "agent_hermes",
+    status: "error",
+    created: _seedMinsAgo(6),
+    maxActive: "1h",
+    maxRuntimeAction: "suspend",
+    lastError: "Initialization deadline exceeded — startup probe never became ready.",
+  },
+  // Unknown provider outcome (§4.2) — last confirmed state kept, unconfirmed=true.
+  {
+    id: "b2d9f6a3-8e45-4c01-9f27-0a3c4d7b1e66",
+    agentId: "agent_hermes",
+    status: "running",
+    created: _seedMinsAgo(3),
+    endpointUrl: endpointFor("b2d9f6a3-8e45-4c01-9f27-0a3c4d7b1e66"),
+    maxActive: "6h",
+    maxRuntimeAction: "suspend",
+    lifecycleStartedAt: _seedMinsAgo(3),
+    unconfirmed: true,
+  },
 ];
 
 // Mock log tail (F-03 — `GET /tasks/{id}/logs`); deterministic from instance id
@@ -237,13 +270,32 @@ function activeRemaining(inst: Instance): string {
 }
 
 // F-05 Lifecycle column — retention state for a Suspended runtime.
-function retentionState(inst: Instance): string {
-  if (inst.keep) return "Kept from auto-deletion";
+function retentionDaysLeft(inst: Instance): number {
   const days = inst.retentionDays ?? 30;
   const start = inst.suspendedAt ? new Date(inst.suspendedAt.replace(" ", "T")).getTime() : Date.now();
   const elapsedDays = Math.floor((Date.now() - start) / 86400000);
-  const left = Math.max(0, days - elapsedDays);
+  return Math.max(0, days - elapsedDays);
+}
+function retentionState(inst: Instance): string {
+  if (inst.keep) return "Kept from auto-deletion";
+  const left = retentionDaysLeft(inst);
   return `Deletes in ${left} day${left === 1 ? "" : "s"}`;
+}
+// F-05 notice thresholds — retained disk nearing expiry (7 / 3 / 1 days).
+// Returns a risk color + whether to show a warning icon.
+function retentionRisk(inst: Instance): { color: string; warn: boolean } {
+  if (inst.keep) return { color: C.lime, warn: false };
+  const left = retentionDaysLeft(inst);
+  if (left <= 1) return { color: C.err, warn: true };
+  if (left <= 3) return { color: "#fb923c", warn: true };
+  if (left <= 7) return { color: C.warn, warn: true };
+  return { color: C.muted, warn: false };
+}
+// Absolute expiry date string for a suspended runtime's retained disk.
+function retentionExpiry(inst: Instance): string {
+  const start = inst.suspendedAt ? new Date(inst.suspendedAt.replace(" ", "T")).getTime() : Date.now();
+  const d = new Date(start + (inst.retentionDays ?? 30) * 86400000);
+  return fmtDate(d).slice(0, 10);
 }
 
 function newInstanceId(): string {
@@ -1155,7 +1207,7 @@ function ListingActions({ agentId, state }: { agentId: string; state?: ListingSt
 // row stays focused on the net-new high-frequency actions (Open / Terminate).
 type RowPanel = "config" | "logs" | "metrics" | "shell";
 // Runtime 2.0 row actions (PRD §5.3 "More actions").
-type RowAction = "suspend" | "resume" | "keep" | "delete" | "snapshot" | "convert";
+type RowAction = "suspend" | "resume" | "keep" | "delete" | "snapshot" | "convert" | "retry";
 
 function InstanceRowMenu({
   inst, activePanel, onSelect, onAction, canConvert = false, dropUp = false,
@@ -2183,16 +2235,34 @@ function MonitorPane({
                         )}
                         {statusLabel(inst.status)}
                       </span>
+                      {inst.unconfirmed && (
+                        <span
+                          title="Unknown provider outcome — showing last confirmed state while we reconcile"
+                          style={{ marginLeft: 6, display: "inline-flex", alignItems: "center", gap: 3, fontFamily: FONT, fontSize: 10, fontWeight: 600, color: C.warn, background: `${C.warn}1f`, border: `1px solid ${C.warn}55`, padding: "1px 6px", borderRadius: 4 }}
+                        >
+                          Unconfirmed
+                        </span>
+                      )}
                     </div>
-                    {/* Lifecycle — F-02 active-time (Running) / F-05 retention (Suspended) */}
-                    <div
-                      title={inst.status === "running" ? activeRemaining(inst) : inst.status === "suspended" ? retentionState(inst) : ""}
-                      style={{ fontSize: 12, color: inst.keep ? C.lime : C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                    >
-                      {inst.status === "running" ? activeRemaining(inst)
-                        : inst.status === "suspended" ? retentionState(inst)
-                        : "—"}
-                    </div>
+                    {/* Lifecycle — F-02 active-runtime limit (Running) vs F-05 disk retention
+                        (Suspended), with 7/3/1-day expiry risk coloring. */}
+                    {(() => {
+                      if (inst.status === "running") {
+                        return <div style={{ fontSize: 12, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={activeRemaining(inst)}>{activeRemaining(inst)}</div>;
+                      }
+                      if (inst.status === "suspended") {
+                        const r = retentionRisk(inst);
+                        return (
+                          <div title={`${retentionState(inst)} · expiry ${retentionExpiry(inst)}`} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: r.color, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {r.warn && (
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h16.9a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+                            )}
+                            {retentionState(inst)}
+                          </div>
+                        );
+                      }
+                      return <div style={{ fontSize: 12, color: C.muted }}>—</div>;
+                    })()}
                     <div style={{ color: C.muted }}>{agoLabel(inst.created)}</div>
                     <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
                       {inst.status === "running" && inst.endpointUrl && (
@@ -2257,6 +2327,21 @@ function MonitorPane({
                           }}
                         >
                           View error
+                        </button>
+                      )}
+                      {(inst.status === "error" || inst.unconfirmed) && (
+                        <button
+                          onClick={() => onAction(inst.id, "retry")}
+                          title={inst.unconfirmed ? "Re-check the provider outcome" : "Retry creation"}
+                          style={{
+                            display: "inline-flex", alignItems: "center", gap: 4,
+                            fontFamily: FONT, fontSize: 11, fontWeight: 600,
+                            color: C.limeText, background: C.lime,
+                            border: "none", padding: "3px 10px", borderRadius: 6, cursor: "pointer",
+                          }}
+                        >
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>
+                          Retry
                         </button>
                       )}
                       <InstanceRowMenu
@@ -2724,6 +2809,27 @@ function OrganizationSnapshots({
   );
 }
 
+// ─── Operation feedback toasts (PRD §4.2) ──────────────────────────────────
+type ToastKind = "progress" | "success" | "error" | "unconfirmed";
+interface ToastMsg { id: string; kind: ToastKind; msg: string }
+function toastColor(k: ToastKind): string {
+  return k === "success" ? C.ok : k === "error" ? C.err : k === "unconfirmed" ? C.warn : C.muted;
+}
+function Toaster({ toasts }: { toasts: ToastMsg[] }) {
+  return (
+    <div style={{ position: "fixed", right: 20, bottom: 20, zIndex: 2000, display: "flex", flexDirection: "column", gap: 8, maxWidth: 360 }}>
+      {toasts.map((t) => (
+        <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, background: C.cardSolid, border: `1px solid ${toastColor(t.kind)}55`, borderLeft: `3px solid ${toastColor(t.kind)}`, borderRadius: 8, padding: "10px 14px", boxShadow: "0 8px 24px rgba(0,0,0,0.5)", animation: "row-fade-in 180ms ease-out" }}>
+          {t.kind === "progress"
+            ? <span style={{ width: 12, height: 12, border: `2px solid ${C.border}`, borderTopColor: C.fg, borderRadius: 999, display: "inline-block", flexShrink: 0, animation: "spin 0.8s linear infinite" }} />
+            : <span style={{ width: 8, height: 8, borderRadius: 999, background: toastColor(t.kind), flexShrink: 0 }} />}
+          <span style={{ fontFamily: FONT, fontSize: 13, color: C.fg, lineHeight: "18px" }}>{t.msg}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [, setLocation] = useLocation();
@@ -2785,6 +2891,19 @@ export default function Dashboard() {
   // Snapshot lifecycle (PRD §3 / §5.5)
   const [snapshots, setSnapshots] = useState<Snapshot[]>(INITIAL_SNAPSHOTS);
   const [restoreSnapshot, setRestoreSnapshot] = useState<Snapshot | null>(null);
+  // Operation feedback toasts (PRD §4.2 — Accepted → in-progress → resolved)
+  const [toasts, setToasts] = useState<ToastMsg[]>([]);
+  const toastSeq = useRef(0);
+  const pushToast = (kind: ToastKind, msg: string): string => {
+    const id = `t${++toastSeq.current}`;
+    setToasts((prev) => [...prev, { id, kind, msg }]);
+    if (kind !== "progress") setTimeout(() => setToasts((p) => p.filter((x) => x.id !== id)), 4000);
+    return id;
+  };
+  const settleToast = (id: string, kind: ToastKind, msg: string) => {
+    setToasts((prev) => prev.map((x) => (x.id === id ? { ...x, kind, msg } : x)));
+    setTimeout(() => setToasts((p) => p.filter((x) => x.id !== id)), 4000);
+  };
 
   // Provision modal — open per-task override modal first, then provision on submit
   const [provisionForAgentId, setProvisionForAgentId] = useState<string | null>(null);
@@ -2821,25 +2940,46 @@ export default function Dashboard() {
 
   const performSuspend = (id: string) => {
     // running → suspending → suspended (F-04); disk retained, retention clock starts (F-05)
+    const t = pushToast("progress", "Suspend accepted — stopping compute…");
     patchInstance(id, { status: "suspending" });
-    setTimeout(() => patchInstance(id, {
-      status: "suspended", endpointUrl: undefined,
-      suspendedAt: fmtNow(), retentionDays: 30, keep: false,
-    }), 1200);
+    setTimeout(() => {
+      patchInstance(id, { status: "suspended", endpointUrl: undefined, suspendedAt: fmtNow(), retentionDays: 30, keep: false });
+      settleToast(t, "success", "Suspended — disk retained");
+    }, 1200);
   };
   const performResume = (id: string) => {
     // suspended → resuming → running (F-04); new endpoint, Keep cleared
+    const t = pushToast("progress", "Resume accepted — starting runtime…");
     patchInstance(id, { status: "resuming" });
-    setTimeout(() => setInstances((prev) => prev.map((i) =>
-      i.id === id
-        ? { ...i, status: "running", endpointUrl: endpointFor(i.id), keep: false, suspendedAt: undefined, lifecycleStartedAt: fmtNow() }
-        : i,
-    )), 1500);
+    setTimeout(() => {
+      setInstances((prev) => prev.map((i) =>
+        i.id === id
+          ? { ...i, status: "running", endpointUrl: endpointFor(i.id), keep: false, suspendedAt: undefined, lifecycleStartedAt: fmtNow() }
+          : i,
+      ));
+      settleToast(t, "success", "Runtime running");
+    }, 1500);
   };
   const performDelete = (id: string) => {
     // running/suspended/failed → deleting → deleted (F-06); deleted is hidden by default
+    const t = pushToast("progress", "Delete accepted — releasing resources…");
     patchInstance(id, { status: "deleting" });
-    setTimeout(() => setInstances((prev) => prev.filter((i) => i.id !== id)), 1200);
+    setTimeout(() => {
+      setInstances((prev) => prev.filter((i) => i.id !== id));
+      settleToast(t, "success", "Runtime deleted");
+    }, 1200);
+  };
+  const performRetry = (id: string) => {
+    // Failed creation or unconfirmed outcome → re-attempt (§4.2 / F-01).
+    const inst = instances.find((i) => i.id === id);
+    const t = pushToast("progress", inst?.unconfirmed ? "Re-checking provider outcome…" : "Retrying creation…");
+    patchInstance(id, { status: "creating", lastError: undefined, unconfirmed: false });
+    setTimeout(() => {
+      setInstances((prev) => prev.map((i) =>
+        i.id === id ? { ...i, status: "running", endpointUrl: endpointFor(i.id), lifecycleStartedAt: fmtNow() } : i,
+      ));
+      settleToast(t, "success", "Runtime running");
+    }, 1600);
   };
 
   const handleAction = (id: string, action: RowAction) => {
@@ -2863,10 +3003,16 @@ export default function Dashboard() {
       case "resume":
         performResume(id);
         break;
-      case "keep":
-        // F-05 Keep pauses retention; cleared automatically on a successful Resume.
-        patchInstance(id, { keep: !inst?.keep });
+      case "retry":
+        performRetry(id);
         break;
+      case "keep": {
+        // F-05 Keep pauses retention; cleared automatically on a successful Resume.
+        const nextKeep = !inst?.keep;
+        patchInstance(id, { keep: nextKeep });
+        pushToast("success", nextKeep ? "Kept — retention paused (storage charges continue)" : "Keep cleared — retention resumed");
+        break;
+      }
       case "delete":
         setConfirm({
           title: "Delete this runtime?",
@@ -2925,12 +3071,20 @@ export default function Dashboard() {
     };
     setSnapshots((prev) => [snap, ...prev]);
     setTopTab("snapshots"); // jump to Organization Snapshots so the user sees it
+    const t = pushToast("progress", "Creating snapshot — capturing disk…");
     // Billing starts only at Ready (F-07): creating → ready after ~1.6s.
-    setTimeout(() => setSnapshots((prev) => prev.map((s) => (s.id === sid ? { ...s, status: "ready" } : s))), 1600);
+    setTimeout(() => {
+      setSnapshots((prev) => prev.map((s) => (s.id === sid ? { ...s, status: "ready" } : s)));
+      settleToast(t, "success", "Snapshot ready");
+    }, 1600);
   };
   const deleteSnapshot = (sid: string) => {
+    const t = pushToast("progress", "Deleting snapshot…");
     setSnapshots((prev) => prev.map((s) => (s.id === sid ? { ...s, status: "deleting" } : s)));
-    setTimeout(() => setSnapshots((prev) => prev.filter((s) => s.id !== sid)), 900);
+    setTimeout(() => {
+      setSnapshots((prev) => prev.filter((s) => s.id !== sid));
+      settleToast(t, "success", "Snapshot deleted");
+    }, 900);
   };
   const launchFromSnapshot = (snapshot: Snapshot, targetAgentId: string) => {
     // F-08 — new runtime with a fresh identity, target Agent config authoritative.
@@ -2951,6 +3105,7 @@ export default function Dashboard() {
     <div style={{ minHeight: "100vh", background: C.bg, color: C.fg, fontFamily: FONT }}>
       <style>{`
         @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(1.6); } }
+        @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes row-fade-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
       `}</style>
       <Topbar />
@@ -3117,6 +3272,7 @@ export default function Dashboard() {
       />
 
       <ConfirmDialog pending={confirm} onClose={() => setConfirm(null)} />
+      <Toaster toasts={toasts} />
     </div>
   );
 }
