@@ -2727,7 +2727,7 @@ function OrganizationSnapshots({
 // ─── Page ─────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [, setLocation] = useLocation();
-  const [topTab, setTopTab] = useState<"deployments" | "uses">("deployments");
+  const [topTab, setTopTab] = useState<"deployments" | "uses" | "snapshots">("deployments");
   const [filter, setFilter] = useState("");
   const [registered, setRegistered] = useState<MyAgent[]>(() => loadRegisteredAgents());
   const [hiddenSeedIds, setHiddenSeedIds] = useState<Set<string>>(new Set());
@@ -2784,7 +2784,6 @@ export default function Dashboard() {
   const [instances, setInstances] = useState<Instance[]>(INITIAL_INSTANCES);
   // Snapshot lifecycle (PRD §3 / §5.5)
   const [snapshots, setSnapshots] = useState<Snapshot[]>(INITIAL_SNAPSHOTS);
-  const [resourceView, setResourceView] = useState<"agents" | "snapshots">("agents");
   const [restoreSnapshot, setRestoreSnapshot] = useState<Snapshot | null>(null);
 
   // Provision modal — open per-task override modal first, then provision on submit
@@ -2925,7 +2924,7 @@ export default function Dashboard() {
       status: "creating",
     };
     setSnapshots((prev) => [snap, ...prev]);
-    setResourceView("snapshots"); // jump to Organization Snapshots so the user sees it
+    setTopTab("snapshots"); // jump to Organization Snapshots so the user sees it
     // Billing starts only at Ready (F-07): creating → ready after ~1.6s.
     setTimeout(() => setSnapshots((prev) => prev.map((s) => (s.id === sid ? { ...s, status: "ready" } : s))), 1600);
   };
@@ -2936,7 +2935,7 @@ export default function Dashboard() {
   const launchFromSnapshot = (snapshot: Snapshot, targetAgentId: string) => {
     // F-08 — new runtime with a fresh identity, target Agent config authoritative.
     setRestoreSnapshot(null);
-    setResourceView("agents");
+    setTopTab("deployments");
     setSelectedId(targetAgentId);
     actuallyProvision(targetAgentId, { ...TEMPLATE_DEFAULT_CONFIG, name: `from-${snapshot.name}` });
   };
@@ -2962,8 +2961,9 @@ export default function Dashboard() {
         {/* Top tabs (My Deployments & Listings / Agents I Use) */}
         <div style={{ display: "flex", borderBottom: `1px solid ${C.border}`, padding: "0 32px" }}>
           {[
-            { id: "deployments" as const, label: "My Deployments & Listings" },
-            { id: "uses" as const, label: "Agents I Use" },
+            { id: "deployments" as const, label: "My Deployments & Listings", isNew: false },
+            { id: "uses" as const, label: "Agents I Use", isNew: false },
+            { id: "snapshots" as const, label: "Organization Snapshots", isNew: true },
           ].map((t) => {
             const isActive = topTab === t.id;
             return (
@@ -2971,6 +2971,7 @@ export default function Dashboard() {
                 key={t.id}
                 onClick={() => setTopTab(t.id)}
                 style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
                   fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
                   background: "transparent",
                   color: isActive ? C.fg : C.muted,
@@ -2982,37 +2983,14 @@ export default function Dashboard() {
                 }}
               >
                 {t.label}
+                {t.isNew && <NewBadge />}
               </button>
             );
           })}
         </div>
 
-        {/* Resource view toggle — Agents / Organization Snapshots (PRD §5.5) */}
-        <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "12px 32px 0" }}>
-          {(["agents", "snapshots"] as const).map((v) => {
-            const active = resourceView === v;
-            return (
-              <button
-                key={v}
-                onClick={() => setResourceView(v)}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  fontFamily: FONT, fontSize: 13, fontWeight: 600,
-                  color: active ? C.fg : C.muted,
-                  background: active ? "rgba(255,255,255,0.06)" : "transparent",
-                  border: `1px solid ${active ? C.border : "transparent"}`,
-                  padding: "6px 12px", borderRadius: 8, cursor: "pointer",
-                }}
-              >
-                {v === "agents" ? "Agents" : "Organization Snapshots"}
-                {v === "snapshots" && <NewBadge />}
-              </button>
-            );
-          })}
-        </div>
-
-        {resourceView === "snapshots" && (
-          <div style={{ padding: "16px 32px 32px", flex: 1, minHeight: 0 }}>
+        {topTab === "snapshots" && (
+          <div style={{ padding: "20px 32px 32px", flex: 1, minHeight: 0 }}>
             <OrganizationSnapshots
               snapshots={snapshots}
               onRestore={(s) => setRestoreSnapshot(s)}
@@ -3022,7 +3000,7 @@ export default function Dashboard() {
         )}
 
         {/* Body: split — left list pane / right detail pane */}
-        {resourceView === "agents" && (
+        {topTab !== "snapshots" && (
         <div
           style={{
             display: "grid",
