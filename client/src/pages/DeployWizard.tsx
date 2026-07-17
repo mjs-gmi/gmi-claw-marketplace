@@ -2083,6 +2083,16 @@ function SuccessView({
         </p>
       </div>
 
+      {/* Runtime preparation in progress — Launch gate (PRD F-01) */}
+      {isGmi && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.30)", borderRadius: 10, padding: "12px 16px", maxWidth: 880 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 999, background: C.warn, marginTop: 5, flexShrink: 0, animation: "pulse 1.2s ease-in-out infinite" }} />
+          <span style={{ fontFamily: FONT, fontSize: 13, color: C.fg, lineHeight: "19px" }}>
+            <span style={{ fontWeight: 600 }}>Runtime preparation is in progress.</span> Launch will be available when preparation completes — track its status on the Agent's page in My Agents.
+          </span>
+        </div>
+      )}
+
       {/* Deployment Type / Badge cards */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <div

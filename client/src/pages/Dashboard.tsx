@@ -389,6 +389,61 @@ function agentCostBreakdown(agentId: string, instances: Instance[], snapshots: S
 }
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
+// ─── Runtime Image readiness (PRD Resource Model / E1) ──────────────────────
+// A Runtime Image is the Docker image an Agent references to create instances —
+// part of Agent configuration, not a navigable resource. Two internal state
+// machines gate Launch: image validation, then provider runtime preparation.
+type ImageValidation = "pending" | "validating" | "valid" | "incompatible" | "failed";
+type RuntimePrep = "not_started" | "preparing" | "ready" | "failed" | "stale";
+interface RuntimeImage {
+  url: string;
+  tag: string;
+  digest: string;      // immutable digest
+  registry: string;
+  architecture: string;
+  validation: ImageValidation;
+  preparation: RuntimePrep;
+  lastValidated: string;
+  compatibilityIssue?: string;
+}
+// Customer-facing copy (exact per spec).
+const VALIDATION_LABEL: Record<ImageValidation, string> = {
+  pending: "Pending validation", validating: "Validating image", valid: "Valid",
+  incompatible: "Incompatible", failed: "Unable to validate",
+};
+const PREP_LABEL: Record<RuntimePrep, string> = {
+  not_started: "Not started", preparing: "Preparing runtime", ready: "Ready",
+  failed: "Preparation failed", stale: "Revalidation required",
+};
+function validationColor(v: ImageValidation): string {
+  return v === "valid" ? C.ok : v === "incompatible" || v === "failed" ? C.err : C.warn;
+}
+function prepColor(p: RuntimePrep): string {
+  return p === "ready" ? C.ok : p === "failed" ? C.err : p === "stale" ? "#fb923c" : C.warn;
+}
+// Launch gate (F-01): image valid AND runtime prepared.
+function isLaunchable(img?: RuntimeImage): boolean {
+  return img?.validation === "valid" && img?.preparation === "ready";
+}
+const INITIAL_RUNTIME_IMAGES: Record<string, RuntimeImage> = {
+  agent_hermes: {
+    url: "ghcr.io/mjs-gmi/hermes-gmi", tag: "v5", digest: "sha256:0bf9bdf13d544665a7188cce1423ab11c0de",
+    registry: "ghcr.io", architecture: "linux/amd64", validation: "valid", preparation: "ready",
+    lastValidated: _seedDaysAgo(2),
+  },
+  agent_hermes_mingjun: {
+    url: "ghcr.io/mjs-gmi/hermes-gmi", tag: "v6-rc1", digest: "sha256:b73c1e082f4a4d198c6b5a9e0f21d7c4a1b2",
+    registry: "ghcr.io", architecture: "linux/amd64", validation: "valid", preparation: "preparing",
+    lastValidated: _seedMinsAgo(4),
+  },
+  agent_openclaw: {
+    url: "ghcr.io/mjs-gmi/openclaw-gmi", tag: "v5-mode-none", digest: "sha256:d87723941a694cfd8b97f3c895db9e85aa10",
+    registry: "ghcr.io", architecture: "linux/arm64", validation: "incompatible", preparation: "not_started",
+    lastValidated: _seedMinsAgo(9),
+    compatibilityIssue: "Image architecture linux/arm64 is not supported by the selected region (needs linux/amd64).",
+  },
+};
+
 interface AgentAggregate {
   active: number;
   error: number;
@@ -2519,29 +2574,36 @@ function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instan
 
 // ─── Right detail pane ────────────────────────────────────────────────────
 function AgentDetailPane({
-  agent, instances, snapshots, onProvision, onAction, canConvert = false,
+  agent, instances, snapshots, image, onProvision, onAction, onRevalidate, onRetryPrep, onReplaceImage, canConvert = false,
 }: {
   agent: MyAgent;
   instances: Instance[];
   snapshots: Snapshot[];
+  image?: RuntimeImage;
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
+  onRevalidate: (agentId: string) => void;
+  onRetryPrep: (agentId: string) => void;
+  onReplaceImage: (agentId: string) => void;
   canConvert?: boolean;
 }) {
   const [tab, setTab] = useState<"monitor" | "integration" | "analytics">("monitor");
+  const launchable = isLaunchable(image);
   // + Instance + Listing ▼ now share the top-right of the agent header.
   // Provisioning is the highest-frequency action so it gets the lime fill;
   // listing actions sit behind a single dropdown next to it.
   const headerActions = (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <button
-        onClick={() => onProvision(agent.id)}
+        onClick={() => launchable && onProvision(agent.id)}
+        disabled={!launchable}
+        title={launchable ? "Launch a new instance" : "Launch is available once the runtime image is validated and prepared"}
         style={{
           display: "inline-flex", alignItems: "center", gap: 6,
           fontFamily: FONT, fontSize: 13, fontWeight: 600, lineHeight: "20px",
-          background: C.lime, color: C.limeText,
+          background: launchable ? C.lime : "#3a3a1f", color: launchable ? C.limeText : "#6b6b52",
           border: "none",
-          padding: "6px 14px", borderRadius: 8, cursor: "pointer",
+          padding: "6px 14px", borderRadius: 8, cursor: launchable ? "pointer" : "not-allowed",
         }}
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -2630,6 +2692,70 @@ function AgentDetailPane({
 
         {headerActions}
       </div>
+
+      {/* Runtime Image — Agent configuration; gates Launch (PRD Resource Model / F-01) */}
+      {image && (() => {
+        const notReady = !launchable;
+        const fields: [string, React.ReactNode][] = [
+          ["Image", <span style={{ fontFamily: MONO }}>{image.url}:{image.tag}</span>],
+          ["Digest", <span style={{ fontFamily: MONO, color: C.muted }}>{image.digest.slice(0, 26)}…</span>],
+          ["Registry", image.registry],
+          ["Architecture", image.architecture],
+          ["Last validated", agoLabel(image.lastValidated)],
+        ];
+        return (
+          <section style={{ border: `1px solid ${notReady ? "rgba(251,191,36,0.35)" : C.border}`, borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, background: notReady ? "rgba(251,191,36,0.04)" : "transparent" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <h3 style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg, margin: 0 }}>Runtime Image</h3>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                {[
+                  { label: VALIDATION_LABEL[image.validation], color: validationColor(image.validation) },
+                  { label: PREP_LABEL[image.preparation], color: prepColor(image.preparation) },
+                ].map((s) => (
+                  <span key={s.label} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: FONT, fontSize: 11, fontWeight: 600, color: s.color, background: `${s.color}1f`, border: `1px solid ${s.color}55`, padding: "2px 8px", borderRadius: 6 }}>
+                    {(image.validation === "validating" || image.preparation === "preparing") && s.color === C.warn && (
+                      <span style={{ width: 6, height: 6, borderRadius: 999, background: s.color, animation: "pulse 1.2s ease-in-out infinite" }} />
+                    )}
+                    {s.label}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "6px 24px" }}>
+              {fields.map(([k, v]) => (
+                <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: FONT, fontSize: 12, lineHeight: "20px" }}>
+                  <span style={{ color: C.muted }}>{k}</span>
+                  <span style={{ color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</span>
+                </div>
+              ))}
+            </div>
+
+            {image.compatibilityIssue && (
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-start", fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "17px", background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.3)", borderRadius: 8, padding: "8px 12px" }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.err} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10" /><path d="M15 9l-6 6M9 9l6 6" /></svg>
+                <span><span style={{ fontWeight: 600 }}>Compatibility issue</span> — {image.compatibilityIssue}</span>
+              </div>
+            )}
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              {notReady && (
+                <span style={{ flex: 1, minWidth: 180, fontFamily: FONT, fontSize: 11.5, color: C.warn, lineHeight: "16px" }}>
+                  {image.validation === "incompatible" ? "Resolve the compatibility issue to enable Launch."
+                    : image.preparation === "failed" ? "Preparation failed — retry to enable Launch."
+                    : image.preparation === "stale" ? "Revalidation required before Launch."
+                    : "Launch will be available once validation and preparation complete."}
+                </span>
+              )}
+              {(image.preparation === "failed" || image.preparation === "stale") && (
+                <button onClick={() => onRetryPrep(agent.id)} style={{ fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.limeText, background: C.lime, border: "none", padding: "5px 12px", borderRadius: 7, cursor: "pointer" }}>Retry preparation</button>
+              )}
+              <button onClick={() => onRevalidate(agent.id)} style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg, background: "transparent", border: `1px solid ${C.border}`, padding: "5px 12px", borderRadius: 7, cursor: "pointer" }}>Revalidate</button>
+              <button onClick={() => onReplaceImage(agent.id)} style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg, background: "transparent", border: `1px solid ${C.border}`, padding: "5px 12px", borderRadius: 7, cursor: "pointer" }}>Replace Image</button>
+            </div>
+          </section>
+        );
+      })()}
 
       {/* Tabs */}
       <PillSegmented
@@ -2979,6 +3105,7 @@ export default function Dashboard() {
   const [instances, setInstances] = useState<Instance[]>(INITIAL_INSTANCES);
   // Snapshot lifecycle (PRD §3 / §5.5)
   const [snapshots, setSnapshots] = useState<Snapshot[]>(INITIAL_SNAPSHOTS);
+  const [runtimeImages, setRuntimeImages] = useState<Record<string, RuntimeImage>>(INITIAL_RUNTIME_IMAGES);
   const [restoreSnapshot, setRestoreSnapshot] = useState<Snapshot | null>(null);
   // Operation feedback toasts (PRD §4.2 — Accepted → in-progress → resolved)
   const [toasts, setToasts] = useState<ToastMsg[]>([]);
@@ -3021,6 +3148,31 @@ export default function Dashboard() {
         ),
       );
     }, 1500);
+  };
+
+  // ── Runtime Image readiness mutations (validation → preparation). ──────────
+  const patchImage = (agentId: string, patch: Partial<RuntimeImage>) =>
+    setRuntimeImages((prev) => ({ ...prev, [agentId]: { ...prev[agentId], ...patch } }));
+  // Validate → prepare cycle: validating → valid → preparing → ready.
+  const runReadiness = (agentId: string, kind: "revalidate" | "replace") => {
+    const t = pushToast("progress", kind === "replace" ? "Validating new image…" : "Revalidating image…");
+    patchImage(agentId, { validation: "validating", preparation: "not_started", compatibilityIssue: undefined });
+    setTimeout(() => {
+      patchImage(agentId, { validation: "valid", preparation: "preparing", lastValidated: fmtNow() });
+      settleToast(t, "progress", "Preparing runtime…");
+      setTimeout(() => {
+        patchImage(agentId, { preparation: "ready" });
+        settleToast(t, "success", "Runtime ready — Launch enabled");
+      }, 1600);
+    }, 1400);
+  };
+  const retryPreparation = (agentId: string) => {
+    const t = pushToast("progress", "Preparing runtime…");
+    patchImage(agentId, { preparation: "preparing" });
+    setTimeout(() => {
+      patchImage(agentId, { preparation: "ready" });
+      settleToast(t, "success", "Runtime ready — Launch enabled");
+    }, 1600);
   };
 
   // ── Runtime 2.0 lifecycle mutations (PRD §2). Simulated provider timing. ──
@@ -3343,8 +3495,12 @@ export default function Dashboard() {
               agent={selected}
               instances={instances}
               snapshots={snapshots}
+              image={runtimeImages[selected.id]}
               onProvision={handleProvision}
               onAction={handleAction}
+              onRevalidate={(id) => runReadiness(id, "revalidate")}
+              onRetryPrep={retryPreparation}
+              onReplaceImage={(id) => runReadiness(id, "replace")}
               canConvert
             />
           ) : allAgents.length === 0 ? (
