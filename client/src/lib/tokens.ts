@@ -12,12 +12,12 @@ export const MONO = "'GeistMono', ui-monospace, monospace";
 export const C = {
   bg:         "#0a0a0a",
   fg:         "#fafafa",
-  muted:      "#a3a3a3",
-  border:     "#404040",
-  borderSoft: "#262626",
+  muted:      "#9a9a9a",              // slightly calmer secondary text
+  border:     "#2c2c2c",              // recede structure — softer than the old #404040
+  borderSoft: "#1e1e1e",              // hairline dividers
   card:       "rgba(23,23,23,0.95)",
-  cardSolid:  "#171717",
-  pillBg:     "rgba(82,82,82,0.3)",
+  cardSolid:  "#161616",              // a touch deeper so cards read as a distinct surface
+  pillBg:     "rgba(255,255,255,0.05)", // clean neutral fill (was muddy grey)
   lime:       "#DDEA4D",
   limeText:   "#0a0a0a",
   link:       "#5b94f0",
