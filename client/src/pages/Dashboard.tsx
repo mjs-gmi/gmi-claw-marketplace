@@ -1310,7 +1310,7 @@ function InstanceRowMenu({
         aria-label={`Instance ${inst.id.slice(0, 8)} actions`}
         onClick={() => setOpen((o) => !o)}
         style={{
-          width: 26, height: 24,
+          width: 26, height: 26,
           display: "inline-flex", alignItems: "center", justifyContent: "center",
           background: open ? "rgba(255,255,255,0.06)" : "transparent",
           color: C.muted,
@@ -2073,11 +2073,10 @@ function InstanceDetailModal({
 
 // ─── Monitor pane ─────────────────────────────────────────────────────────
 function MonitorPane({
-  agent, instances, snapshots, onProvision, onAction, canConvert = false,
+  agent, instances, onProvision, onAction, canConvert = false,
 }: {
   agent: MyAgent;
   instances: Instance[];
-  snapshots: Snapshot[];
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
   canConvert?: boolean;
@@ -2112,72 +2111,31 @@ function MonitorPane({
     return rows;
   }, [mine, filter, search, sortDir]);
 
+  // Shared row-action button styles so every action reads as one consistent set
+  // (uniform height, padding, radius) instead of ad-hoc per-button inline styles.
+  const rowBtnBase: React.CSSProperties = {
+    display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5,
+    height: 26, padding: "0 10px", borderRadius: 7,
+    fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "26px",
+    cursor: "pointer", textDecoration: "none", whiteSpace: "nowrap",
+  };
+  const rowBtnGhost: React.CSSProperties = { ...rowBtnBase, color: C.fg, background: "transparent", border: `1px solid ${C.border}` };
+  const rowBtnPrimary: React.CSSProperties = { ...rowBtnBase, color: C.limeText, background: C.lime, border: "none", fontWeight: 600 };
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       {/* Aggregate status — rollup across this agent's instances */}
       <section>
         <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: "0 0 12px" }}>
           Aggregate status
         </h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-          <MetricCard
-            label="Active"
-            value={String(agg.active)}
-            helper="status = running"
-            accent={C.ok}
-          />
-          <MetricCard
-            label="Error"
-            value={String(agg.error)}
-            helper="red tab badge if > 0"
-            accent={C.err}
-          />
-          <MetricCard
-            label="Creating"
-            value={String(agg.creating)}
-            helper="status = creating"
-            accent={C.warn}
-          />
-          <MetricCard
-            label="Last provisioned"
-            value={agg.lastProvisioned ? agoLabel(agg.lastProvisioned) : "—"}
-            helper="max(createdAt)"
-            accent={C.muted}
-          />
+          <MetricCard label="Active" value={String(agg.active)} helper="status = running" accent={C.ok} />
+          <MetricCard label="Error" value={String(agg.error)} helper="red tab badge if > 0" accent={C.err} />
+          <MetricCard label="Creating" value={String(agg.creating)} helper="status = creating" accent={C.warn} />
+          <MetricCard label="Last provisioned" value={agg.lastProvisioned ? agoLabel(agg.lastProvisioned) : "—"} helper="max(createdAt)" accent={C.muted} />
         </div>
       </section>
-
-      {/* Est. cost — compute / suspended storage / snapshot storage (PRD §4.5).
-          Estimate only; exact charges live in Usage & Billing. */}
-      {(() => {
-        const cost = agentCostBreakdown(agent.id, instances, snapshots);
-        const lines = [
-          { label: "Compute", note: "running · per active instance", val: cost.computeMo },
-          { label: "Suspended storage", note: `retained disks · ${cost.suspendedGiB} GiB`, val: cost.suspendedMo },
-          { label: "Snapshot storage", note: `${cost.snapGiB.toFixed(1)} GiB`, val: cost.snapMo },
-        ];
-        return (
-          <section>
-            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", margin: "0 0 12px" }}>
-              <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: 0 }}>Est. cost</h3>
-              <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>estimate · MaaS pay-per-token billed separately</span>
-            </div>
-            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
-              {lines.map((l) => (
-                <div key={l.label} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
-                  <span style={{ fontFamily: FONT, fontSize: 13, color: C.fg }}>{l.label} <span style={{ color: C.muted, fontSize: 11 }}>· {l.note}</span></span>
-                  <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: l.val > 0 ? C.fg : C.muted }}>{usd(l.val)}<span style={{ fontSize: 11, fontWeight: 500, color: C.muted }}>/mo</span></span>
-                </div>
-              ))}
-              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, borderTop: `1px solid ${C.borderSoft}`, paddingTop: 8, marginTop: 2 }}>
-                <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Est. total</span>
-                <span style={{ fontFamily: FONT, fontSize: 16, fontWeight: 700, color: C.fg, letterSpacing: "-0.01em" }}>{usd(cost.total)}<span style={{ fontSize: 12, fontWeight: 500, color: C.muted }}>/mo</span></span>
-              </div>
-              <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>Exact charges in Usage &amp; Billing.</span>
-            </div>
-          </section>
-        );
-      })()}
 
       {/* Instance Set — header is just a label now; "+ Instance" lives in
           the agent detail header next to Listing ▼. */}
@@ -2351,80 +2309,31 @@ function MonitorPane({
                     <div style={{ color: C.muted }}>{agoLabel(inst.created)}</div>
                     <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
                       {inst.status === "running" && inst.endpointUrl && (
-                        <a
-                          href={inst.endpointUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          title={inst.endpointUrl}
-                          style={{
-                            display: "inline-flex", alignItems: "center", gap: 4,
-                            fontFamily: FONT, fontSize: 11, fontWeight: 500,
-                            color: C.fg, background: "transparent",
-                            border: `1px solid ${C.border}`,
-                            padding: "3px 9px", borderRadius: 6, textDecoration: "none",
-                          }}
-                        >
+                        <a href={inst.endpointUrl} target="_blank" rel="noreferrer" title={inst.endpointUrl} style={rowBtnGhost}>
                           Open
-                          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M7 17 17 7M8 7h9v9" />
                           </svg>
                         </a>
                       )}
                       {/* Primary lifecycle action per state (PRD §5.3) */}
                       {inst.status === "running" && (
-                        <button
-                          onClick={() => onAction(inst.id, "suspend")}
-                          title="Suspend compute and keep the runtime disk."
-                          style={{
-                            display: "inline-flex", alignItems: "center", gap: 4,
-                            fontFamily: FONT, fontSize: 11, fontWeight: 500,
-                            color: C.fg, background: "transparent",
-                            border: `1px solid ${C.border}`,
-                            padding: "3px 9px", borderRadius: 6, cursor: "pointer",
-                          }}
-                        >
+                        <button onClick={() => onAction(inst.id, "suspend")} title="Suspend compute and keep the runtime disk." style={rowBtnGhost}>
                           <IconSuspend /> Suspend
                         </button>
                       )}
                       {inst.status === "suspended" && (
-                        <button
-                          onClick={() => onAction(inst.id, "resume")}
-                          title="Resume the runtime from its retained disk."
-                          style={{
-                            display: "inline-flex", alignItems: "center", gap: 4,
-                            fontFamily: FONT, fontSize: 11, fontWeight: 600,
-                            color: C.limeText, background: C.lime,
-                            border: "none",
-                            padding: "3px 10px", borderRadius: 6, cursor: "pointer",
-                          }}
-                        >
+                        <button onClick={() => onAction(inst.id, "resume")} title="Resume the runtime from its retained disk." style={rowBtnPrimary}>
                           <IconResume /> Resume
                         </button>
                       )}
                       {inst.status === "error" && (
-                        <button
-                          onClick={() => togglePanel(inst.id, "config")}
-                          style={{
-                            fontFamily: FONT, fontSize: 11, fontWeight: 500,
-                            color: C.fg, background: "transparent",
-                            border: `1px solid ${C.border}`,
-                            padding: "3px 9px", borderRadius: 6, cursor: "pointer",
-                          }}
-                        >
+                        <button onClick={() => togglePanel(inst.id, "config")} style={rowBtnGhost}>
                           View error
                         </button>
                       )}
                       {(inst.status === "error" || inst.unconfirmed) && (
-                        <button
-                          onClick={() => onAction(inst.id, "retry")}
-                          title={inst.unconfirmed ? "Re-check the provider outcome" : "Retry creation"}
-                          style={{
-                            display: "inline-flex", alignItems: "center", gap: 4,
-                            fontFamily: FONT, fontSize: 11, fontWeight: 600,
-                            color: C.limeText, background: C.lime,
-                            border: "none", padding: "3px 10px", borderRadius: 6, cursor: "pointer",
-                          }}
-                        >
+                        <button onClick={() => onAction(inst.id, "retry")} title={inst.unconfirmed ? "Re-check the provider outcome" : "Retry creation"} style={rowBtnPrimary}>
                           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>
                           Retry
                         </button>
@@ -2489,30 +2398,6 @@ function IntegrationPane({ agent }: { agent: MyAgent }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Current model & Plan eligibility — Coding Agent Plan (ongoing management) */}
-      {(() => {
-        const d = discountPriceString(CODING_AGENT_PLAN.featuredModelInPrice);
-        return (
-          <section style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-              <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: 0 }}>Model &amp; Plan</h3>
-              <PlanBadge />
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 13 }}>
-              <span style={{ color: C.muted }}>Current model</span>
-              <span style={{ color: C.fg }}>{CODING_AGENT_PLAN.featuredModelName}</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, fontFamily: FONT, fontSize: 13 }}>
-              <span style={{ color: C.muted }}>Your token price</span>
-              {d && <DiscountedPrice original={d.original} discounted={d.discounted} size={13} />}
-            </div>
-            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-              {CODING_AGENT_PLAN.name} is active — {CODING_AGENT_PLAN.discountPct}% off is applied automatically at billing.
-            </span>
-          </section>
-        );
-      })()}
-
       <section>
         <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: "0 0 4px" }}>
           Template ID
@@ -2572,38 +2457,59 @@ function IntegrationPane({ agent }: { agent: MyAgent }) {
   );
 }
 
-// ─── Analytics pane ───────────────────────────────────────────────────────
-function AnalyticsPane() {
+// ─── Analytics pane — cost + usage by model + usage by API key ─────────────
+function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instances: Instance[]; snapshots: Snapshot[] }) {
+  const cost = agentCostBreakdown(agent.id, instances, snapshots);
+  const costLines = [
+    { label: "Compute", note: "per active instance", val: cost.computeMo },
+    { label: "Suspended storage", note: `${cost.suspendedGiB} GiB`, val: cost.suspendedMo },
+    { label: "Snapshot storage", note: `${cost.snapGiB.toFixed(1)} GiB`, val: cost.snapMo },
+  ];
+  const planPrice = discountPriceString(CODING_AGENT_PLAN.featuredModelInPrice);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Est. cost — the aggregate month-to-date estimate (PRD §4.5) */}
       <section>
-        <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: "0 0 12px" }}>
-          Usage by model
-        </h3>
-        <div
-          style={{
-            background: C.card, border: `1px solid ${C.border}`,
-            borderRadius: 10, padding: "20px 16px",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            height: 220,
-            fontFamily: FONT, fontSize: 13, color: C.muted,
-          }}
-        >
-          Chart placeholder — request volume over 1D / 7D / 30D / 90D
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", margin: "0 0 12px" }}>
+          <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: 0 }}>Est. cost</h3>
+          <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>estimate · exact charges in Usage &amp; Billing</span>
+        </div>
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+          {costLines.map((l) => (
+            <div key={l.label} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+              <span style={{ fontFamily: FONT, fontSize: 13, color: C.fg }}>{l.label} <span style={{ color: C.muted, fontSize: 11 }}>· {l.note}</span></span>
+              <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: l.val > 0 ? C.fg : C.muted }}>{usd(l.val)}<span style={{ fontSize: 11, fontWeight: 500, color: C.muted }}>/mo</span></span>
+            </div>
+          ))}
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, borderTop: `1px solid ${C.borderSoft}`, paddingTop: 8, marginTop: 2 }}>
+            <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Est. total</span>
+            <span style={{ fontFamily: FONT, fontSize: 16, fontWeight: 700, color: C.fg, letterSpacing: "-0.01em" }}>{usd(cost.total)}<span style={{ fontSize: 12, fontWeight: 500, color: C.muted }}>/mo</span></span>
+          </div>
+          <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>MaaS tokens billed pay-per-token, shown under Usage by model.</span>
         </div>
       </section>
 
+      {/* Usage by model — with the Coding Agent Plan rate in context */}
+      <section>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "0 0 12px", gap: 12, flexWrap: "wrap" }}>
+          <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: 0 }}>Usage by model</h3>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <PlanBadge />
+            <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>{CODING_AGENT_PLAN.featuredModelName}</span>
+            {planPrice && <DiscountedPrice original={planPrice.original} discounted={planPrice.discounted} size={12} />}
+          </div>
+        </div>
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "20px 16px", display: "flex", alignItems: "center", justifyContent: "center", height: 220, fontFamily: FONT, fontSize: 13, color: C.muted }}>
+          Chart placeholder — token volume by model over 1D / 7D / 30D / 90D
+        </div>
+      </section>
+
+      {/* Usage by API key */}
       <section>
         <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: "0 0 12px" }}>
-          API keys
+          Usage by API key
         </h3>
-        <div
-          style={{
-            background: C.card, border: `1px solid ${C.border}`,
-            borderRadius: 10, padding: "16px",
-            fontFamily: FONT, fontSize: 13, color: C.muted,
-          }}
-        >
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px", fontFamily: FONT, fontSize: 13, color: C.muted }}>
           No API keys created yet. Generate one to call this Agent over HTTP.
         </div>
       </section>
@@ -2741,14 +2647,13 @@ function AgentDetailPane({
         <MonitorPane
           agent={agent}
           instances={instances}
-          snapshots={snapshots}
           onProvision={onProvision}
           onAction={onAction}
           canConvert={canConvert}
         />
       )}
       {tab === "integration" && <IntegrationPane agent={agent} />}
-      {tab === "analytics" && <AnalyticsPane />}
+      {tab === "analytics" && <AnalyticsPane agent={agent} instances={instances} snapshots={snapshots} />}
     </div>
   );
 }
