@@ -26,6 +26,27 @@ const OPENCLAW_INSTALL_CMD = "openclaw plugins install clawhub:openclaw-gmicloud
 type FilterKey = TypeLabel | "All";
 const ALL_TYPES: FilterKey[] = ["All", ...TYPE_LABELS];
 
+// ─── Sort ───────────────────────────────────────────────────────────────────
+type SortKey = "featured" | "trending" | "mostused" | "updated" | "new";
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: "featured", label: "Featured" },
+  { key: "trending", label: "Trending" },
+  { key: "mostused", label: "Most Used" },
+  { key: "updated", label: "Recently Updated" },
+  { key: "new", label: "New" },
+];
+// Paid-promotion demo — these list with a "Promoted" chip and pin to the top under
+// Featured, kept visually distinct from organic ranking.
+const PROMOTED_IDS = new Set(["topify-claw", "enterprise-rag-pipeline"]);
+// Stable pseudo-metric from id — the prototype has no real usage/updated data, so
+// each sort key derives a deterministic order (varies by salt, stable across renders).
+function hashScore(id: string, salt: string): number {
+  let h = 0;
+  const s = id + salt;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
 
 // ─── Icons (1.5-stroke lucide-style) ─────────────────────────────────────────
 const IconSearch = ({ size = 14 }: { size?: number }) => (
@@ -205,6 +226,19 @@ function AgentCard({ claw }: { claw: Claw }) {
               {claw.name}
             </h3>
             {isVerified && <VerifiedCheck />}
+            {PROMOTED_IDS.has(claw.id) && (
+              <span
+                title="Paid promotion — ranked above organic results"
+                style={{
+                  flexShrink: 0, fontFamily: FONT, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em",
+                  textTransform: "uppercase", color: "#fbbf24",
+                  background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.45)",
+                  padding: "1px 6px", borderRadius: 4,
+                }}
+              >
+                Promoted
+              </span>
+            )}
           </div>
           <div
             style={{
@@ -231,6 +265,11 @@ function AgentCard({ claw }: { claw: Claw }) {
         {claw.description}
       </p>
 
+      {/* F-08 — default model (Featured), changeable at launch. Copy says "default". */}
+      <p style={{ fontFamily: FONT, fontSize: 11, color: C.muted, margin: 0 }}>
+        Runs on <span style={{ color: C.fg }}>DeepSeek-V4-Flash</span> by default · change at launch
+      </p>
+
       {/* Category chip + Plan eligible badge — anchored at the bottom of the card */}
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
         <CategoryTag type={claw.typeLabel} />
@@ -245,6 +284,7 @@ export default function Marketplace() {
   const [search, setSearch] = useState("");
   const [activeType, setActiveType] = useState<FilterKey>("All");
   const [verifiedOnly, setVerifiedOnly] = useState(false);
+  const [sortBy, setSortBy] = useState<SortKey>("featured");
 
   const filtered = ALL_CLAWS
     .filter((c) => {
@@ -259,9 +299,18 @@ export default function Marketplace() {
       return matchesSearch && matchesType && matchesTrust;
     })
     .sort((a, b) => {
-      const aV = a.infrastructurePath === "gmi_ce_maas" ? 0 : 1;
-      const bV = b.infrastructurePath === "gmi_ce_maas" ? 0 : 1;
-      return aV - bV;
+      if (sortBy === "featured") {
+        // Promoted pinned first (clearly chipped), then verified, then organic.
+        const ap = PROMOTED_IDS.has(a.id) ? 0 : 1;
+        const bp = PROMOTED_IDS.has(b.id) ? 0 : 1;
+        if (ap !== bp) return ap - bp;
+        const aV = a.infrastructurePath === "gmi_ce_maas" ? 0 : 1;
+        const bV = b.infrastructurePath === "gmi_ce_maas" ? 0 : 1;
+        return aV - bV;
+      }
+      if (sortBy === "new") return 0; // keep source order (as-listed)
+      const salt = sortBy === "trending" ? "trend" : sortBy === "mostused" ? "use" : "upd";
+      return hashScore(b.id, salt) - hashScore(a.id, salt);
     });
 
   return (
@@ -423,6 +472,23 @@ export default function Marketplace() {
               })}
             </div>
 
+            <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 7, userSelect: "none" }}>
+              <span style={{ fontFamily: FONT, fontSize: 13, color: C.muted }}>Sort</span>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as SortKey)}
+                style={{
+                  fontFamily: FONT, fontSize: 13, fontWeight: 500, color: C.fg,
+                  background: "rgba(255,255,255,0.05)", border: `1px solid ${C.border}`,
+                  borderRadius: 6, padding: "5px 8px", cursor: "pointer", outline: "none",
+                }}
+              >
+                {SORT_OPTIONS.map((o) => (
+                  <option key={o.key} value={o.key}>{o.label}</option>
+                ))}
+              </select>
+            </label>
             <label
               onClick={() => setVerifiedOnly((v) => !v)}
               style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}
@@ -467,6 +533,7 @@ export default function Marketplace() {
                 />
               </span>
             </label>
+            </div>
           </div>
         </section>
 

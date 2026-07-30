@@ -409,68 +409,30 @@ export default function ClawDetail() {
               <div className="lg:col-span-1">
                 <div className="sticky top-24" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
-                  {/* CTA — exactly ONE action, DERIVED from the linked template
-                      (not a manual choice): a template with secret/env fields or
-                      a private registry can't be cloned → "Try demo"; a clean,
-                      publishable template → "Deploy your own". */}
-                  {claw.availability === "available" && (() => {
-                    const isDemo = !!(claw.templateHasSecrets || claw.templateSecretRegistry);
-                    if (isDemo) {
-                      const demoHref = claw.demoVideoUrl || claw.docsUrl || `https://docs.gmicloud.ai/agents/${claw.id}`;
-                      return (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                          <a
-                            href={demoHref}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="w-full flex items-center justify-center gap-2 transition-colors"
-                            style={{
-                              padding: "13px 16px",
-                              fontFamily: FONT,
-                              fontSize: 14, fontWeight: 600,
-                              borderRadius: 10,
-                              textDecoration: "none",
-                              background: C.lime,
-                              color: "#000000",
-                              border: `1px solid ${C.lime}`,
-                              cursor: "pointer",
-                            }}
-                            onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.background = "#c8d63a"; }}
-                            onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.background = C.lime; }}
-                          >
-                            Try demo
-                            <ExternalLink size={13} />
-                          </a>
-                          <p style={{ fontFamily: FONT, fontSize: 12, lineHeight: "17px", color: "#8a8a8a", margin: 0 }}>
-                            This template uses a private image / secrets, so it can't be cloned — opens the publisher's demo in a new tab.
-                          </p>
-                        </div>
-                      );
-                    }
-                    return (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                        <button
-                          onClick={() => setLocation(`/deploy?use=${claw.id}`)}
-                          className="w-full flex items-center justify-center gap-2 transition-colors"
-                          style={{
-                            padding: "13px 16px",
-                            fontFamily: FONT,
-                            fontSize: 14, fontWeight: 600,
-                            borderRadius: 10,
-                            background: C.lime, color: "#000000", border: "1px solid #DDEA4D", cursor: "pointer",
-                          }}
-                          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#c8d63a"; }}
-                          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = C.lime; }}
-                        >
-                          Deploy your own
-                          <ExternalLink size={13} />
-                        </button>
-                        <p style={{ fontFamily: FONT, fontSize: 12, lineHeight: "17px", color: "#8a8a8a", margin: 0 }}>
-                          Opens the deploy wizard with this template — bring your own GMI key.
-                        </p>
-                      </div>
-                    );
-                  })()}
+                  {/* CTA — Deploy this Agent (Console flow): opens the deploy wizard with
+                      this template; instances are launched and managed from My Agents. */}
+                  {claw.availability === "available" && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      <button
+                        onClick={() => setLocation(`/deploy?use=${claw.id}`)}
+                        className="w-full flex items-center justify-center gap-2 transition-colors"
+                        style={{
+                          padding: "13px 16px",
+                          fontFamily: FONT,
+                          fontSize: 14, fontWeight: 600,
+                          borderRadius: 10,
+                          background: C.lime, color: "#000000", border: "1px solid #DDEA4D", cursor: "pointer",
+                        }}
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#c8d63a"; }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = C.lime; }}
+                      >
+                        Deploy
+                      </button>
+                      <p style={{ fontFamily: FONT, fontSize: 12, lineHeight: "17px", color: "#8a8a8a", margin: 0 }}>
+                        Opens the deploy wizard with this template — launch and manage instances from My Agents.
+                      </p>
+                    </div>
+                  )}
 
                   {/* Models & billing scope (Agent Detail) + your account price
                       (Access) + auto-discount note (Billing) — Coding Agent Plan */}
@@ -487,6 +449,18 @@ export default function ClawDetail() {
                           <span style={{ color: C.muted }}>Runs on</span>
                           <span style={{ color: C.fg }}>GMI MaaS · {CODING_AGENT_PLAN.featuredModelName}</span>
                         </div>
+                        <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, marginTop: -4 }}>Default model · change at launch</span>
+                        {/* F-08 rule 6 — one line when the viewer already has a Saved
+                            Launch Configuration for this Agent. Copy says "default",
+                            never "recommended": the platform does not evaluate which
+                            model performs better for a given agent. Still TBD whether
+                            the Browse Agents endpoint can read per-user state. */}
+                        <span
+                          title="TBD — confirm the Browse Agents endpoint can read per-user saved launch state"
+                          style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}
+                        >
+                          You last ran this with <span style={{ color: C.fg }}>Claude Opus 4.8</span>
+                        </span>
                         <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 12 }}>
                           <span style={{ color: C.muted }}>Billing scope</span>
                           <span style={{ color: C.fg }}>Pay per token used</span>

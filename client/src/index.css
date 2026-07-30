@@ -419,3 +419,9 @@
     color: #000000;
   }
 }
+
+/* Applying… pulse (Network policy apply, and any in-flight indicator) */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.3; }
+}

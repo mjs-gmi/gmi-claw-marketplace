@@ -52,6 +52,10 @@ export interface RegisteredAgent {
   // M4 listing state: "draft" by default after Register; flips to "pending_review"
   // when user clicks "List on Agentbox" from the success view.
   listingState?: "draft" | "pending_review" | "live" | "rejected";
+  // Endpoints declared at the Networking step. Read-only downstream (Access).
+  endpoints?: { id: string; name: string; internalPort: string; protocol: string; visibility: "private" | "public" }[];
+  region?: string;  // Infrastructure step — region id
+  tier?: string;    // Infrastructure step — compute tier id
 }
 
 function genMaasKey(): string {
@@ -96,23 +100,31 @@ interface ModelSpec {
   inPrice: string; outPrice?: string;
 }
 const MODELS: ModelSpec[] = [
+  // Covered by the Coding Agent Plan (PLAN_MODEL_IDS) — discounted token price.
   { id: "deepseek-v4-flash", name: "DeepSeek-V4-Flash", ctx: "1M ctx",
     inPrice: "$0.098 / 1M tok" },
   { id: "claude-opus-48",    name: "Claude Opus 4.8",   ctx: "409.6K ctx",
     inPrice: "$5.00 / 1M tok", outPrice: "$25.00 / 1M tok" },
   { id: "gpt-55",            name: "GPT-5.5",           ctx: "1.1M ctx",
     inPrice: "$5.00 / 1M tok", outPrice: "$20.00 / 1M tok" },
+  // GMI models NOT in the Coding Agent Plan — full token price, no discount.
+  { id: "llama-33-405b",     name: "Llama 3.3 405B",    ctx: "128K ctx",
+    inPrice: "$0.90 / 1M tok" },
+  { id: "qwen-25-72b",       name: "Qwen 2.5 72B",      ctx: "128K ctx",
+    inPrice: "$0.40 / 1M tok" },
 ];
 
+// An endpoint the Agent exposes (Register → Networking). Name + Internal port +
+// Protocol + Visibility. No external/listening port — that's runtime access data.
 interface PortMap {
   id: string;
-  protocol: string;
-  listening: string;
-  internal: string;
   name: string;
+  internalPort: string;
+  protocol: string;
+  visibility: "private" | "public";
 }
 const DEFAULT_PORTS: PortMap[] = [
-  { id: "p1", protocol: "HTTPS/2", listening: "", internal: "8080", name: "web" },
+  { id: "p1", name: "web", internalPort: "8080", protocol: "HTTP", visibility: "private" },
 ];
 
 // Env role per PRD M6.3:
@@ -170,7 +182,7 @@ function synthesizeTemplate(id: string, name: string): AgentTemplate {
     image: baseImage(cleanSlug || id),
     region: "us-ia-iowa-1",
     tier: "container",
-    ports: [{ id: "p1", protocol: "HTTPS/2", listening: "", internal: "8080", name: "web" }],
+    ports: [{ id: "p1", name: "web", internalPort: "8080", protocol: "HTTP", visibility: "private" }],
     envDeclarations: declarations[id] ?? [],
     model: "",
   };
@@ -976,6 +988,10 @@ function StepInfrastructure({
     addModels     === true &&
     selectedModel === "deepseek-v4-flash";
   const [userExpanded, setUserExpanded] = useState(false);
+  // Switching to a GMI model NOT covered by the Coding Plan is high-friction —
+  // it requires an explicit acknowledgement (full token price, no discount).
+  const [ackNonPlan, setAckNonPlan] = useState(false);
+  const pickModel = (id: string) => { setSelectedModel(id); if (isPlanEligibleModel(id)) setAckNonPlan(false); };
   const collapsed = !userExpanded && (allDefault || forkedFromTemplate);
 
   if (collapsed) {
@@ -1178,7 +1194,7 @@ function StepInfrastructure({
               <FieldLabel>Select Model</FieldLabel>
               <Select
                 value={selectedModel}
-                onChange={setSelectedModel}
+                onChange={pickModel}
                 placeholder="Select an option"
                 options={MODELS.map((m) => ({ value: m.id, label: m.name }))}
               />
@@ -1189,7 +1205,7 @@ function StepInfrastructure({
                 return (
                   <button
                     key={m.id}
-                    onClick={() => setSelectedModel(m.id)}
+                    onClick={() => pickModel(m.id)}
                     style={{
                       background: isActive ? C.selectedYel : C.cardSolid,
                       border: `1px solid ${isActive ? C.selectedYelB : C.border}`,
@@ -1241,6 +1257,20 @@ function StepInfrastructure({
                 );
               })}
             </div>
+
+            {!isPlanEligibleModel(selectedModel) && (
+              /* Friction — switching to a GMI model outside the Coding Agent Plan */
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.40)", borderRadius: 8, padding: "12px 14px" }}>
+                <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "17px" }}>
+                  <span style={{ color: "#fbbf24", fontWeight: 700 }}>⚠ Not in the {CODING_AGENT_PLAN.name}.</span>{" "}
+                  {MODELS.find((m) => m.id === selectedModel)?.name ?? "This model"} is billed at full token price — the {CODING_AGENT_PLAN.discountPct}% plan discount does not apply. Users may prefer plan-covered agents.
+                </span>
+                <label style={{ display: "inline-flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+                  <input type="checkbox" checked={ackNonPlan} onChange={(e) => setAckNonPlan(e.target.checked)} style={{ accentColor: "#fbbf24", width: 15, height: 15, marginTop: 2 }} />
+                  <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "16px" }}>I understand this model isn't covered by the {CODING_AGENT_PLAN.name} and is billed at full price.</span>
+                </label>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -1292,7 +1322,10 @@ function SourceCard({
   );
 }
 
-// ─── Step 3: Networking ───────────────────────────────────────────────────
+// ─── Step 3: Networking — endpoint definitions (optional) ──────────────────
+// Declares which HTTP services this Agent exposes. Each endpoint is a card:
+// Name / Internal port / Protocol / Private·Public. External/listening port, URL,
+// and token are runtime access data (shown under Access), not Agent definition.
 function StepNetworking({
   ports, setPorts,
   forkedFromTemplate = false,
@@ -1301,176 +1334,117 @@ function StepNetworking({
   setPorts: (v: PortMap[]) => void;
   forkedFromTemplate?: boolean;
 }) {
-  const updatePort = (id: string, patch: Partial<PortMap>) => {
+  const update = (id: string, patch: Partial<PortMap>) =>
     setPorts(ports.map((p) => (p.id === id ? { ...p, ...patch } : p)));
-  };
-  const removePort = (id: string) => setPorts(ports.filter((p) => p.id !== id));
-  const addPort = () => setPorts([...ports, { id: `p${Date.now()}`, protocol: "HTTPS/2", listening: "", internal: "", name: "" }]);
+  const remove = (id: string) => setPorts(ports.filter((p) => p.id !== id));
+  const add = () => setPorts([...ports, { id: `ep${Date.now()}`, name: "", internalPort: "", protocol: "HTTP", visibility: "private" }]);
 
   const allDefault =
     ports.length === 1 &&
-    ports[0].protocol === "HTTPS/2" &&
-    ports[0].internal === "8080" &&
-    ports[0].name === "web" &&
-    !ports[0].listening;
+    ports[0].name === "web" && ports[0].internalPort === "8080" &&
+    ports[0].protocol === "HTTP" && ports[0].visibility === "private";
   const [userExpanded, setUserExpanded] = useState(false);
   const collapsed = !userExpanded && (allDefault || forkedFromTemplate);
   const resetToDefaults = () => {
-    setPorts([{ id: "p1", protocol: "HTTPS/2", listening: "", internal: "8080", name: "web" }]);
+    setPorts([{ id: "p1", name: "web", internalPort: "8080", protocol: "HTTP", visibility: "private" }]);
     setUserExpanded(false);
   };
 
   if (collapsed) {
-    const portsVal = ports.length
-      ? ports.map((p) => `${p.protocol} ${p.internal || "?"} (${p.name || "port"})`).join(", ")
+    const val = ports.length
+      ? ports.map((p) => `${p.name || "endpoint"} :${p.internalPort || "?"} ${p.protocol} · ${p.visibility}`).join(", ")
       : "None";
     return (
       <CollapsedRow onCustomize={() => setUserExpanded(true)}>
         {forkedFromTemplate
           ? <SpecChip label="Template" value="Pre-filled" />
-          : <SpecChip label="Port Mappings" value={portsVal} />}
+          : <SpecChip label="Endpoints" value={val} />}
       </CollapsedRow>
     );
   }
 
+  const cellInput: React.CSSProperties = {
+    background: C.cardSolid, border: `1px solid ${C.border}`, color: C.fg,
+    fontFamily: FONT, fontSize: 13, padding: "8px 10px", borderRadius: 8, outline: "none", width: "100%",
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-    <div style={{ display: "flex", justifyContent: "flex-end" }}>
-      <button
-        onClick={allDefault ? () => setUserExpanded(false) : resetToDefaults}
-        style={{
-          display: "inline-flex", alignItems: "center", gap: 4,
-          fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
-          background: "transparent",
-          color: C.muted,
-          border: "none", padding: 0, cursor: "pointer",
-        }}
-      >
-        {allDefault ? (
-          <>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="m18 15-6-6-6 6" />
-            </svg>
-            Collapse · use GMI defaults
-          </>
-        ) : (
-          <>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" />
-            </svg>
-            Reset to GMI defaults
-          </>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+        <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px", maxWidth: 560 }}>
+          <span style={{ color: C.fg, fontWeight: 600 }}>Optional.</span> Expose HTTP services from each running instance. Agents used only for command execution or file I/O can skip this section.
+          {" "}Listening on an undeclared port never exposes it. Visibility here is a default, not a lock — a launcher may tighten it, never loosen it —
+          and these declarations are versioned with the Agent, so changes affect only new instances.
+        </span>
+        {(allDefault || ports.length > 0) && (
+          <button
+            onClick={allDefault ? () => setUserExpanded(false) : resetToDefaults}
+            style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4, fontFamily: FONT, fontSize: 12, fontWeight: 500, background: "transparent", color: C.muted, border: "none", padding: 0, cursor: "pointer" }}
+          >
+            {allDefault ? "Collapse · use GMI defaults" : "Reset to GMI defaults"}
+          </button>
         )}
-      </button>
-    </div>
-    <div
-      style={{
-        background: C.card,
-        border: `1px solid ${C.border}`,
-        borderRadius: 10,
-        padding: "16px 20px",
-        display: "flex", flexDirection: "column", gap: 20,
-      }}
-    >
-      {/* Public IP */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <FieldLabel>Public IP address</FieldLabel>
-        <div
-          style={{
-            display: "flex", alignItems: "center", gap: 8,
-            background: "rgba(40,40,40,0.5)",
-            border: `1px dashed ${C.border}`,
-            borderRadius: 8,
-            padding: "10px 14px",
-            color: C.muted,
-            fontFamily: FONT, fontSize: 13,
-          }}
-        >
-          <IconInfo size={13} />
-          <span>Public IP address will be allocated automatically by the platform.</span>
-        </div>
       </div>
 
-      {/* Port Mapping */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <FieldLabel>Port Mapping</FieldLabel>
-        <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, marginTop: -4 }}>
-          Change below if your app listens on a different port.
-        </span>
-        <div
-          style={{
-            background: C.cardSolid,
-            border: `1px solid ${C.border}`,
-            borderRadius: 10,
-            overflow: "hidden",
-            marginTop: 8,
-          }}
-        >
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "140px 1fr 1fr 1fr 32px",
-              gap: 12,
-              padding: "10px 16px",
-              fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted, lineHeight: "16px",
-              borderBottom: `1px solid ${C.borderSoft}`,
-              background: "rgba(255,255,255,0.02)",
-            }}
-          >
-            <div>Protocol</div>
-            <div>Listening Port</div>
-            <div>Internal Port</div>
-            <div>Port name</div>
-            <div />
-          </div>
-          {ports.map((p) => (
-            <div
-              key={p.id}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "140px 1fr 1fr 1fr 32px",
-                gap: 12,
-                padding: "10px 16px",
-                alignItems: "center",
-                borderTop: `1px solid ${C.borderSoft}`,
-              }}
-            >
-              <Select
-                value={p.protocol}
-                onChange={(v) => updatePort(p.id, { protocol: v })}
-                options={["HTTPS/2", "HTTPS/1.1", "HTTP", "TCP", "gRPC"].map((x) => ({ value: x, label: x }))}
-              />
-              <TextInput value={p.listening} onChange={(v) => updatePort(p.id, { listening: v })} placeholder="443" />
-              <TextInput value={p.internal}  onChange={(v) => updatePort(p.id, { internal: v })}  placeholder="8080" />
-              <TextInput value={p.name}      onChange={(v) => updatePort(p.id, { name: v })}      placeholder="web" />
-              <button
-                onClick={() => removePort(p.id)}
-                style={{ background: "transparent", border: "none", cursor: "pointer", color: "#ef4444", padding: 4, display: "inline-flex" }}
-                aria-label="Remove port"
-              >
-                <IconX color="#ef4444" />
-              </button>
+      {ports.length === 0 ? (
+        <div style={{ background: C.card, border: `1px dashed ${C.border}`, borderRadius: 10, padding: "20px", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 10 }}>
+          <span style={{ fontFamily: FONT, fontSize: 13, color: C.muted }}>No endpoints — this Agent runs tasks only.</span>
+          <button onClick={add} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "transparent", color: C.fg, border: `1px solid ${C.border}`, padding: "7px 12px", borderRadius: 8, fontFamily: FONT, fontSize: 13, fontWeight: 500, cursor: "pointer" }}>
+            <IconPlus size={12} /> Add endpoint
+          </button>
+        </div>
+      ) : (
+        <>
+          {ports.map((p, i) => (
+            <div key={p.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Endpoint {i + 1}</span>
+                <button onClick={() => remove(p.id)} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "transparent", border: "none", color: "#ef4444", fontFamily: FONT, fontSize: 12, fontWeight: 500, cursor: "pointer", padding: 0 }}>
+                  <IconX color="#ef4444" /> Remove endpoint
+                </button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                  <FieldLabel>Name</FieldLabel>
+                  <input value={p.name} onChange={(e) => update(p.id, { name: e.target.value })} placeholder="web" style={cellInput} />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                  <FieldLabel>Internal port</FieldLabel>
+                  <input value={p.internalPort} onChange={(e) => update(p.id, { internalPort: e.target.value })} placeholder="3000" style={cellInput} />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                  <FieldLabel>Protocol</FieldLabel>
+                  <Select value={p.protocol} onChange={(v) => update(p.id, { protocol: v })} options={["HTTP", "HTTPS", "TCP", "gRPC"].map((x) => ({ value: x, label: x }))} />
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                <FieldLabel>Access</FieldLabel>
+                <div style={{ display: "flex", gap: 18 }}>
+                  {(["private", "public"] as const).map((vis) => (
+                    <label key={vis} style={{ display: "inline-flex", alignItems: "center", gap: 7, cursor: "pointer", fontFamily: FONT, fontSize: 13, color: C.fg }}>
+                      <input type="radio" name={`vis-${p.id}`} checked={p.visibility === vis} onChange={() => update(p.id, { visibility: vis })} style={{ accentColor: C.lime, width: 15, height: 15 }} />
+                      {vis === "private" ? "Private" : "Public"}
+                    </label>
+                  ))}
+                </div>
+                {p.visibility === "private" ? (
+                  <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>Private endpoints require an access token.</span>
+                ) : (
+                  <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.40)", borderRadius: 8, padding: "8px 10px" }}>
+                    <span style={{ color: "#fbbf24", flexShrink: 0 }}>⚠</span>
+                    <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "16px" }}>
+                      Public endpoints can be accessed by anyone with the URL. Do not expose admin panels, internal APIs, or services containing sensitive data.
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
           ))}
-          <div style={{ padding: "10px 16px", borderTop: `1px solid ${C.borderSoft}` }}>
-            <button
-              onClick={addPort}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: 6,
-                background: "transparent", color: C.fg,
-                border: `1px solid ${C.border}`,
-                padding: "6px 12px", borderRadius: 8,
-                fontFamily: FONT, fontSize: 13, fontWeight: 500,
-                cursor: "pointer",
-              }}
-            >
-              <IconPlus size={12} /> Add port mapping
-            </button>
-          </div>
-        </div>
-      </div>
-
-    </div>
+          <button onClick={add} style={{ alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: 6, background: "transparent", color: C.fg, border: `1px solid ${C.border}`, padding: "7px 12px", borderRadius: 8, fontFamily: FONT, fontSize: 13, fontWeight: 500, cursor: "pointer" }}>
+            <IconPlus size={12} /> Add another endpoint
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -2031,6 +2005,61 @@ function StepConnectReview({
   );
 }
 
+// ─── Build panel — explicit Template build (Building → Ready → Failed) ──────
+// Build once: pull image, install deps, prep environment → a ready Template. Tasks
+// launch from this prepared Template (no rebuild per run — the E2B/Modal model).
+function BuildStatusPanel() {
+  const STAGES = ["Pull image", "Install dependencies", "Prepare environment"];
+  const [done, setDone] = useState(0);
+  const [status, setStatus] = useState<"building" | "ready" | "failed">("building");
+  useEffect(() => {
+    if (status !== "building") return;
+    if (done >= STAGES.length) { setStatus("ready"); return; }
+    const t = setTimeout(() => setDone((d) => d + 1), 1000);
+    return () => clearTimeout(t);
+  }, [done, status]);
+
+  const badge =
+    status === "ready" ? { label: "Ready", color: "#86efac" } :
+    status === "failed" ? { label: "Failed", color: "#ef4444" } :
+    { label: "Building", color: C.warn };
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", maxWidth: 880, display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Build template</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: FONT, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: badge.color, background: `${badge.color}1f`, border: `1px solid ${badge.color}55`, padding: "2px 8px", borderRadius: 6 }}>
+          {status === "building" && <span style={{ width: 6, height: 6, borderRadius: 999, background: badge.color, animation: "pulse 1.2s ease-in-out infinite" }} />}
+          {badge.label}
+        </span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {STAGES.map((s, i) => {
+          const isDone = i < done || status === "ready";
+          const isActive = i === done && status === "building";
+          return (
+            <div key={s} style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 13, color: isDone ? C.fg : isActive ? C.fg : C.muted }}>
+              {isDone ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#86efac" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+              ) : isActive ? (
+                <span style={{ width: 8, height: 8, borderRadius: 999, background: C.warn, animation: "pulse 1.2s ease-in-out infinite", margin: "0 3px" }} />
+              ) : (
+                <span style={{ width: 12, height: 12, borderRadius: 999, border: `2px solid ${C.border}` }} />
+              )}
+              {s}
+            </div>
+          );
+        })}
+      </div>
+      {status === "ready" && (
+        <div style={{ fontFamily: FONT, fontSize: 12, color: "#86efac", lineHeight: "17px" }}>
+          Template ready — Launch is enabled. Tasks start from this prepared Template; no rebuild per run.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Post-submit Success view (Connect-your-agent flow) ──────────────────
 function SuccessView({
   projectName, accessUrl, maasKey, onViewAgents, onListOnAgentbox, hostMode = "connect",
@@ -2083,15 +2112,8 @@ function SuccessView({
         </p>
       </div>
 
-      {/* Runtime preparation in progress — Launch gate (PRD F-01) */}
-      {isGmi && (
-        <div style={{ display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.30)", borderRadius: 10, padding: "12px 16px", maxWidth: 880 }}>
-          <span style={{ width: 8, height: 8, borderRadius: 999, background: C.warn, marginTop: 5, flexShrink: 0, animation: "pulse 1.2s ease-in-out infinite" }} />
-          <span style={{ fontFamily: FONT, fontSize: 13, color: C.fg, lineHeight: "19px" }}>
-            <span style={{ fontWeight: 600 }}>Runtime preparation is in progress.</span> Launch will be available when preparation completes — track its status on the Agent's page in My Agents.
-          </span>
-        </div>
-      )}
+      {/* Explicit Build — pull image, install deps, prep env → Ready (Launch gate, PRD F-01) */}
+      {isGmi && <BuildStatusPanel />}
 
       {/* Deployment Type / Badge cards */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -2528,6 +2550,9 @@ export default function DeployWizard() {
   const [maasKey, setMaasKey] = useState("");
   const [accessUrl, setAccessUrl] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  // Publish fast-path: Basics is required; Runtime/Networking/Env collapse into
+  // Advanced settings (off by default) so common publishes stay one screen.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   // ?use=<id> — Use-this-agent fork. Wizard is pre-filled from a marketplace
   // template; user lands on a collapsed view and expands to customize.
@@ -2587,9 +2612,9 @@ export default function DeployWizard() {
     {
       group: "Network",
       rows: [
-        { label: "Port Mappings", value: ports.length > 0
-            ? ports.map((p) => `${p.protocol} ${p.internal || "?"} (${p.name || "port"})`).join(", ")
-            : "—" },
+        { label: "Endpoints", value: ports.length > 0
+            ? ports.map((p) => `${p.name || "endpoint"} :${p.internalPort || "?"} ${p.protocol} · ${p.visibility}`).join(", ")
+            : "None" },
       ],
     },
     {
@@ -2613,10 +2638,10 @@ export default function DeployWizard() {
 
   const step3AllDefault =
     ports.length === 1 &&
-    ports[0].protocol === "HTTPS/2" &&
-    ports[0].internal === "8080" &&
     ports[0].name === "web" &&
-    !ports[0].listening;
+    ports[0].internalPort === "8080" &&
+    ports[0].protocol === "HTTP" &&
+    ports[0].visibility === "private";
 
   const step4AllDefault = customEnvs.length === 0;
 
@@ -2767,28 +2792,35 @@ export default function DeployWizard() {
           >
             <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
               {hostMode === "gmi" ? (
-                STEPS.map((s) => {
-                  const forkedSubtitle = "Pre-filled — expand to customize";
-                  const subtitle =
-                    s.id === 2 ? (forkedFrom ? forkedSubtitle : step2AllDefault ? "Pre-configured with GMI defaults" : null) :
-                    s.id === 3 ? (forkedFrom ? forkedSubtitle : step3AllDefault ? "Pre-configured with GMI defaults" : null) :
-                    s.id === 4 ? (forkedFrom ? forkedSubtitle : step4AllDefault ? "Pre-configured with GMI defaults" : null) : null;
-                  return (
-                    <div key={s.id} id={`step-${s.id}`}>
-                      <SectionHeader number={s.id} title={s.title} subtitle={subtitle} />
-                      <div style={{ marginTop: 12 }}>
-                        {s.id === 1 && (
-                          <div style={{
-                            background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
-                            padding: "16px 20px",
-                          }}>
-                            <StepBasics
-                              projectName={projectName} setProjectName={setProjectName}
-                            />
-                          </div>
-                        )}
-                        {s.id === 2 && (
-                          <>
+                <>
+                  {/* Basics — required to publish */}
+                  <div id="step-1">
+                    <SectionHeader number={1} title="Basics & Template" subtitle={forkedFrom ? "Pre-filled — expand to customize" : null} />
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 20px" }}>
+                        <StepBasics projectName={projectName} setProjectName={setProjectName} />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Advanced settings — Runtime / Networking / Env, collapsed by default */}
+                  <div>
+                    <button
+                      onClick={() => setAdvancedOpen((o) => !o)}
+                      style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", cursor: "pointer", textAlign: "left" }}
+                    >
+                      <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                        <span style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg }}>Advanced settings</span>
+                        <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Runtime image · Infrastructure · Networking · Environment — using GMI defaults</span>
+                      </span>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: advancedOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}><path d="m6 9 6 6 6-6" /></svg>
+                    </button>
+
+                    {advancedOpen && (
+                      <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 20 }}>
+                        <div id="step-2">
+                          <SectionHeader number={2} title="Infrastructure" subtitle={forkedFrom ? "Pre-filled — expand to customize" : step2AllDefault ? "Pre-configured with GMI defaults" : null} />
+                          <div style={{ marginTop: 12 }}>
                             <StepInfrastructure
                               dockerSource={dockerSource} setDockerSource={setDockerSource}
                               dockerImage={dockerImage} setDockerImage={setDockerImage}
@@ -2812,27 +2844,32 @@ export default function DeployWizard() {
                                 <span style={{ color: C.muted }}>Register defines how the Agent runs; Launch defines how long each instance runs.</span>
                               </span>
                             </div>
-                          </>
-                        )}
-                        {s.id === 3 && (
-                          <StepNetworking
-                            ports={ports} setPorts={setPorts}
-                            forkedFromTemplate={!!forkedFrom}
-                          />
-                        )}
-                        {s.id === 4 && <StepEnvVars customEnvs={customEnvs} setCustomEnvs={setCustomEnvs} forkedFromTemplate={!!forkedFrom} />}
-                        {s.id === 5 && (
-                          <StepReview
-                            summary={summary}
-                            computeRate={computeRate}
-                            modelInfo={modelInfo}
-                            dockerImage={dockerImage}
-                          />
-                        )}
+                          </div>
+                        </div>
+                        <div id="step-3">
+                          <SectionHeader number={3} title="Networking" subtitle={forkedFrom ? "Pre-filled — expand to customize" : step3AllDefault ? "Pre-configured with GMI defaults" : null} />
+                          <div style={{ marginTop: 12 }}>
+                            <StepNetworking ports={ports} setPorts={setPorts} forkedFromTemplate={!!forkedFrom} />
+                          </div>
+                        </div>
+                        <div id="step-4">
+                          <SectionHeader number={4} title="Env Variables" subtitle={forkedFrom ? "Pre-filled — expand to customize" : step4AllDefault ? "Pre-configured with GMI defaults" : null} />
+                          <div style={{ marginTop: 12 }}>
+                            <StepEnvVars customEnvs={customEnvs} setCustomEnvs={setCustomEnvs} forkedFromTemplate={!!forkedFrom} />
+                          </div>
+                        </div>
                       </div>
+                    )}
+                  </div>
+
+                  {/* Review & Register */}
+                  <div id="step-5">
+                    <SectionHeader number={5} title="Review & Register" subtitle={null} />
+                    <div style={{ marginTop: 12 }}>
+                      <StepReview summary={summary} computeRate={computeRate} modelInfo={modelInfo} dockerImage={dockerImage} />
                     </div>
-                  );
-                })
+                  </div>
+                </>
               ) : (
                 // Connect-your-agent flow — 4 sections
                 CONNECT_STEPS.map((s) => (
@@ -2910,6 +2947,11 @@ export default function DeployWizard() {
                     category: "Code & Dev Tools",
                     registeredAt: new Date().toISOString(),
                     listingState: "draft",
+                    // Carry the template's infra choices into the record so Access /
+                    // Launch show this agent's real endpoints, region, and tier.
+                    endpoints: ports.map((p) => ({ id: p.id, name: p.name, internalPort: p.internalPort, protocol: p.protocol, visibility: p.visibility })),
+                    region,
+                    tier: computeTier,
                   });
                   setSubmitted(true);
                 }

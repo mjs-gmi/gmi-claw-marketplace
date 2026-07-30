@@ -9,6 +9,8 @@ import Dashboard from "./pages/Dashboard";
 import ClawDetail from "./pages/ClawDetail";
 import ListClaw from "./pages/ListClaw";
 import DeployWizard from "./pages/DeployWizard";
+// Task-first pages (RunTask / Tasks / TaskDetail) are parked — the product follows
+// the existing Console structure (Browse Agents / My Agents / Register & List).
 
 function Router() {
   return (

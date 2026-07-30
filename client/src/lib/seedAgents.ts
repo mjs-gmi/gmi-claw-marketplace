@@ -23,6 +23,12 @@ export interface SeedAgent {
   listingState?: SeedListingState;
   dockerImage?: string;
   region?: string;
+  // Endpoints declared at Register → Networking. Surfaced live under Access in
+  // Instance Details. name/internalPort/protocol/visibility (private|public).
+  endpoints?: { id: string; name: string; internalPort: string; protocol: string; visibility: "private" | "public" }[];
+  // Compute tier id from Register (container | standard | performance). region is
+  // already declared above. Both are template properties, read-only downstream.
+  tier?: string;
 }
 
 export const SEED_AGENTS: SeedAgent[] = [
@@ -38,6 +44,8 @@ export const SEED_AGENTS: SeedAgent[] = [
     accessUrl: "",
     registeredAt: "2025-01-01T00:00:00.000Z",
     region: "us-ia-iowa-1",
+    tier: "container",
+    endpoints: [{ id: "ep_web", name: "web", internalPort: "8080", protocol: "HTTPS", visibility: "private" }],
   },
   {
     id: "agent_hermes_mingjun",
@@ -50,7 +58,9 @@ export const SEED_AGENTS: SeedAgent[] = [
     maasKey: "",
     accessUrl: "",
     registeredAt: "2025-01-01T00:00:00.000Z",
-    region: "us-ia-iowa-1",
+    region: "us-or-portland",
+    tier: "standard",
+    endpoints: [{ id: "ep_api", name: "api", internalPort: "3000", protocol: "HTTP", visibility: "public" }],
   },
   {
     id: "agent_openclaw",
@@ -64,6 +74,11 @@ export const SEED_AGENTS: SeedAgent[] = [
     accessUrl: "",
     registeredAt: "2025-01-01T00:00:00.000Z",
     dockerImage: "ghcr.io/mjs-gmi/openclaw-gmi:v5-mode-none",
-    region: "us-ia-iowa-1",
+    region: "eu-de-frankfurt",
+    tier: "performance",
+    endpoints: [
+      { id: "ep_web", name: "web", internalPort: "8080", protocol: "HTTPS", visibility: "private" },
+      { id: "ep_vnc", name: "vnc", internalPort: "5900", protocol: "TCP", visibility: "public" },
+    ],
   },
 ];
