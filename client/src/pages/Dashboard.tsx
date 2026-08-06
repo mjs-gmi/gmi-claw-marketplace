@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
+import {
+  loadSubscription, isSubscribed, getPlan,
+  ALL_MODELS, STANDARD_MODELS, getModel, modelName, isStandardModel, paygUsdPer1M,
+  type CatalogModel,
+} from "@/lib/pricingModel";
 import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
 import Footer from "@/components/Footer";
@@ -198,22 +203,16 @@ function productForTier(tier?: string): string {
 // F-08 Model selection — selectable set = Org available models (LLMs). `plan` = in
 // the active Coding Plan; `featured` = the Agent Version's default pick (one). No
 // external/BYO models. Resolved value injected as locked env GMI_MODEL_ID.
-interface LaunchModel { id: string; name: string; plan?: boolean; featured?: boolean }
-// Stands in for the available-models API response, filtered to LLMs. Ordering in
-// every picker: In your Coding Plan → Featured → the rest (F-08 rule 1).
-const LAUNCH_MODELS: LaunchModel[] = [
-  { id: "deepseek-v4-flash", name: "DeepSeek-V4-Flash", plan: true, featured: true },
-  { id: "claude-opus-48", name: "Claude Opus 4.8", plan: true },
-  { id: "gpt-55", name: "GPT-5.5" },
-];
-const FEATURED_MODEL = LAUNCH_MODELS.find((m) => m.featured) ?? LAUNCH_MODELS[0];
-function launchModel(id?: string): LaunchModel | undefined {
-  return LAUNCH_MODELS.find((m) => m.id === id);
+// Model catalog comes from the shared pricing model (Standard / Premium lanes).
+// Standard = included/FUP; Premium = burns Premium Credits (or PAYG without a plan).
+const FEATURED_MODEL = STANDARD_MODELS[0]; // deepseek-v4-flash — Standard default
+function launchModel(id?: string): CatalogModel | undefined {
+  return id ? getModel(id) : undefined;
 }
 // Human name for any stored id — including one the API no longer returns.
 function modelDisplayName(id?: string): string {
   if (!id) return FEATURED_MODEL.name;
-  return launchModel(id)?.name ?? id;
+  return modelName(id);
 }
 
 // ─── F-08 Saved Launch Configuration (launcher / Organization-owned) ─────────
@@ -227,12 +226,12 @@ function modelDisplayName(id?: string): string {
 type ModelSelectionStatus = "ok" | "action_required";
 interface SavedLaunchConfig { model: string; status: ModelSelectionStatus }
 const INITIAL_SAVED_CONFIGS: Record<string, SavedLaunchConfig> = {
-  agent_hermes: { model: "claude-opus-48", status: "ok" },
+  agent_hermes: { model: "kimi-k27-code", status: "ok" }, // a Premium saved default
   // Saved a model the available-models API no longer returns → action_required.
   // This agent's Template is Ready, so the model gate is the only thing blocking
   // create — the two launch gates stay legible separately.
   agent_hermes_mingjun: { model: "qwen-25-72b", status: "action_required" },
-  agent_openclaw: { model: "deepseek-v4-flash", status: "ok" },
+  agent_openclaw: { model: "deepseek-v4-flash", status: "ok" }, // Standard
 };
 // Agent Version name — the developer-owned layer (also the Snapshot lineage
 // field and the Console snapshot-name prefix).
@@ -1941,6 +1940,8 @@ function ProvisionModal({
   // per-Runtime override. Empty means the saved model is action_required and the
   // launcher has to confirm one before create is allowed (rule 4).
   const [model, setModel] = useState("");
+  // Selecting a Premium (excluded-from-plan) model pops a confirm modal.
+  const [pendingModel, setPendingModel] = useState<string | null>(null);
   // §4.7 — customer metadata, set at create.
   const [meta, setMeta] = useState<MetaEntry[]>([]);
   // Lifecycle defaults to a collapsed timeline + summary; controls reveal on Customize.
@@ -2120,32 +2121,70 @@ function ProvisionModal({
             )}
             <select
               value={model}
-              onChange={(e) => setModel(e.target.value)}
+              onChange={(e) => { const v = e.target.value; if (!v || isStandardModel(v)) setModel(v); else setPendingModel(v); }}
               style={{
                 ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "pointer",
                 borderColor: modelBlocked && !model ? "rgba(248,113,113,0.55)" : C.border,
               }}
             >
               {modelBlocked && <option value="">Select a model to continue</option>}
-              <optgroup label="In your Coding Plan">
-                {LAUNCH_MODELS.filter((m) => m.plan).sort((a, b) => Number(!!b.featured) - Number(!!a.featured)).map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}{m.featured ? " · Featured" : ""}</option>
+              <optgroup label="Standard · included (FUP)">
+                {STANDARD_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
                 ))}
               </optgroup>
-              {LAUNCH_MODELS.some((m) => !m.plan) && (
-                <optgroup label="Other models">
-                  {LAUNCH_MODELS.filter((m) => !m.plan).map((m) => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </optgroup>
-              )}
+              <optgroup label="Premium · burns credits">
+                {ALL_MODELS.filter((m) => m.lane === "premium").map((m) => (
+                  <option key={m.id} value={m.id}>{m.name} — {m.burnBlended} cr/1M</option>
+                ))}
+              </optgroup>
             </select>
+            {/* Confirm modal — a Premium model is excluded from the Coding Plan */}
+            {pendingModel && (() => {
+              const m = getModel(pendingModel);
+              const payg = m ? paygUsdPer1M(m) : null;
+              return (
+                <div onClick={() => setPendingModel(null)} style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(0,0,0,0.78)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+                  <div onClick={(e) => e.stopPropagation()} style={{ width: 460, maxWidth: "100%", background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ width: 26, height: 26, borderRadius: 999, background: "rgba(251,191,36,0.16)", border: "1px solid rgba(251,191,36,0.5)", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#fbbf24" }}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /></svg>
+                      </span>
+                      <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>Use a Premium model?</h3>
+                    </div>
+                    <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "19px", margin: 0 }}>
+                      <span style={{ color: C.fg, fontWeight: 600 }}>{m?.name}</span> is excluded from the Coding Agent Plan. Each run draws down your Premium Credits at <span style={{ color: C.fg }}>{m?.burnBlended} credits / 1M tokens</span>{payg != null && <> (pay-as-you-go <span style={{ color: C.fg }}>${payg.toFixed(2)}/1M</span> without a plan)</>}. Standard models run nearly unlimited and free on any plan.
+                    </p>
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+                      <button onClick={() => setPendingModel(null)} style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, background: "transparent", color: C.muted, border: `1px solid ${C.border}`, padding: "7px 14px", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
+                      <button onClick={() => { setModel(pendingModel); setPendingModel(null); }} style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, background: "#fbbf24", color: "#0a0a0a", border: "none", padding: "7px 14px", borderRadius: 8, cursor: "pointer" }}>Use {m?.name}</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
             <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
               {savedConfig.status === "ok"
                 ? <>Saved default for this Agent: <span style={{ color: C.fg }}>{modelDisplayName(savedConfig.model)}</span>. </>
                 : null}
               Injected as locked <span style={{ fontFamily: MONO }}>GMI_MODEL_ID</span> · applies only to Runtimes created after this change; running Runtimes are unaffected.
             </span>
+            {/* Threshold nudge — how this run bills, based on the launcher's subscription */}
+            {(() => {
+              const sub = loadSubscription();
+              return isSubscribed(sub) ? (
+                <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>
+                  Premium model usage draws from your <span style={{ color: C.lime }}>{getPlan(sub.plan).name}</span> credits — {sub.creditsRemaining.toLocaleString()} left. Standard models are included.
+                </span>
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", background: "rgba(221,234,77,0.06)", border: "1px solid rgba(221,234,77,0.30)", borderRadius: 8, padding: "8px 10px" }}>
+                  <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.fg, flex: "1 1 auto", minWidth: 180 }}>
+                    You're on <span style={{ fontWeight: 600 }}>pay-as-you-go</span> — Premium models bill per token at list price. Subscribe to run from a monthly credit pool and keep Standard nearly unlimited.
+                  </span>
+                  <Link href="/plans" style={{ flexShrink: 0, fontFamily: FONT, fontSize: 12, fontWeight: 700, color: C.limeText, background: C.lime, borderRadius: 7, padding: "5px 12px", textDecoration: "none" }}>Subscribe & save →</Link>
+                </div>
+              );
+            })()}
           </section>
 
           {/* Name — optional */}
@@ -3786,18 +3825,16 @@ function AgentDetailPane({
             }}
           >
             {modelBlocked && <option value="">Select a replacement model</option>}
-            <optgroup label="In your Coding Plan">
-              {LAUNCH_MODELS.filter((m) => m.plan).sort((a, b) => Number(!!b.featured) - Number(!!a.featured)).map((m) => (
-                <option key={m.id} value={m.id}>{m.name}{m.featured ? " · Featured" : ""}</option>
+            <optgroup label="Standard · included (FUP)">
+              {STANDARD_MODELS.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
               ))}
             </optgroup>
-            {LAUNCH_MODELS.some((m) => !m.plan) && (
-              <optgroup label="Other models">
-                {LAUNCH_MODELS.filter((m) => !m.plan).map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </optgroup>
-            )}
+            <optgroup label="Premium · burns credits">
+              {ALL_MODELS.filter((m) => m.lane === "premium").map((m) => (
+                <option key={m.id} value={m.id}>{m.name} — {m.burnBlended} cr/1M</option>
+              ))}
+            </optgroup>
           </select>
           <PlanBadge />
         </div>

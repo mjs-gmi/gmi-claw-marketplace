@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useLocation } from "wouter";
+import { loadSubscription, getPlan, isSubscribed } from "@/lib/pricingModel";
 
 // Single page label based on current route (matches GMI Console top bar — a
 // single title next to the sidebar-toggle, not a full breadcrumb trail).
@@ -38,7 +39,10 @@ const IcoSpark = () => (
 
 export default function Topbar() {
   const label = usePageLabel();
+  const [, setLocation] = useLocation();
   const [tab, setTab] = useState<"inference" | "compute">("inference");
+  const sub = loadSubscription();
+  const subscribed = isSubscribed(sub);
 
   return (
     <div
@@ -90,6 +94,33 @@ export default function Topbar() {
 
       {/* Right: credit chips + avatar */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto", paddingRight: 16 }}>
+        {/* Subscription — plan + credits, or pay-as-you-go with a subscribe nudge (→ Plans) */}
+        {subscribed ? (() => {
+          const plan = getPlan(sub.plan);
+          const low = sub.creditsRemaining < 0.15 * plan.premiumCredits;
+          return (
+            <div
+              onClick={() => setLocation("/plans")}
+              title={`${plan.name} plan · ${sub.creditsRemaining.toLocaleString()} of ${plan.premiumCredits.toLocaleString()} Premium Credits${low ? " — running low" : ""}`}
+              style={{ ...chipStyle, borderColor: low ? "rgba(251,191,36,0.55)" : "rgba(221,234,77,0.35)", background: low ? "rgba(251,191,36,0.10)" : "rgba(221,234,77,0.08)" }}
+            >
+              <IcoSpark />
+              <span style={{ ...chipText, color: low ? "#fbbf24" : "#DDEA4D" }}>{plan.name}</span>
+              <span style={{ ...chipText, color: "#a3a3a3" }}>·</span>
+              <span style={{ ...chipText, color: low ? "#fbbf24" : "#fafafa" }}>{sub.creditsRemaining.toLocaleString()} cr</span>
+              {low && <span style={{ ...chipText, color: "#fbbf24", fontWeight: 600 }}>· Top up</span>}
+            </div>
+          );
+        })() : (
+          <div
+            onClick={() => setLocation("/plans")}
+            title="Pay-as-you-go — billed per token at list price. Subscribe to save."
+            style={{ ...chipStyle }}
+          >
+            <span style={{ ...chipText, color: "#a3a3a3" }}>Pay-as-you-go</span>
+            <span style={{ ...chipText, color: "#DDEA4D", fontWeight: 600 }}>· Subscribe →</span>
+          </div>
+        )}
         {/* Free / promo credits */}
         <div style={chipStyle}>
           <IcoGift />

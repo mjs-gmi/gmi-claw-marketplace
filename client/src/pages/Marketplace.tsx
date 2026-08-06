@@ -339,6 +339,22 @@ export default function Marketplace() {
           </p>
         </div>
 
+        {/* Coding Agent Plan — promotional strip (opt-in surface, not a nav destination) */}
+        <div style={{ padding: "16px 24px 0" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", background: "rgba(221,234,77,0.06)", border: "1px solid rgba(221,234,77,0.30)", borderRadius: 10, padding: "12px 16px" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="#DDEA4D"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z" /></svg>
+              <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 700, color: C.fg }}>Coding Agent Plan</span>
+            </span>
+            <span style={{ fontFamily: FONT, fontSize: 13, color: C.muted, flex: "1 1 auto", minWidth: 200 }}>
+              Run agents on <span style={{ color: C.fg }}>Standard models nearly unlimited</span>, plus a monthly Premium Credits pool — from $9.99/mo.
+            </span>
+            <button onClick={() => setLocation("/plans")} style={{ flexShrink: 0, fontFamily: FONT, fontSize: 13, fontWeight: 700, color: "#0a0a0a", background: "#DDEA4D", border: "none", borderRadius: 8, padding: "8px 16px", cursor: "pointer" }}>
+              See plans →
+            </button>
+          </div>
+        </div>
+
         {/* OpenClaw plugin banner — single horizontal row */}
         <div style={{ padding: "20px 24px 0" }}>
           <div

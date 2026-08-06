@@ -9,6 +9,7 @@ import Dashboard from "./pages/Dashboard";
 import ClawDetail from "./pages/ClawDetail";
 import ListClaw from "./pages/ListClaw";
 import DeployWizard from "./pages/DeployWizard";
+import Plans from "./pages/Plans";
 // Task-first pages (RunTask / Tasks / TaskDetail) are parked — the product follows
 // the existing Console structure (Browse Agents / My Agents / Register & List).
 
@@ -21,6 +22,7 @@ function Router() {
       <Route path={"/marketplace"} component={Marketplace} />
       <Route path={"/marketplace/:id"} component={ClawDetail} />
       <Route path={"/dashboard"} component={Dashboard} />
+      <Route path={"/plans"} component={Plans} />
       <Route path={"/deploy"} component={DeployWizard} />
       <Route path={"/list-claw"} component={ListClaw} />
       <Route component={NotFound} />

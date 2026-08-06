@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { ALL_CLAWS } from "@/lib/clawData";
 import Navbar from "@/components/Navbar";
 import Topbar from "@/components/Topbar";
@@ -8,6 +8,7 @@ import CopyButton from "@/components/CopyButton";
 import { C as baseC, FONT, MONO } from "@/lib/tokens";
 import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
 import { isPlanEligibleModel, discountPriceString, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
+import { ALL_MODELS, isStandardModel, getModel, paygUsdPer1M, type CatalogModel } from "@/lib/pricingModel";
 
 // ─── Tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const C = {
@@ -990,8 +991,13 @@ function StepInfrastructure({
   const [userExpanded, setUserExpanded] = useState(false);
   // Switching to a GMI model NOT covered by the Coding Plan is high-friction —
   // it requires an explicit acknowledgement (full token price, no discount).
-  const [ackNonPlan, setAckNonPlan] = useState(false);
-  const pickModel = (id: string) => { setSelectedModel(id); if (isPlanEligibleModel(id)) setAckNonPlan(false); };
+  const [planOptIn, setPlanOptIn] = useState(false); // promotional Coding Agent Plan enrolment
+  // Selecting a model excluded from the Coding Plan (Premium) pops a confirm modal.
+  const [pendingModel, setPendingModel] = useState<string | null>(null);
+  const pickModel = (id: string) => {
+    if (isStandardModel(id)) { setSelectedModel(id); return; }
+    setPendingModel(id); // excluded / Premium → confirm before switching
+  };
   const collapsed = !userExpanded && (allDefault || forkedFromTemplate);
 
   if (collapsed) {
@@ -1183,94 +1189,82 @@ function StepInfrastructure({
 
         {addModels && (
           <>
-            {/* Coding Agent Plan — adoption callout: featured model pinned, discounted */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", background: "rgba(221,234,77,0.05)", border: "1px solid rgba(221,234,77,0.30)", borderRadius: 8, padding: "8px 12px" }}>
-              <PlanBadge text={CODING_AGENT_PLAN.name} />
-              <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg }}>
-                {CODING_AGENT_PLAN.discountPct}% off coding models — <span style={{ color: C.lime, fontWeight: 600 }}>{CODING_AGENT_PLAN.featuredModelName}</span> recommended for this agent.
+            {/* Coding Agent Plan — promotional opt-in right where the model is chosen */}
+            <label style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", cursor: "pointer", background: planOptIn ? "rgba(221,234,77,0.08)" : "rgba(221,234,77,0.05)", border: `1px solid ${planOptIn ? "rgba(221,234,77,0.55)" : "rgba(221,234,77,0.30)"}`, borderRadius: 8, padding: "10px 12px" }}>
+              <input type="checkbox" checked={planOptIn} onChange={(e) => setPlanOptIn(e.target.checked)} style={{ accentColor: C.lime, width: 15, height: 15 }} />
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="#DDEA4D"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z" /></svg>
+                <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Enroll in the Coding Agent Plan</span>
               </span>
-            </div>
+              <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 160 }}>
+                Standard models nearly unlimited + monthly Premium Credits · from $9.99/mo
+              </span>
+              <Link href="/plans" onClick={(e: React.MouseEvent) => e.stopPropagation()} style={{ flexShrink: 0, fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.lime, textDecoration: "none" }}>See plans →</Link>
+            </label>
+
+            <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px", margin: 0 }}>
+              <span style={{ color: C.fg, fontWeight: 600 }}>Standard</span> models are included on every plan (nearly unlimited under fair-use). <span style={{ color: C.fg, fontWeight: 600 }}>Premium</span> models draw down the user's monthly Premium Credits at published rates.
+            </p>
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <FieldLabel>Select Model</FieldLabel>
               <Select
                 value={selectedModel}
                 onChange={pickModel}
                 placeholder="Select an option"
-                options={MODELS.map((m) => ({ value: m.id, label: m.name }))}
+                options={ALL_MODELS.map((m) => ({ value: m.id, label: `${m.name} — ${m.lane === "standard" ? "Standard · included" : `Premium · ${m.burnBlended} cr/1M`}` }))}
               />
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
-              {MODELS.map((m) => {
-                const isActive = selectedModel === m.id;
-                return (
-                  <button
-                    key={m.id}
-                    onClick={() => pickModel(m.id)}
-                    style={{
-                      background: isActive ? C.selectedYel : C.cardSolid,
-                      border: `1px solid ${isActive ? C.selectedYelB : C.border}`,
-                      borderRadius: 10,
-                      padding: "14px 16px",
-                      textAlign: "left",
-                      display: "flex", flexDirection: "column", gap: 6,
-                      cursor: "pointer",
-                      fontFamily: FONT,
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: C.fg, lineHeight: "20px" }}>{m.name}</div>
-                      {m.id === CODING_AGENT_PLAN.featuredModelId && (
-                        <span style={{ fontFamily: FONT, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", color: C.limeText, background: C.lime, padding: "1px 6px", borderRadius: 4 }}>FEATURED</span>
-                      )}
-                      {isPlanEligibleModel(m.id) && <PlanBadge />}
-                    </div>
-                    <div
-                      style={{
-                        display: "inline-flex", alignSelf: "flex-start",
-                        fontSize: 11, fontWeight: 600, color: C.fg,
-                        background: "rgba(255,255,255,0.04)",
-                        border: `1px solid ${C.border}`,
-                        padding: "1px 7px", borderRadius: 999,
-                      }}
-                    >
-                      {m.ctx}
-                    </div>
-                    {(() => {
-                      const d = isPlanEligibleModel(m.id) ? discountPriceString(m.inPrice) : null;
-                      return d ? (
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 2, flexWrap: "wrap" }}>
-                          <span style={{ fontSize: 12, color: C.muted }}>Input</span>
-                          <DiscountedPrice original={d.original} discounted={d.discounted} size={12} />
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "18px", marginTop: 2 }}>
-                          Input {m.inPrice}
-                        </div>
-                      );
-                    })()}
-                    {m.outPrice && (
-                      <div style={{ fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "18px" }}>
-                        Output {m.outPrice}
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+            {/* Selected model — single summary card (the full list stays in the dropdown) */}
+            {(() => {
+              const m = getModel(selectedModel);
+              if (!m) return null;
+              const std = m.lane === "standard";
+              return (
+                <div style={{ background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>{m.name}</span>
+                    <span style={{ fontFamily: FONT, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", color: std ? "#34d399" : "#c7a7ff", background: std ? "rgba(52,211,153,0.14)" : "rgba(199,167,255,0.14)", border: `1px solid ${std ? "rgba(52,211,153,0.45)" : "rgba(199,167,255,0.45)"}`, padding: "1px 6px", borderRadius: 4 }}>{std ? "STANDARD" : "PREMIUM"}</span>
+                  </div>
+                  {std ? (
+                    <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>PAYG <span style={{ fontFamily: MONO, color: C.fg }}>{m.listPrice}</span> · <span style={{ color: "#34d399", fontWeight: 600 }}>Included</span> with a plan · FUP</span>
+                  ) : (
+                    <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>PAYG <span style={{ fontFamily: MONO, color: C.fg }}>${paygUsdPer1M(m)?.toFixed(2)}/1M</span> · <span style={{ color: C.fg, fontWeight: 600 }}>{m.burnBlended} cr</span>/1M with a plan</span>
+                  )}
+                </div>
+              );
+            })()}
 
-            {!isPlanEligibleModel(selectedModel) && (
-              /* Friction — switching to a GMI model outside the Coding Agent Plan */
-              <div style={{ display: "flex", flexDirection: "column", gap: 8, background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.40)", borderRadius: 8, padding: "12px 14px" }}>
-                <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "17px" }}>
-                  <span style={{ color: "#fbbf24", fontWeight: 700 }}>⚠ Not in the {CODING_AGENT_PLAN.name}.</span>{" "}
-                  {MODELS.find((m) => m.id === selectedModel)?.name ?? "This model"} is billed at full token price — the {CODING_AGENT_PLAN.discountPct}% plan discount does not apply. Users may prefer plan-covered agents.
-                </span>
-                <label style={{ display: "inline-flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
-                  <input type="checkbox" checked={ackNonPlan} onChange={(e) => setAckNonPlan(e.target.checked)} style={{ accentColor: "#fbbf24", width: 15, height: 15, marginTop: 2 }} />
-                  <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "16px" }}>I understand this model isn't covered by the {CODING_AGENT_PLAN.name} and is billed at full price.</span>
-                </label>
+            {!isStandardModel(selectedModel) && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 12, color: "#fbbf24" }}>
+                <span style={{ fontWeight: 700 }}>⚠ Premium default</span>
+                <span style={{ color: C.muted }}>· excluded from the {CODING_AGENT_PLAN.name} · burns {getModel(selectedModel)?.burnBlended} cr/1M</span>
               </div>
             )}
+
+            {/* Confirm modal — selecting a model excluded from the Coding Plan */}
+            {pendingModel && (() => {
+              const m = getModel(pendingModel);
+              const payg = m ? paygUsdPer1M(m) : null;
+              return (
+                <div onClick={() => setPendingModel(null)} style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(0,0,0,0.78)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+                  <div onClick={(e) => e.stopPropagation()} style={{ width: 460, maxWidth: "100%", background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ width: 26, height: 26, borderRadius: 999, background: "rgba(251,191,36,0.16)", border: "1px solid rgba(251,191,36,0.5)", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#fbbf24" }}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /></svg>
+                      </span>
+                      <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>Use a Premium model?</h3>
+                    </div>
+                    <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "19px", margin: 0 }}>
+                      <span style={{ color: C.fg, fontWeight: 600 }}>{m?.name}</span> is excluded from the {CODING_AGENT_PLAN.name}. Each run draws down the user's Premium Credits at <span style={{ color: C.fg }}>{m?.burnBlended} credits / 1M tokens</span>{payg != null && <> (pay-as-you-go <span style={{ color: C.fg }}>${payg.toFixed(2)}/1M</span> without a plan)</>}. Standard models run nearly unlimited and free on any plan.
+                    </p>
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+                      <button onClick={() => setPendingModel(null)} style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, background: "transparent", color: C.muted, border: `1px solid ${C.border}`, padding: "7px 14px", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
+                      <button onClick={() => { setSelectedModel(pendingModel); setPendingModel(null); }} style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, background: "#fbbf24", color: "#0a0a0a", border: "none", padding: "7px 14px", borderRadius: 8, cursor: "pointer" }}>Use {m?.name}</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </>
         )}
       </div>
@@ -2323,14 +2317,12 @@ function StepReview({
     rows: { label: string; value: string; highlight?: boolean }[];
   }[];
   computeRate: number;
-  modelInfo: ModelSpec | null;
+  modelInfo: CatalogModel | null;
   dockerImage: string;
 }) {
   // Always expanded — Review & Register is one of the two default-visible steps.
   const rows = summary.flatMap((g) => g.rows);
   const dayRate = computeRate * 24;
-  const inAmt = modelInfo ? modelInfo.inPrice.split("/")[0].trim() : "—";
-  const outAmt = modelInfo?.outPrice ? modelInfo.outPrice.split("/")[0].trim() : null;
   const imgState = probePublishImage(dockerImage);
 
   const costCard: React.CSSProperties = {
@@ -2381,13 +2373,18 @@ function StepReview({
             <div style={{ ...bigNum, fontSize: 16, color: C.muted }}>~${dayRate.toFixed(2)}<span style={unit}>/day</span></div>
           </div>
           <div style={costCard}>
-            <div style={costLabel}>Models tokens</div>
-            {modelInfo ? (
+            <div style={costLabel}>Default model</div>
+            {modelInfo ? (modelInfo.lane === "standard" ? (
               <>
-                <div style={bigNum}>{inAmt}<span style={unit}>/ 1M</span><span style={io}>Input</span></div>
-                {outAmt && <div style={bigNum}>{outAmt}<span style={unit}>/ 1M</span><span style={io}>Output</span></div>}
+                <div style={{ ...bigNum, fontSize: 18, color: "#34d399" }}>Included</div>
+                <div style={{ fontSize: 12, color: C.muted, textAlign: "right" }}>{modelInfo.name} · Standard (FUP)</div>
               </>
             ) : (
+              <>
+                <div style={bigNum}>{modelInfo.burnBlended}<span style={unit}> cr / 1M</span></div>
+                <div style={{ fontSize: 12, color: C.muted, textAlign: "right" }}>{modelInfo.name} · Premium<span style={io}>{modelInfo.burnIn} in · {modelInfo.burnOut} out</span></div>
+              </>
+            )) : (
               <div style={{ ...bigNum, color: C.muted }}>—</div>
             )}
           </div>
@@ -2593,7 +2590,7 @@ export default function DeployWizard() {
   }, []);
 
   const tierInfo = useMemo(() => COMPUTE_TIERS.find((t) => t.id === computeTier) || null, [computeTier]);
-  const modelInfo = useMemo(() => MODELS.find((m) => m.id === selectedModel) || null, [selectedModel]);
+  const modelInfo = useMemo(() => getModel(selectedModel) ?? null, [selectedModel]);
   const regionInfo = useMemo(() => REGIONS.find((r) => r.id === region) || null, [region]);
 
   const computeRate = tierInfo?.pricePerHr ?? 0;
