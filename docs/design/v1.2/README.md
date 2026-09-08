@@ -82,7 +82,16 @@ Overview》（space IE, page 515375122）。两份是**互补**的：
 **设计稿内部不一致**（需定稿）：表头一版四列（Listing name / Template name / Review Status / Updated），一版三列（Publish name / Review Status / Updated）。本轮取**四列**版。
 **错字**：设计稿写的是 `Timplate name`，实现里写 `Template name`。
 
-## E · My Agents · Listing 按钮状态（新增）
+## E · My Agents · Listing 控件（新增）
+
+> **偏离设计稿**：设计稿把 listing 管理分在两处 —— agent 头部的 `Listing ▾` 下拉，
+> 和 Publish Status 弹窗的行菜单。实现里**全部收进 Publish Status 弹窗**：
+> 那里的行 `⋯` 是唯一入口，覆盖 draft / under review / denied / approved 四态的
+> 全部动作。头部控件保留（状态得挨着 Agent 显示），但点它是打开 Publish Status，
+> 不再挂第二份菜单。相应地，弹窗表格也收了 **Draft** 行 —— 设计稿只列已提交的，
+> 但既然是唯一入口，草稿也得能到达。
+
+
 
 图：`My Agent_First publication successful.`、`_Repost`、`_activation Repost`、`_Unpblish`、`_suc`、`_Lock`、`_Lock hover`、`_Under review`
 

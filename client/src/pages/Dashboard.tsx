@@ -15,7 +15,7 @@ import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
 import V2Badge from "@/components/V2Badge";
 import {
   PublishStatusEntry, PublishStatusModal, UnpublishDialog,
-  type PublishRow, type ReviewStatus,
+  type PublishRow, type ReviewStatus, type ListingActionHandlers,
 } from "@/components/PublishStatusV2";
 import { discountPriceString, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
 
@@ -137,7 +137,8 @@ const RELEASE_META: Record<Release, { label: string; title: string; color: strin
 // ─── Publish Status rows — v1.2 §D ─────────────────────────────────────────
 // Derived from the listing state machine rather than stored twice: a listing
 // only appears once it has been submitted, so "draft" is filtered out.
-const REVIEW_FOR_LISTING: Partial<Record<ListingState, ReviewStatus>> = {
+const REVIEW_FOR_LISTING: Record<ListingState, ReviewStatus> = {
+  draft:          "draft",
   live:           "approved",
   pending_review: "under_review",
   rejected:       "denied",
@@ -150,17 +151,17 @@ const DENY_REASONS = [
 ];
 
 function publishRowsFor(agents: MyAgent[]): PublishRow[] {
-  return agents.flatMap((a, i) => {
+  return agents.map((a, i) => {
     const status = REVIEW_FOR_LISTING[a.listingState ?? "draft"];
-    if (!status) return [];
-    return [{
+    return {
       id: a.id,
       listingName: a.name,
       templateName: agentVersionName(a.id, a.name),
       status,
       updated: a.registeredAt ? fmtDate(new Date(a.registeredAt)) : _seedDaysAgo(1 + (i % 5)),
       denyReason: status === "denied" ? DENY_REASONS[i % DENY_REASONS.length] : undefined,
-    }];
+      locked: !!a.privateImage,
+    };
   });
 }
 
@@ -1645,37 +1646,24 @@ function DetailRow({ label, value, accent }: { label: string; value: React.React
 // button — so the header stays tight even as state changes. State badge
 // inside the trigger (DRAFT / PENDING / LIVE / REJECTED) tells the user where
 // the listing is at a glance.
+// ─── Listing control in the agent header ───────────────────────────────────
+// Listing *management* now lives entirely in the Publish Status modal, so this
+// control no longer carries its own copy of the menu. It still shows the
+// listing's state — that belongs next to the Agent it describes — and clicking
+// it opens the one place the actions live.
 function ListingActions({
-  agentId, state, locked = false, onRepost,
+  state, locked = false, onOpenPublishStatus,
 }: {
-  agentId: string;
   state?: ListingState;
   /** v1.2 §E6 — image can't be listed publicly, so the control is inert. */
   locked?: boolean;
-  /** v1.2 §E2/E3 — omitted when the listing can't go back through review. */
-  onRepost?: (agentId: string) => void;
+  onOpenPublishStatus: () => void;
 }) {
-  const [, setLocation] = useLocation();
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
+  const isPending = state === "pending_review";
+  const isLive    = state === "live";
 
-  const goToListingForm = () => setLocation(`/list-claw?agentId=${encodeURIComponent(agentId)}`);
-
-  const isDraft    = !state || state === "draft";
-  const isPending  = state === "pending_review";
-  const isLive     = state === "live";
-  const isRejected = state === "rejected";
-
-  // v1.2 §E6 — locked: no menu at all, and the reason is on the control itself
-  // so nobody has to submit to find out.
+  // v1.2 §E6 — locked: inert, and the reason is on the control itself so
+  // nobody has to submit to find out.
   if (locked) {
     return (
       <div style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
@@ -1701,24 +1689,24 @@ function ListingActions({
   }
 
   return (
-    <div ref={ref} style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 7 }}>
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={onOpenPublishStatus}
+        title="Manage this listing in Publish Status"
         style={{
           display: "inline-flex", alignItems: "center", gap: 6,
           fontFamily: FONT, fontSize: 13, fontWeight: 500, lineHeight: "20px",
-          background: open ? "rgba(255,255,255,0.04)" : "transparent",
-          color: C.fg,
+          background: "transparent", color: C.fg,
           border: `1px solid ${C.border}`,
-          padding: "5px 10px 5px 14px", borderRadius: 8, cursor: "pointer",
+          padding: "5px 14px", borderRadius: 8, cursor: "pointer",
         }}
       >
         {isLive ? "Manage Listing" : "Publish Agent"}
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: C.muted, transition: "transform .15s", transform: open ? "rotate(180deg)" : "none" }}>
-          <path d="m6 9 6 6 6-6"/>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: C.muted }} aria-hidden="true">
+          <path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M21 14v7H3V3h7" />
         </svg>
       </button>
-      {/* v1.2 §E5 — review is in flight; says so without hiding the menu */}
+      {/* v1.2 §E5 — review is in flight; says so right next to the Agent */}
       {isPending && (
         <span
           title="Submitted — a reviewer is looking at this listing"
@@ -1736,79 +1724,6 @@ function ListingActions({
           Under review
           <V2Badge />
         </span>
-      )}
-      {open && (
-        <div
-          style={{
-            position: "absolute", top: "calc(100% + 4px)", right: 0,
-            background: C.cardSolid,
-            border: `1px solid ${C.border}`,
-            borderRadius: 8,
-            padding: 4,
-            minWidth: 180,
-            zIndex: 30,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
-            display: "flex", flexDirection: "column",
-          }}
-        >
-          {/* Order matches production: edit (most common) → view (read-only)
-              → spacer → destructive. All items render neutral; only the
-              destructive item is colored. */}
-          {isDraft && (
-            <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.fg)}>
-              Complete listing
-            </button>
-          )}
-          {isPending && (
-            <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.fg)}>
-              Edit pending listing
-            </button>
-          )}
-          {isLive && (
-            <>
-              {/* v1.2 §E1 — Repost pushes the current listing through review
-                  again. Only reachable while the listing is live; a locked
-                  agent never renders this menu at all (see `locked` above). */}
-              <button
-                onClick={() => { setOpen(false); onRepost?.(agentId); }}
-                disabled={!onRepost}
-                title={onRepost ? "Submit this listing for review again" : "Cannot be published — Listing to public requires a public image with no embedded secrets or credentials."}
-                style={{ ...menuItemStyle(onRepost ? C.fg : C.muted), cursor: onRepost ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
-              >
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  Repost
-                  {!onRepost && (
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
-                      <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
-                    </svg>
-                  )}
-                </span>
-                <V2Badge />
-              </button>
-              <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.fg)}>
-                Edit listing
-              </button>
-              <button onClick={() => setOpen(false)} style={menuItemStyle(C.fg)}>
-                View public listing
-              </button>
-            </>
-          )}
-          {isRejected && (
-            <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.fg)}>
-              Fix & resubmit
-            </button>
-          )}
-
-          {/* Destructive — small separator above, only on submitted states */}
-          {!isDraft && (
-            <>
-              <div style={{ height: 1, background: C.borderSoft, margin: "4px 6px" }} />
-              <button onClick={() => setOpen(false)} style={menuItemStyle(C.err)}>
-                {isLive ? "Unpublish" : "Withdraw"}
-              </button>
-            </>
-          )}
-        </div>
       )}
     </div>
   );
@@ -3704,7 +3619,7 @@ function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instan
 // ─── Right detail pane ────────────────────────────────────────────────────
 function AgentDetailPane({
   agent, instances, snapshots, image, savedConfig, onProvision, onAction, onOpenDetail, activeInstanceId,
-  onRepost,
+  onOpenPublishStatus,
   onSaveModel, onRevalidate, onRetryPrep, onReplaceImage, canConvert = false,
 }: {
   agent: MyAgent;
@@ -3712,7 +3627,7 @@ function AgentDetailPane({
   snapshots: Snapshot[];
   image?: RuntimeImage;
   savedConfig: SavedLaunchConfig;
-  onRepost: (agentId: string) => void;
+  onOpenPublishStatus: () => void;
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
   onOpenDetail: (id: string, tab?: DrawerTab) => void;
@@ -3756,10 +3671,9 @@ function AgentDetailPane({
         Instance
       </button>
       <ListingActions
-        agentId={agent.id}
         state={agent.listingState}
         locked={!!agent.privateImage}
-        onRepost={templateReady ? onRepost : undefined}
+        onOpenPublishStatus={onOpenPublishStatus}
       />
     </div>
   );
@@ -4646,6 +4560,28 @@ export default function Dashboard() {
     pushToast("success", "Resubmitted for review.");
   };
 
+  // Every listing action, in one bag, handed to the Publish Status row menu —
+  // that modal is the single place listings are managed.
+  const openListingForm = (agentId: string) => {
+    setPublishStatusOpen(false);
+    setLocation(`/list-claw?agentId=${encodeURIComponent(agentId)}`);
+  };
+  const listingHandlers: ListingActionHandlers = {
+    onComplete:  (row) => openListingForm(row.id),
+    onEdit:      (row) => openListingForm(row.id),
+    onFix:       (row) => openListingForm(row.id),
+    onView:      (row) => {
+      setPublishStatusOpen(false);
+      setLocation(`/marketplace?agent=${encodeURIComponent(row.id)}`);
+    },
+    onRepost:    (row) => handleRepost(row.id),
+    onWithdraw:  (row) => {
+      setListingState(row.id, "draft");
+      pushToast("success", `${row.listingName} withdrawn — back to Draft, nothing was published`);
+    },
+    onUnpublish: (row) => setUnpublishRow(row),
+  };
+
   const actuallyProvision = (agentId: string, config: InstanceConfig) => {
     const id = newInstanceId();
     // F-01 — the record is persisted in Pending and the ID returned immediately;
@@ -5096,7 +5032,7 @@ export default function Dashboard() {
               snapshots={snapshots}
               image={runtimeImages[selected.id]}
               savedConfig={savedConfigFor(selected.id)}
-              onRepost={handleRepost}
+              onOpenPublishStatus={() => setPublishStatusOpen(true)}
               onProvision={handleProvision}
               onAction={handleAction}
               onOpenDetail={openDetail}
@@ -5184,11 +5120,7 @@ export default function Dashboard() {
         <PublishStatusModal
           rows={publishRowsFor(allAgents)}
           onClose={() => setPublishStatusOpen(false)}
-          onUnpublish={(row) => setUnpublishRow(row)}
-          onList={(row) => {
-            setPublishStatusOpen(false);
-            setLocation(`/list-claw?agentId=${encodeURIComponent(row.id)}`);
-          }}
+          handlers={listingHandlers}
         />
       )}
       <UnpublishDialog

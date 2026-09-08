@@ -7,12 +7,16 @@
 //   live           → Approved
 //   pending_review → Under Review
 //   rejected       → Denied   (carries a reason, shown on the ⓘ)
-//   draft          → not listed here (never submitted)
+//   draft          → Draft    (registered, never submitted)
+//
+// Every listing action lives in the row menu here — this is the one place to
+// manage a listing, so a draft has to be reachable too. That is a deliberate
+// widening of the v1.2 design, which showed submitted listings only.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { C, FONT } from "@/lib/tokens";
 import V2Badge from "@/components/V2Badge";
 
-export type ReviewStatus = "approved" | "under_review" | "denied";
+export type ReviewStatus = "draft" | "approved" | "under_review" | "denied";
 
 export interface PublishRow {
   id: string;
@@ -22,9 +26,23 @@ export interface PublishRow {
   updated: string;
   /** Only set on `denied` — surfaced through the ⓘ next to the chip. */
   denyReason?: string;
+  /** Private image or embedded credentials: this listing can't go public. */
+  locked?: boolean;
+}
+
+/** Every action the row menu can offer, in the order it renders them. */
+export interface ListingActionHandlers {
+  onComplete:  (row: PublishRow) => void;  // draft → finish the listing form
+  onEdit:      (row: PublishRow) => void;  // edit a submitted or live listing
+  onFix:       (row: PublishRow) => void;  // denied → fix and resubmit
+  onView:      (row: PublishRow) => void;  // open the public listing
+  onRepost:    (row: PublishRow) => void;  // live → send back through review
+  onWithdraw:  (row: PublishRow) => void;  // pull a submission before review
+  onUnpublish: (row: PublishRow) => void;  // take a live listing down
 }
 
 const STATUS_META: Record<ReviewStatus, { label: string; color: string }> = {
+  draft:        { label: "Draft",        color: C.muted },
   approved:     { label: "Approved",     color: C.ok },
   under_review: { label: "Under Review", color: C.link },
   denied:       { label: "Denied",       color: "#f87171" },
@@ -37,7 +55,7 @@ export function PublishStatusEntry({ onOpen }: { onOpen: () => void }) {
   return (
     <button
       onClick={onOpen}
-      title="Every listing you've submitted and where it sits in review"
+      title="Manage every listing — draft, in review, live — in one place"
       style={{
         display: "inline-flex", alignItems: "center", gap: 6,
         fontFamily: FONT, fontSize: 12.5, fontWeight: 500,
@@ -102,34 +120,109 @@ function StatusChip({ row }: { row: PublishRow }) {
   );
 }
 
-// ─── Per-row ⋯ menu ─────────────────────────────────────────────────────────
-function RowMenu({
-  row, onUnpublish, onList,
-}: {
-  row: PublishRow;
-  onUnpublish: (row: PublishRow) => void;
-  onList: (row: PublishRow) => void;
-}) {
+// ─── Per-row ⋯ menu — the single home for listing management ───────────────
+// Every action a listing can take lives here, gated by its state. Nothing is
+// reachable only from somewhere else, which is the point of collapsing listing
+// management into this one surface.
+type MenuItem = {
+  key: string;
+  label: string;
+  run: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+  title?: string;
+  icon: React.ReactNode;
+};
+
+const Ico = {
+  edit:      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>,
+  send:      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>,
+  view:      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M21 14v7H3V3h7" /></svg>,
+  repost:    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2v6h-6" /><path d="M3 12a9 9 0 0 1 15-6.7L21 8" /><path d="M3 22v-6h6" /><path d="M21 12a9 9 0 0 1-15 6.7L3 16" /></svg>,
+  withdraw:  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14 4 9l5-5" /><path d="M4 9h10a6 6 0 0 1 0 12h-3" /></svg>,
+  unpublish: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>,
+  info:      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>,
+};
+
+const LOCK_REASON =
+  "Cannot be published — listing to public requires a public image with no embedded secrets or credentials.";
+
+function itemsFor(row: PublishRow, h: ListingActionHandlers): MenuItem[] {
+  switch (row.status) {
+    case "draft":
+      return [
+        { key: "complete", label: "Complete listing", run: () => h.onComplete(row), icon: Ico.send,
+          disabled: row.locked, title: row.locked ? LOCK_REASON : undefined },
+      ];
+    case "under_review":
+      return [
+        { key: "edit",     label: "Edit pending listing", run: () => h.onEdit(row),     icon: Ico.edit },
+        { key: "withdraw", label: "Withdraw",             run: () => h.onWithdraw(row), icon: Ico.withdraw, danger: true },
+      ];
+    case "denied":
+      return [
+        { key: "fix",      label: "Fix & resubmit", run: () => h.onFix(row),      icon: Ico.edit,
+          disabled: row.locked, title: row.locked ? LOCK_REASON : undefined },
+        { key: "withdraw", label: "Withdraw",       run: () => h.onWithdraw(row), icon: Ico.withdraw, danger: true },
+      ];
+    case "approved":
+      return [
+        { key: "repost",    label: "Repost",              run: () => h.onRepost(row),    icon: Ico.repost,
+          disabled: row.locked, title: row.locked ? LOCK_REASON : "Submit this listing for review again" },
+        { key: "edit",      label: "Edit listing",        run: () => h.onEdit(row),      icon: Ico.edit },
+        { key: "view",      label: "View public listing", run: () => h.onView(row),      icon: Ico.view },
+        { key: "unpublish", label: "Unpublish",           run: () => h.onUnpublish(row), icon: Ico.unpublish, danger: true },
+      ];
+  }
+}
+
+function RowMenu({ row, handlers }: { row: PublishRow; handlers: ListingActionHandlers }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  // The row list scrolls, so an absolutely-positioned menu gets clipped by it.
+  // Anchor the menu to the viewport off the trigger's rect instead, and flip it
+  // upward when there isn't room below.
+  const [pos, setPos] = useState<{ top: number; right: number; up: boolean } | null>(null);
+
+  const place = () => {
+    const r = btnRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const estHeight = 44 + itemsFor(row, handlers).length * 34;
+    const up = r.bottom + estHeight > window.innerHeight - 12;
+    setPos({
+      top: up ? r.top - 4 : r.bottom + 4,
+      right: Math.max(8, window.innerWidth - r.right),
+      up,
+    });
+  };
+
   useEffect(() => {
     if (!open) return;
     const away = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
+    const reflow = () => setOpen(false);
     document.addEventListener("mousedown", away);
-    return () => document.removeEventListener("mousedown", away);
+    window.addEventListener("resize", reflow);
+    window.addEventListener("scroll", reflow, true);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      window.removeEventListener("resize", reflow);
+      window.removeEventListener("scroll", reflow, true);
+    };
   }, [open]);
 
-  // Approved is the only state with a live listing to pull down; everything
-  // else routes back into the listing form.
-  const isApproved = row.status === "approved";
+  const items = itemsFor(row, handlers);
+  // Destructive items sit below a rule, matching the agent-header menu.
+  const firstDanger = items.findIndex((i) => i.danger);
 
   return (
     <div ref={ref} style={{ position: "relative", display: "flex", justifyContent: "flex-end" }}>
       <button
-        onClick={() => setOpen((o) => !o)}
-        aria-label="Listing actions"
+        ref={btnRef}
+        onClick={() => { if (!open) place(); setOpen((o) => !o); }}
+        aria-label={`Listing actions for ${row.listingName}`}
         style={{
           width: 26, height: 24, display: "inline-flex", alignItems: "center", justifyContent: "center",
           background: open ? "rgba(255,255,255,0.06)" : "transparent",
@@ -140,47 +233,44 @@ function RowMenu({
           <circle cx="5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="19" cy="12" r="1.7" />
         </svg>
       </button>
-      {open && (
+      {open && pos && (
         <div
           style={{
-            position: "absolute", top: "calc(100% + 4px)", right: 0,
-            minWidth: 156, zIndex: 45,
+            position: "fixed",
+            top: pos.up ? undefined : pos.top,
+            bottom: pos.up ? window.innerHeight - pos.top : undefined,
+            right: pos.right,
+            minWidth: 186, zIndex: 1150,
             background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 8,
             padding: 4, boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
             display: "flex", flexDirection: "column",
           }}
         >
-          {isApproved ? (
-            <button
-              onClick={() => { setOpen(false); onUnpublish(row); }}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: 7,
-                fontFamily: FONT, fontSize: 12.5, fontWeight: 500,
-                color: "#f87171", background: "transparent", border: "none",
-                padding: "7px 9px", borderRadius: 6, cursor: "pointer", textAlign: "left",
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
-              </svg>
-              Unpublish
-            </button>
-          ) : (
-            <button
-              onClick={() => { setOpen(false); onList(row); }}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: 7,
-                fontFamily: FONT, fontSize: 12.5, fontWeight: 500,
-                color: C.fg, background: "transparent", border: "none",
-                padding: "7px 9px", borderRadius: 6, cursor: "pointer", textAlign: "left",
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" />
-              </svg>
-              List an agent
-            </button>
-          )}
+          {items.map((it, i) => (
+            <div key={it.key} style={{ display: "contents" }}>
+              {i === firstDanger && firstDanger > 0 && (
+                <div style={{ height: 1, background: C.borderSoft, margin: "4px 6px" }} />
+              )}
+              <button
+                onClick={() => { if (it.disabled) return; setOpen(false); it.run(); }}
+                disabled={it.disabled}
+                title={it.title}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 7,
+                  fontFamily: FONT, fontSize: 12.5, fontWeight: 500,
+                  color: it.disabled ? C.muted : it.danger ? "#f87171" : C.fg,
+                  opacity: it.disabled ? 0.55 : 1,
+                  background: "transparent", border: "none",
+                  padding: "7px 9px", borderRadius: 6,
+                  cursor: it.disabled ? "not-allowed" : "pointer", textAlign: "left",
+                }}
+              >
+                {it.icon}
+                {it.label}
+                {it.disabled && <span style={{ marginLeft: "auto", display: "inline-flex" }}>{Ico.info}</span>}
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -301,12 +391,11 @@ function Th({
 const GRID = "minmax(0,1.15fr) minmax(0,1fr) 128px 168px 34px";
 
 export function PublishStatusModal({
-  rows, onClose, onUnpublish, onList,
+  rows, onClose, handlers,
 }: {
   rows: PublishRow[];
   onClose: () => void;
-  onUnpublish: (row: PublishRow) => void;
-  onList: (row: PublishRow) => void;
+  handlers: ListingActionHandlers;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("updated");
   const [dir, setDir] = useState<"asc" | "desc">("desc");
@@ -318,7 +407,7 @@ export function PublishStatusModal({
 
   // Denied first, then Under Review, then Approved — the order in which a
   // publisher has to act on them.
-  const statusRank: Record<ReviewStatus, number> = { denied: 0, under_review: 1, approved: 2 };
+  const statusRank: Record<ReviewStatus, number> = { denied: 0, under_review: 1, draft: 2, approved: 3 };
 
   const sorted = useMemo(() => {
     const mul = dir === "desc" ? -1 : 1;
@@ -415,12 +504,12 @@ export function PublishStatusModal({
               <span style={{ ...cellText, color: C.muted }} title={r.templateName}>{r.templateName}</span>
               <StatusChip row={r} />
               <span style={{ ...cellText, color: C.muted }}>{r.updated}</span>
-              <RowMenu row={r} onUnpublish={onUnpublish} onList={onList} />
+              <RowMenu row={r} handlers={handlers} />
             </div>
           ))}
           {sorted.length === 0 && (
             <div style={{ fontFamily: FONT, fontSize: 13, color: C.muted, padding: "28px 0", textAlign: "center" }}>
-              No listings submitted yet. Publish an Agent and it shows up here with its review state.
+              No listings yet. Register an Agent and it shows up here as a Draft.
             </div>
           )}
         </div>
