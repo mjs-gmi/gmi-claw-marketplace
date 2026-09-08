@@ -12,6 +12,11 @@ import CopyButton from "@/components/CopyButton";
 import { C as baseC, FONT, MONO } from "@/lib/tokens";
 import { SEED_AGENTS } from "@/lib/seedAgents";
 import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
+import V2Badge from "@/components/V2Badge";
+import {
+  PublishStatusEntry, PublishStatusModal, UnpublishDialog,
+  type PublishRow, type ReviewStatus,
+} from "@/components/PublishStatusV2";
 import { discountPriceString, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
 
 // ─── Tokens — shared base from @/lib/tokens, plus a few page-local keys.
@@ -77,6 +82,11 @@ interface MyAgent {
   endpoints?: AgentEndpoint[];  // Register → Networking endpoint definitions
   region?: string;              // Register → region id (read-only in runtime)
   tier?: string;                // Register → compute tier id (read-only in runtime)
+  // v1.2 §E6 — a listing needs a public image with no embedded secrets or
+  // credentials. Set when Register enabled registry credentials, or when the
+  // image is private; it locks the Listing control rather than failing at
+  // review time.
+  privateImage?: boolean;
 }
 
 // Mirrors the localStorage key written by DeployWizard's Connect-flow Submit
@@ -123,6 +133,36 @@ const RELEASE_META: Record<Release, { label: string; title: string; color: strin
   "R1?": { label: "R1?", title: "Conditional in R1 — pending an open question or commercial review", color: "#fbbf24" },
   IND:   { label: "IND", title: "Independent track — never blocks the R1 release", color: "#c7a7ff" },
 };
+
+// ─── Publish Status rows — v1.2 §D ─────────────────────────────────────────
+// Derived from the listing state machine rather than stored twice: a listing
+// only appears once it has been submitted, so "draft" is filtered out.
+const REVIEW_FOR_LISTING: Partial<Record<ListingState, ReviewStatus>> = {
+  live:           "approved",
+  pending_review: "under_review",
+  rejected:       "denied",
+};
+
+// Stand-in review notes until the review service returns a real reason.
+const DENY_REASONS = [
+  "Listing to public requires a public image with no embedded secrets or credentials.",
+  "Short description duplicates another live listing on the Marketplace.",
+];
+
+function publishRowsFor(agents: MyAgent[]): PublishRow[] {
+  return agents.flatMap((a, i) => {
+    const status = REVIEW_FOR_LISTING[a.listingState ?? "draft"];
+    if (!status) return [];
+    return [{
+      id: a.id,
+      listingName: a.name,
+      templateName: agentVersionName(a.id, a.name),
+      status,
+      updated: a.registeredAt ? fmtDate(new Date(a.registeredAt)) : _seedDaysAgo(1 + (i % 5)),
+      denyReason: status === "denied" ? DENY_REASONS[i % DENY_REASONS.length] : undefined,
+    }];
+  });
+}
 
 // ─── Endpoints & Access (Networking spec — R1 minimal) ─────────────────────
 // Register declares the HTTP services an Agent exposes (Name / Internal port /
@@ -1605,7 +1645,16 @@ function DetailRow({ label, value, accent }: { label: string; value: React.React
 // button — so the header stays tight even as state changes. State badge
 // inside the trigger (DRAFT / PENDING / LIVE / REJECTED) tells the user where
 // the listing is at a glance.
-function ListingActions({ agentId, state }: { agentId: string; state?: ListingState }) {
+function ListingActions({
+  agentId, state, locked = false, onRepost,
+}: {
+  agentId: string;
+  state?: ListingState;
+  /** v1.2 §E6 — image can't be listed publicly, so the control is inert. */
+  locked?: boolean;
+  /** v1.2 §E2/E3 — omitted when the listing can't go back through review. */
+  onRepost?: (agentId: string) => void;
+}) {
   const [, setLocation] = useLocation();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -1625,8 +1674,34 @@ function ListingActions({ agentId, state }: { agentId: string; state?: ListingSt
   const isLive     = state === "live";
   const isRejected = state === "rejected";
 
+  // v1.2 §E6 — locked: no menu at all, and the reason is on the control itself
+  // so nobody has to submit to find out.
+  if (locked) {
+    return (
+      <div style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+        <button
+          disabled
+          title="Unable to Publish — Listing to public requires a public image with no embedded secrets or credentials."
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            fontFamily: FONT, fontSize: 13, fontWeight: 500, lineHeight: "20px",
+            background: "transparent", color: C.muted,
+            border: `1px solid ${C.border}`,
+            padding: "5px 14px", borderRadius: 8, cursor: "not-allowed",
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
+          </svg>
+          Listing
+        </button>
+        <V2Badge />
+      </div>
+    );
+  }
+
   return (
-    <div ref={ref} style={{ position: "relative" }}>
+    <div ref={ref} style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 7 }}>
       <button
         onClick={() => setOpen((o) => !o)}
         style={{
@@ -1643,6 +1718,25 @@ function ListingActions({ agentId, state }: { agentId: string; state?: ListingSt
           <path d="m6 9 6 6 6-6"/>
         </svg>
       </button>
+      {/* v1.2 §E5 — review is in flight; says so without hiding the menu */}
+      {isPending && (
+        <span
+          title="Submitted — a reviewer is looking at this listing"
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            fontFamily: FONT, fontSize: 11.5, fontWeight: 500,
+            color: C.muted, background: "rgba(255,255,255,0.04)",
+            border: `1px solid ${C.border}`,
+            padding: "3px 9px", borderRadius: 7, whiteSpace: "nowrap",
+          }}
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" />
+          </svg>
+          Under review
+          <V2Badge />
+        </span>
+      )}
       {open && (
         <div
           style={{
@@ -1672,6 +1766,25 @@ function ListingActions({ agentId, state }: { agentId: string; state?: ListingSt
           )}
           {isLive && (
             <>
+              {/* v1.2 §E1 — Repost pushes the current listing through review
+                  again. Only reachable while the listing is live; a locked
+                  agent never renders this menu at all (see `locked` above). */}
+              <button
+                onClick={() => { setOpen(false); onRepost?.(agentId); }}
+                disabled={!onRepost}
+                title={onRepost ? "Submit this listing for review again" : "Cannot be published — Listing to public requires a public image with no embedded secrets or credentials."}
+                style={{ ...menuItemStyle(onRepost ? C.fg : C.muted), cursor: onRepost ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
+              >
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  Repost
+                  {!onRepost && (
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                      <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
+                    </svg>
+                  )}
+                </span>
+                <V2Badge />
+              </button>
               <button onClick={() => { setOpen(false); goToListingForm(); }} style={menuItemStyle(C.fg)}>
                 Edit listing
               </button>
@@ -2205,6 +2318,7 @@ function ProvisionModal({
             <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
               <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Lifecycle</label>
               <NewBadge />
+              <V2Badge />
             </div>
 
             {/* Stage timeline — always visible; updates live with the selected settings */}
@@ -2815,11 +2929,12 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
 // Everything that used to be stacked in one scrolling popup is grouped into
 // tabs, and the endpoint confirmations are inline instead of a second modal.
 type DrawerTab = "overview" | "access" | "files" | "run" | "logs" | "config";
-const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean }[] = [
+const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean }[] = [
   { key: "overview", label: "Overview" },
-  { key: "access",   label: "Access" },
-  { key: "files",    label: "Files" },
-  { key: "run",      label: "Run",  runningOnly: true },
+  // Access / Files / Run are the V2.0 change set (sections D, G, B).
+  { key: "access",   label: "Access", v2: true },
+  { key: "files",    label: "Files",  v2: true },
+  { key: "run",      label: "Run",  runningOnly: true, v2: true },
   { key: "logs",     label: "Logs" },
   { key: "config",   label: "Config" },
 ];
@@ -2959,9 +3074,11 @@ function InstanceDrawer({
                 background: "transparent", border: "none",
                 borderBottom: `2px solid ${on ? C.lime : "transparent"}`,
                 padding: "10px 10px", cursor: "pointer", marginBottom: -1, whiteSpace: "nowrap",
+                display: "inline-flex", alignItems: "center", gap: 5,
               }}
             >
               {t.label}
+              {t.v2 && <V2Badge />}
             </button>
           );
         })}
@@ -3219,7 +3336,7 @@ function MonitorPane({
             <div>Instance</div>
             <div>Access URL</div>
             <div>Status</div>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Lifecycle <NewBadge /></div>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Lifecycle <NewBadge /> <V2Badge /></div>
             <button
               onClick={() => setSortDir((d) => (d === "desc" ? "asc" : "desc"))}
               title={`Sort by created — ${sortDir === "desc" ? "newest first" : "oldest first"}`}
@@ -3587,6 +3704,7 @@ function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instan
 // ─── Right detail pane ────────────────────────────────────────────────────
 function AgentDetailPane({
   agent, instances, snapshots, image, savedConfig, onProvision, onAction, onOpenDetail, activeInstanceId,
+  onRepost,
   onSaveModel, onRevalidate, onRetryPrep, onReplaceImage, canConvert = false,
 }: {
   agent: MyAgent;
@@ -3594,6 +3712,7 @@ function AgentDetailPane({
   snapshots: Snapshot[];
   image?: RuntimeImage;
   savedConfig: SavedLaunchConfig;
+  onRepost: (agentId: string) => void;
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
   onOpenDetail: (id: string, tab?: DrawerTab) => void;
@@ -3636,7 +3755,12 @@ function AgentDetailPane({
         </svg>
         Instance
       </button>
-      <ListingActions agentId={agent.id} state={agent.listingState} />
+      <ListingActions
+        agentId={agent.id}
+        state={agent.listingState}
+        locked={!!agent.privateImage}
+        onRepost={templateReady ? onRepost : undefined}
+      />
     </div>
   );
 
@@ -4448,9 +4572,25 @@ export default function Dashboard() {
   };
   // Newly-registered agents from Connect flow appear at the top, then the seed list
   // (seed entries the user has deleted at runtime are hidden via hiddenSeedIds).
+  // v1.2 §D — runtime listing-state overrides. Seed agents are static module
+  // data, so Unpublish / Repost record the new state here and it is layered on
+  // top when the list is built. Registered agents keep their own copy too, so
+  // the override is the single read path either way.
+  const [listingOverrides, setListingOverrides] = useState<Record<string, ListingState>>({});
+  const setListingState = (agentId: string, state: ListingState) => {
+    setListingOverrides((m) => ({ ...m, [agentId]: state }));
+    setRegistered((prev) => {
+      if (!prev.some((a) => a.id === agentId)) return prev;
+      const next = prev.map((a) => (a.id === agentId ? { ...a, listingState: state } : a));
+      try { localStorage.setItem(REGISTERED_AGENTS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
   const allAgents = useMemo(
-    () => [...registered, ...MY_DEPLOYMENTS.filter((a) => !hiddenSeedIds.has(a.id))],
-    [registered, hiddenSeedIds],
+    () => [...registered, ...MY_DEPLOYMENTS.filter((a) => !hiddenSeedIds.has(a.id))]
+      .map((a) => (listingOverrides[a.id] ? { ...a, listingState: listingOverrides[a.id] } : a)),
+    [registered, hiddenSeedIds, listingOverrides],
   );
   // allAgents may be empty for a brand-new user — no fallback to MY_DEPLOYMENTS now that it's empty.
   const [selectedId, setSelectedId] = useState<string>(allAgents[0]?.id ?? "");
@@ -4493,9 +4633,18 @@ export default function Dashboard() {
 
   // Provision modal — open per-task override modal first, then provision on submit
   const [provisionForAgentId, setProvisionForAgentId] = useState<string | null>(null);
+  // v1.2 §D — Publish Status modal + its unpublish confirmation
+  const [publishStatusOpen, setPublishStatusOpen] = useState(false);
+  const [unpublishRow, setUnpublishRow] = useState<PublishRow | null>(null);
 
   // Both panels slide in from the right, so only one can be open at a time.
   const handleProvision = (agentId: string) => { setDrawer(null); setProvisionForAgentId(agentId); };
+  // v1.2 §E1 — Repost sends a live listing back through review. The public
+  // listing stays up until the new review lands, so only the state moves.
+  const handleRepost = (agentId: string) => {
+    setListingState(agentId, "pending_review");
+    pushToast("success", "Resubmitted for review.");
+  };
 
   const actuallyProvision = (agentId: string, config: InstanceConfig) => {
     const id = newInstanceId();
@@ -4874,9 +5023,13 @@ export default function Dashboard() {
         >
           {/* Left pane */}
           <aside style={{ display: drawerInst ? "none" : "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
-            <h1 style={{ fontFamily: FONT, fontSize: 24, fontWeight: 700, lineHeight: "30px", color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>
-              My Agents
-            </h1>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+              <h1 style={{ fontFamily: FONT, fontSize: 24, fontWeight: 700, lineHeight: "30px", color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>
+                My Agents
+              </h1>
+              {/* v1.2 §D1 */}
+              <PublishStatusEntry onOpen={() => setPublishStatusOpen(true)} />
+            </div>
 
             <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
               <span style={{ position: "absolute", left: 10, color: C.muted, display: "flex" }}>
@@ -4943,6 +5096,7 @@ export default function Dashboard() {
               snapshots={snapshots}
               image={runtimeImages[selected.id]}
               savedConfig={savedConfigFor(selected.id)}
+              onRepost={handleRepost}
               onProvision={handleProvision}
               onAction={handleAction}
               onOpenDetail={openDetail}
@@ -5024,6 +5178,29 @@ export default function Dashboard() {
       />
 
       <ConfirmDialog pending={confirm} onClose={() => setConfirm(null)} />
+
+      {/* v1.2 §D — Publish Status */}
+      {publishStatusOpen && (
+        <PublishStatusModal
+          rows={publishRowsFor(allAgents)}
+          onClose={() => setPublishStatusOpen(false)}
+          onUnpublish={(row) => setUnpublishRow(row)}
+          onList={(row) => {
+            setPublishStatusOpen(false);
+            setLocation(`/list-claw?agentId=${encodeURIComponent(row.id)}`);
+          }}
+        />
+      )}
+      <UnpublishDialog
+        row={unpublishRow}
+        onCancel={() => setUnpublishRow(null)}
+        onConfirm={(row) => {
+          setUnpublishRow(null);
+          setListingState(row.id, "draft");
+          pushToast("success", `${row.listingName} unpublished — removed from the Marketplace`);
+        }}
+      />
+
       <Toaster toasts={toasts} />
     </div>
   );

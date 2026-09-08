@@ -8,6 +8,7 @@ import { FONT, MONO, C, TYPE_COLOR } from "@/lib/tokens";
 import { SEED_AGENTS } from "@/lib/seedAgents";
 import { PlanBadge } from "@/components/PlanUI";
 import { isPlanEligibleAgent, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
+import V2Badge from "@/components/V2Badge";
 
 // ─── Storage keys (shared with DeployWizard / Dashboard) ────────────────────
 const REGISTERED_AGENTS_KEY = "gmi:registered-agents";
@@ -33,6 +34,9 @@ interface RegisteredAgent {
   category: string;
   registeredAt: string;
   listingState?: ListingState;
+  // v1.2 §C3/§E6 — private image or embedded registry credentials: can't back
+  // a public listing.
+  privateImage?: boolean;
   // optional extras from DeployWizard
   dockerImage?: string;
   region?: string;
@@ -48,6 +52,10 @@ interface ListingDraft {
   logoDataUrl: string;
   fullDesc: string;
   sampleOutputDataUrl: string;
+  // v1.2 §C8 — Sample Output is a 0–5 gallery. `sampleOutputDataUrl` above is
+  // the pre-v1.2 single-image field and stays so drafts already in
+  // localStorage keep their image; it is read as the first gallery entry.
+  sampleOutputs?: string[];
   // publicUrl: where marketplace browsers go to USE the agent (landing page,
   // hosted demo, docs). Required for "connect" mode (no cloneable image, so
   // this is the only way for users to access it). Optional for "gmi" mode
@@ -59,6 +67,7 @@ interface ListingDraft {
 }
 
 const SHORT_DESC_MAX = 120;
+const FULL_DESC_MAX  = 300;   // v1.2 §C7 — counter shown under the field
 const TAG_MAX        = 5;
 
 // ─── localStorage helpers ───────────────────────────────────────────────────
@@ -146,6 +155,9 @@ const Icon = {
 // ─── Page ───────────────────────────────────────────────────────────────────
 export default function ListClaw() {
   const [, setLocation] = useLocation();
+  // v1.2 §C11 / §B6
+  const [reviewSubmitted, setReviewSubmitted] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
 
   // Latest registered agent — pulled from localStorage on mount.
   const [agent] = useState<RegisteredAgent | null>(loadAgent);
@@ -215,6 +227,30 @@ export default function ListClaw() {
   // — we show no field at all.
   const showPublicUrl = agent?.hostMode === "connect";
 
+  // v1.2 §C3 — templates carrying a private image or embedded credentials
+  // can't back a public listing, so they're shown but not selectable.
+  const lockedTemplateIds = useMemo(
+    () => new Set(allAgents.filter((a) => a.privateImage).map((a) => a.id)),
+    [allAgents],
+  );
+
+  // v1.2 §B6 — anything typed beyond the prefilled name/publisher counts as
+  // work worth warning about before the back link discards it.
+  const isDirty =
+    draft.shortDesc.trim() !== "" ||
+    draft.fullDesc.trim() !== "" ||
+    draft.tags.length > 0 ||
+    draft.logoDataUrl !== "" ||
+    draft.demoVideoUrl.trim() !== "" ||
+    draft.docsUrl.trim() !== "" ||
+    draft.publicUrl.trim() !== "";
+
+  // v1.2 §C8 — gallery list, back-filled from the pre-v1.2 single-image field.
+  const sampleOutputs = useMemo(() => {
+    if (draft.sampleOutputs) return draft.sampleOutputs;
+    return draft.sampleOutputDataUrl ? [draft.sampleOutputDataUrl] : [];
+  }, [draft.sampleOutputs, draft.sampleOutputDataUrl]);
+
   // Validation — minimum bar to submit for review.
   const errors = useMemo(() => {
     const e: Record<string, string> = {};
@@ -240,7 +276,8 @@ export default function ListClaw() {
     const finalDraft = { ...draft, updatedAt: new Date(2025, 0, 1).toISOString() };
     saveListing(finalDraft);
     flipAgentListingState(agent.id, "pending_review");
-    setLocation("/dashboard?listed=1");
+    // v1.2 §C11 — say what happens next before leaving the page.
+    setReviewSubmitted(true);
   };
 
   return (
@@ -253,7 +290,11 @@ export default function ListClaw() {
         {/* ── Header ───────────────────────────────────────────────────── */}
         <header style={{ padding: "24px 24px 20px" }}>
           <button
-            onClick={() => setLocation("/dashboard")}
+            onClick={() => {
+              // v1.2 §B6 — only ask when there is something to lose.
+              if (isDirty) setConfirmLeave(true);
+              else setLocation("/dashboard");
+            }}
             style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "transparent", border: "none", color: C.muted, cursor: "pointer", fontFamily: FONT, fontSize: 12, padding: 0, marginBottom: 12 }}
           >
             <Icon.back /> My Agents
@@ -276,6 +317,8 @@ export default function ListClaw() {
                     options={allAgents.map((a) => a.id)}
                     renderOption={(id) => { const a = allAgents.find((x) => x.id === id); return a ? a.name : id; }}
                     placeholder="Select a template"
+                    lockedOptions={lockedTemplateIds}
+                    lockedNote="Private content found"
                   />
                 </Field>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 12, color: C.muted }}>
@@ -354,11 +397,27 @@ export default function ListClaw() {
               </SectionCard>
 
               <SectionCard title="Description & Media">
-                <Field label="Full Description (Markdown)" required hint="Markdown supported. Use ## What it does and ## How it works.">
+                <Field
+                  label="Full Description (Markdown)"
+                  required
+                  hint={`${draft.fullDesc.length} / ${FULL_DESC_MAX} characters`}
+                  hintAlign="right"
+                >
                   <TextArea value={draft.fullDesc} onChange={(v) => update("fullDesc", v)} placeholder={"## What it does\nContract Review Agent ingests PDF or DOCX contracts and produces a clause-by-clause risk report.\n\n## How it works\nCombines deterministic clause extraction with semantic risk classification."} rows={6} monospace />
                 </Field>
-                <Field label="Sample Output (optional)" hint="Up to 5 images, PNG or JPG.">
-                  <SampleUploader value={draft.sampleOutputDataUrl} onChange={(v) => update("sampleOutputDataUrl", v)} />
+                <Field
+                  label={`Sample Output (${sampleOutputs.length}/${SAMPLE_MAX})`}
+                  hint="PNG or JPG."
+                >
+                  <SampleGallery
+                    values={sampleOutputs}
+                    onChange={(next) => {
+                      update("sampleOutputs", next);
+                      // Keep the legacy single field in step so an older
+                      // reader of the draft still finds the first image.
+                      update("sampleOutputDataUrl", next[0] ?? "");
+                    }}
+                  />
                 </Field>
                 <Row>
                   <Field label="Demo Video URL">
@@ -393,6 +452,23 @@ export default function ListClaw() {
 
         <Footer />
       </div>
+
+      {/* v1.2 §C11 */}
+      {reviewSubmitted && (
+        <ReviewSubmittedModal
+          onMyAgent={() => setLocation("/dashboard?listed=1")}
+          onBrowse={() => setLocation("/marketplace")}
+          onClose={() => setReviewSubmitted(false)}
+        />
+      )}
+
+      {/* v1.2 §B6 */}
+      {confirmLeave && (
+        <LeaveListingDialog
+          onLeave={() => { setConfirmLeave(false); setLocation("/dashboard"); }}
+          onContinue={() => setConfirmLeave(false)}
+        />
+      )}
     </div>
   );
 }
@@ -418,6 +494,61 @@ function SectionCard({ title, subtitle, required, children }: { title: string; s
 
 // Sample Output uploader — a wide dashed drop target that reads one image to a
 // data URL (prototype stand-in for real upload).
+// ─── Sample Output gallery — v1.2 §C8 ──────────────────────────────────────
+// Up to SAMPLE_MAX tiles, each removable. The Upload tile disappears once the
+// cap is reached rather than sitting there rejecting clicks.
+const SAMPLE_MAX = 5;
+
+function SampleGallery({ values, onChange }: { values: string[]; onChange: (v: string[]) => void }) {
+  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result || "");
+      if (url) onChange([...values, url].slice(0, SAMPLE_MAX));
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
+  const tile: React.CSSProperties = {
+    position: "relative", width: 116, height: 116, flexShrink: 0,
+    borderRadius: 8, overflow: "hidden", background: C.bg,
+    border: `1px solid ${C.border}`,
+  };
+
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+      {values.map((v, i) => (
+        <div key={i} style={tile}>
+          <img src={v} alt={`sample output ${i + 1}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <button
+            onClick={() => onChange(values.filter((_, j) => j !== i))}
+            aria-label={`Remove sample output ${i + 1}`}
+            style={{
+              position: "absolute", top: 5, right: 5,
+              width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center",
+              background: "rgba(0,0,0,0.66)", color: "#fafafa",
+              border: "1px solid rgba(255,255,255,0.28)", borderRadius: 999, cursor: "pointer", padding: 0,
+            }}
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+          </button>
+        </div>
+      ))}
+      {values.length < SAMPLE_MAX && (
+        <label style={{ ...tile, borderStyle: "dashed", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 5, cursor: "pointer" }}>
+          <input type="file" accept="image/png,image/jpeg" onChange={onFile} style={{ display: "none" }} />
+          <span style={{ color: C.muted, display: "inline-flex" }}><Icon.upload /></span>
+          <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Upload</span>
+          <span style={{ fontFamily: FONT, fontSize: 10, color: C.muted, opacity: 0.75 }}>(Square≤256px)</span>
+        </label>
+      )}
+    </div>
+  );
+}
+
 function SampleUploader({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -437,6 +568,147 @@ function SampleUploader({ value, onChange }: { value: string; onChange: (v: stri
         </span>
       )}
     </label>
+  );
+}
+
+// ─── Review-submitted modal — v1.2 §C11 ────────────────────────────────────
+// Submitting no longer navigates straight out; it says what happens next and
+// offers the two places a publisher actually wants to land.
+function ReviewSubmittedModal({
+  onMyAgent, onBrowse, onClose,
+}: {
+  onMyAgent: () => void;
+  onBrowse: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 1200,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Your Agent Is Being Reviewed"
+        style={{
+          width: 628, maxWidth: "100%",
+          background: "#111111", border: `1px solid ${C.border}`, borderRadius: 10,
+          padding: "20px 22px 18px",
+          boxShadow: "0 20px 48px rgba(0,0,0,0.6)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 9 }}>
+            <span style={{ color: "#34d399", display: "inline-flex" }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" />
+                <path d="m8.5 12.4 2.3 2.3 4.7-4.7" stroke="#111111" strokeWidth="2.1" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+            <h3 style={{ fontFamily: FONT, fontSize: 17, fontWeight: 600, color: C.fg, margin: 0 }}>
+              Your Agent Is Being Reviewed
+            </h3>
+            <V2Badge />
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            style={{ background: "transparent", border: "none", color: C.muted, cursor: "pointer", display: "flex", padding: 0 }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+          </button>
+        </div>
+        <p style={{ fontFamily: FONT, fontSize: 13, lineHeight: "20px", color: C.muted, margin: "10px 0 0" }}>
+          We've received your listing. Our team will review it before it becomes available to the
+          public. It will appear on the Agent Marketplace once approved.
+        </p>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 9, marginTop: 20 }}>
+          <button
+            onClick={onMyAgent}
+            style={{
+              fontFamily: FONT, fontSize: 13, fontWeight: 500,
+              background: "transparent", color: C.fg,
+              border: `1px solid ${C.border}`, padding: "8px 16px", borderRadius: 7, cursor: "pointer",
+            }}
+          >
+            Return to My Agent
+          </button>
+          <button
+            onClick={onBrowse}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 7,
+              fontFamily: FONT, fontSize: 13, fontWeight: 600,
+              background: C.lime, color: C.limeText,
+              border: "none", padding: "8px 16px", borderRadius: 7, cursor: "pointer",
+            }}
+          >
+            To Browse Agents
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Leave-the-form confirmation — v1.2 §B6 ────────────────────────────────
+// Guards the back link once anything has been typed. "Continue" is the safe
+// default and keeps the lime fill; "Leave" discards.
+function LeaveListingDialog({ onLeave, onContinue }: { onLeave: () => void; onContinue: () => void }) {
+  return (
+    <div
+      onClick={onContinue}
+      style={{
+        position: "fixed", inset: 0, zIndex: 1200,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Do you want to leave registration?"
+        style={{
+          width: 452, maxWidth: "100%",
+          background: "#0d0d0d", border: `1px solid ${C.border}`, borderRadius: 10,
+          padding: "20px 22px 18px",
+          boxShadow: "0 20px 48px rgba(0,0,0,0.6)",
+        }}
+      >
+        <h3 style={{ fontFamily: FONT, fontSize: 16.5, fontWeight: 600, color: C.fg, margin: 0 }}>
+          Do you want to leave registration?
+        </h3>
+        <p style={{ fontFamily: FONT, fontSize: 13, lineHeight: "20px", color: C.muted, margin: "10px 0 0" }}>
+          If you leave the registration process, the information you have entered will not be saved.
+        </p>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 9, marginTop: 18 }}>
+          <button
+            onClick={onLeave}
+            style={{
+              fontFamily: FONT, fontSize: 13, fontWeight: 500,
+              background: "transparent", color: C.fg,
+              border: `1px solid ${C.border}`, padding: "8px 18px", borderRadius: 7, cursor: "pointer",
+            }}
+          >
+            Leave
+          </button>
+          <button
+            onClick={onContinue}
+            style={{
+              fontFamily: FONT, fontSize: 13, fontWeight: 600,
+              background: C.lime, color: C.limeText,
+              border: "none", padding: "8px 18px", borderRadius: 7, cursor: "pointer",
+            }}
+          >
+            Continue
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -522,13 +794,17 @@ function TextArea({
 }
 
 function Select({
-  value, onChange, options, placeholder, renderOption,
+  value, onChange, options, placeholder, renderOption, lockedOptions, lockedNote,
 }: {
   value: string;
   onChange: (v: string) => void;
   options: readonly string[];
   placeholder?: string;
   renderOption?: (v: string) => string;
+  /** v1.2 §C3 — options that exist but cannot be picked. */
+  lockedOptions?: ReadonlySet<string>;
+  /** Why they're locked; appended to the option label. */
+  lockedNote?: string;
 }) {
   return (
     <select
@@ -550,9 +826,19 @@ function Select({
       }}
     >
       <option value="" disabled>{placeholder || "Choose"}</option>
-      {options.map((o) => (
-        <option key={o} value={o}>{renderOption ? renderOption(o) : o}</option>
-      ))}
+      {options.map((o) => {
+        // v1.2 §C3 — a locked template stays visible (so the publisher knows
+        // it exists) but can't be selected, and says why inline. A native
+        // <option> can't hold a lock glyph in its own column, so the reason
+        // rides in the label.
+        const locked = !!lockedOptions?.has(o);
+        const label = renderOption ? renderOption(o) : o;
+        return (
+          <option key={o} value={o} disabled={locked}>
+            {locked ? `${label}  ·  🔒 ${lockedNote ?? "Unavailable"}` : label}
+          </option>
+        );
+      })}
     </select>
   );
 }

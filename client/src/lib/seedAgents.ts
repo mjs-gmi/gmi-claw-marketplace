@@ -18,9 +18,13 @@ export interface SeedAgent {
   maasKey: string;
   accessUrl: string;
   registeredAt: string;
-  // Omitted for seed agents so no DRAFT/LIVE pill shows in the list (matches the
-  // console, which surfaces only the verified check for these).
+  // v1.2 §D/§E — seeded across the three review states so Publish Status and
+  // the Listing menu have something real to render. Leave it off for an agent
+  // that should show no listing pill at all.
   listingState?: SeedListingState;
+  // v1.2 §E6 — private image or embedded registry credentials: the listing
+  // control locks instead of failing at review time.
+  privateImage?: boolean;
   dockerImage?: string;
   region?: string;
   // Endpoints declared at Register → Networking. Surfaced live under Access in
@@ -45,6 +49,7 @@ export const SEED_AGENTS: SeedAgent[] = [
     registeredAt: "2025-01-01T00:00:00.000Z",
     region: "us-ia-iowa-1",
     tier: "container",
+    listingState: "live",
     endpoints: [{ id: "ep_web", name: "web", internalPort: "8080", protocol: "HTTPS", visibility: "private" }],
   },
   {
@@ -60,6 +65,7 @@ export const SEED_AGENTS: SeedAgent[] = [
     registeredAt: "2025-01-01T00:00:00.000Z",
     region: "us-or-portland",
     tier: "standard",
+    listingState: "pending_review",
     endpoints: [{ id: "ep_api", name: "api", internalPort: "3000", protocol: "HTTP", visibility: "public" }],
   },
   {
@@ -76,6 +82,8 @@ export const SEED_AGENTS: SeedAgent[] = [
     dockerImage: "ghcr.io/mjs-gmi/openclaw-gmi:v5-mode-none",
     region: "eu-de-frankfurt",
     tier: "performance",
+    listingState: "rejected",
+    privateImage: true,
     endpoints: [
       { id: "ep_web", name: "web", internalPort: "8080", protocol: "HTTPS", visibility: "private" },
       { id: "ep_vnc", name: "vnc", internalPort: "5900", protocol: "TCP", visibility: "public" },

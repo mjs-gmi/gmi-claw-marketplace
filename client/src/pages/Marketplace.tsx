@@ -8,6 +8,7 @@ import { ALL_CLAWS, TYPE_LABELS, getBadgeConfig, type Claw, type TypeLabel } fro
 import { C as baseC, FONT, TYPE_COLOR } from "@/lib/tokens";
 import { PlanBadge } from "@/components/PlanUI";
 import { isPlanEligibleAgent, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
+import V2Badge from "@/components/V2Badge";
 
 // ─── Design tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const FONT_MONO = "'GeistMono', ui-monospace, 'SFMono-Regular', monospace";
@@ -279,6 +280,55 @@ function AgentCard({ claw }: { claw: Claw }) {
   );
 }
 
+// ─── Publisher hero banner — v1.2 §A1 ───────────────────────────────────────
+// Acquisition band aimed at Agent *authors*, above the buyer-facing catalog.
+// Additive: the "Browse Agents" page hero below it is untouched.
+function PublisherHeroV2() {
+  const [, setLocation] = useLocation();
+  return (
+    <div style={{ padding: "24px 24px 0" }}>
+      <div
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: 20, flexWrap: "wrap",
+          background: "linear-gradient(96deg, rgba(221,234,77,0.10) 0%, rgba(221,234,77,0.03) 62%, transparent 100%)",
+          border: "1px solid rgba(221,234,77,0.26)",
+          borderRadius: 12,
+          padding: "18px 22px",
+        }}
+      >
+        <div style={{ minWidth: 260, flex: "1 1 420px" }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 11, fontWeight: 700, letterSpacing: "0.10em", color: C.lime }}>
+              <span style={{ width: 5, height: 5, background: C.lime, display: "inline-block" }} />
+              DEPLOY · PUBLISH · GROW THE AGENT ECOSYSTEM
+            </span>
+            <V2Badge />
+          </div>
+          <h2 style={{ fontFamily: FONT, fontSize: 25, fontWeight: 700, lineHeight: "31px", letterSpacing: "-0.02em", color: C.fg, margin: 0 }}>
+            Help Great Agents <span style={{ color: C.lime }}>Get Deployed, Discovered, and Used.</span>
+          </h2>
+          <p style={{ fontFamily: FONT, fontSize: 13.5, lineHeight: "20px", color: C.muted, margin: "8px 0 0", maxWidth: 720 }}>
+            Register, deploy, and test your Agent with Agentbox — then publish it to Agent Marketplace
+            so more users can discover and use it.
+          </p>
+        </div>
+        <button
+          onClick={() => setLocation("/deploy")}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0,
+            fontFamily: FONT, fontSize: 14, fontWeight: 600, lineHeight: "20px",
+            background: C.lime, color: C.limeText,
+            border: "none", padding: "10px 18px", borderRadius: 9, cursor: "pointer",
+          }}
+        >
+          Register an Agent <IconArrowRight />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function Marketplace() {
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
@@ -318,6 +368,9 @@ export default function Marketplace() {
       <Topbar />
       <Navbar />
       <div style={{ marginLeft: 210, paddingTop: 40, display: "flex", flexDirection: "column" }}>
+
+        {/* ── Publisher acquisition banner — v1.2 §A1 ──────────────────────── */}
+        <PublisherHeroV2 />
 
         {/* ── Hero ─────────────────────────────────────────────────────────── */}
         <div style={{ padding: "24px 24px 0" }}>
@@ -400,14 +453,27 @@ export default function Marketplace() {
         {/* ── Catalog header ─────────────────────────────────────────────── */}
         <section id="catalog" style={{ padding: "28px 24px 8px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
-            <h1
-              style={{
-                fontFamily: FONT, fontSize: 24, fontWeight: 700, lineHeight: "30px",
-                color: C.fg, margin: 0, letterSpacing: "-0.02em",
-              }}
-            >
-              Agent Marketplace
-            </h1>
+            <div>
+              {/* v1.2 §A2 — eyebrow + restated subhead over the catalog */}
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 11, fontWeight: 700, letterSpacing: "0.10em", color: C.lime }}>
+                  <span style={{ width: 5, height: 5, background: C.lime, display: "inline-block" }} />
+                  AGENT MARKETPLACE
+                </span>
+                <V2Badge />
+              </div>
+              <h1
+                style={{
+                  fontFamily: FONT, fontSize: 24, fontWeight: 700, lineHeight: "30px",
+                  color: C.fg, margin: 0, letterSpacing: "-0.02em",
+                }}
+              >
+                Discover Agents for your workflow.
+              </h1>
+              <p style={{ fontFamily: FONT, fontSize: 13.5, lineHeight: "20px", color: C.muted, margin: "6px 0 0", maxWidth: 640 }}>
+                Compare publisher, runtime, and access details, then deploy a private copy into your GMI account.
+              </p>
+            </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
