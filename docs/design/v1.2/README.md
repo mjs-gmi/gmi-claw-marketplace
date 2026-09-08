@@ -87,9 +87,21 @@ Overview》（space IE, page 515375122）。两份是**互补**的：
 > **偏离设计稿**：设计稿把 listing 管理分在两处 —— agent 头部的 `Listing ▾` 下拉，
 > 和 Publish Status 弹窗的行菜单。实现里**全部收进 Publish Status 弹窗**：
 > 那里的行 `⋯` 是唯一入口，覆盖 draft / under review / denied / approved 四态的
-> 全部动作。头部控件保留（状态得挨着 Agent 显示），但点它是打开 Publish Status，
-> 不再挂第二份菜单。相应地，弹窗表格也收了 **Draft** 行 —— 设计稿只列已提交的，
-> 但既然是唯一入口，草稿也得能到达。
+> 全部动作（Complete listing / Edit listing / Fix & resubmit / View public
+> listing / Repost / Withdraw / Unpublish）。
+>
+> **agent 页面只留 publish / unpublish 一个按钮**，没有菜单：
+>
+> | agent 的 listing 状态 | 头部按钮 |
+> |---|---|
+> | live | `Unpublish`（红描边）→ 共用同一个确认弹窗 |
+> | draft / denied | `Publish` → 进 List an Agent 表单 |
+> | under review | `Publish` 置灰 + 时钟图标，tooltip 说已提交、要改去 Publish Status 里 Withdraw |
+> | 镜像被锁 | `Publish` 置灰 + 锁图标，tooltip 给 §E6 的原因 |
+>
+> 相应地，弹窗表格收了 **Draft** 行 —— 设计稿只列已提交的，但既然是唯一入口，
+> 草稿也得能到达。§E5 的 `Under review` 药丸和 §E6 的 `🔒 Listing` 独立控件
+> 都不再单独存在，两个状态折进了这一个按钮。
 
 
 

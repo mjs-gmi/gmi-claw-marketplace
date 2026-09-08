@@ -1647,85 +1647,80 @@ function DetailRow({ label, value, accent }: { label: string; value: React.React
 // inside the trigger (DRAFT / PENDING / LIVE / REJECTED) tells the user where
 // the listing is at a glance.
 // ─── Listing control in the agent header ───────────────────────────────────
-// Listing *management* now lives entirely in the Publish Status modal, so this
-// control no longer carries its own copy of the menu. It still shows the
-// listing's state — that belongs next to the Agent it describes — and clicking
-// it opens the one place the actions live.
+// One action, never a menu. Publishing and unpublishing are the two things a
+// publisher does from the Agent they are looking at; everything else about a
+// listing — edit, repost, withdraw, view public, and the review state of every
+// listing at once — lives in the Publish Status modal, which is reached from
+// the My Agents column header.
 function ListingActions({
-  state, locked = false, onOpenPublishStatus,
+  state, locked = false, onPublish, onUnpublish,
 }: {
   state?: ListingState;
-  /** v1.2 §E6 — image can't be listed publicly, so the control is inert. */
+  /** v1.2 §E6 — image can't be listed publicly, so publishing is inert. */
   locked?: boolean;
-  onOpenPublishStatus: () => void;
+  onPublish: () => void;
+  onUnpublish: () => void;
 }) {
-  const isPending = state === "pending_review";
   const isLive    = state === "live";
+  const isPending = state === "pending_review";
 
-  // v1.2 §E6 — locked: inert, and the reason is on the control itself so
-  // nobody has to submit to find out.
-  if (locked) {
+  // Live is the only state with something to take down.
+  if (isLive) {
     return (
-      <div style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-        <button
-          disabled
-          title="Unable to Publish — Listing to public requires a public image with no embedded secrets or credentials."
-          style={{
-            display: "inline-flex", alignItems: "center", gap: 6,
-            fontFamily: FONT, fontSize: 13, fontWeight: 500, lineHeight: "20px",
-            background: "transparent", color: C.muted,
-            border: `1px solid ${C.border}`,
-            padding: "5px 14px", borderRadius: 8, cursor: "not-allowed",
-          }}
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
-          </svg>
-          Listing
-        </button>
-        <V2Badge />
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
       <button
-        onClick={onOpenPublishStatus}
-        title="Manage this listing in Publish Status"
+        onClick={onUnpublish}
+        title="Remove this Agent from the Marketplace"
         style={{
           display: "inline-flex", alignItems: "center", gap: 6,
           fontFamily: FONT, fontSize: 13, fontWeight: 500, lineHeight: "20px",
-          background: "transparent", color: C.fg,
-          border: `1px solid ${C.border}`,
+          background: "transparent", color: C.err,
+          border: `1px solid ${C.err}55`,
           padding: "5px 14px", borderRadius: 8, cursor: "pointer",
         }}
       >
-        {isLive ? "Manage Listing" : "Publish Agent"}
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: C.muted }} aria-hidden="true">
-          <path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M21 14v7H3V3h7" />
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+          <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
         </svg>
+        Unpublish
       </button>
-      {/* v1.2 §E5 — review is in flight; says so right next to the Agent */}
-      {isPending && (
-        <span
-          title="Submitted — a reviewer is looking at this listing"
-          style={{
-            display: "inline-flex", alignItems: "center", gap: 5,
-            fontFamily: FONT, fontSize: 11.5, fontWeight: 500,
-            color: C.muted, background: "rgba(255,255,255,0.04)",
-            border: `1px solid ${C.border}`,
-            padding: "3px 9px", borderRadius: 7, whiteSpace: "nowrap",
-          }}
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" />
-          </svg>
-          Under review
-          <V2Badge />
-        </span>
+    );
+  }
+
+  // Not live: one Publish button, disabled with the reason when it can't run.
+  // v1.2 §E5 — a listing already in review says so here rather than needing a
+  // separate pill; §E6 — a locked image says why without a submit attempt.
+  const blocked =
+    locked   ? "Unable to Publish — Listing to public requires a public image with no embedded secrets or credentials."
+  : isPending ? "Under review — this listing is already submitted. Withdraw it from Publish Status to change it."
+  : null;
+
+  return (
+    <button
+      onClick={() => { if (!blocked) onPublish(); }}
+      disabled={!!blocked}
+      title={blocked ?? "Publish this Agent to the Marketplace"}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        fontFamily: FONT, fontSize: 13, fontWeight: 500, lineHeight: "20px",
+        background: "transparent",
+        color: blocked ? C.muted : C.fg,
+        border: `1px solid ${C.border}`,
+        padding: "5px 14px", borderRadius: 8,
+        cursor: blocked ? "not-allowed" : "pointer",
+      }}
+    >
+      {locked && (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
+        </svg>
       )}
-    </div>
+      {isPending && !locked && (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" />
+        </svg>
+      )}
+      Publish
+    </button>
   );
 }
 
@@ -3619,7 +3614,7 @@ function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instan
 // ─── Right detail pane ────────────────────────────────────────────────────
 function AgentDetailPane({
   agent, instances, snapshots, image, savedConfig, onProvision, onAction, onOpenDetail, activeInstanceId,
-  onOpenPublishStatus,
+  onPublishListing, onUnpublishListing,
   onSaveModel, onRevalidate, onRetryPrep, onReplaceImage, canConvert = false,
 }: {
   agent: MyAgent;
@@ -3627,7 +3622,8 @@ function AgentDetailPane({
   snapshots: Snapshot[];
   image?: RuntimeImage;
   savedConfig: SavedLaunchConfig;
-  onOpenPublishStatus: () => void;
+  onPublishListing: (agentId: string) => void;
+  onUnpublishListing: (agentId: string) => void;
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
   onOpenDetail: (id: string, tab?: DrawerTab) => void;
@@ -3673,7 +3669,8 @@ function AgentDetailPane({
       <ListingActions
         state={agent.listingState}
         locked={!!agent.privateImage}
-        onOpenPublishStatus={onOpenPublishStatus}
+        onPublish={() => onPublishListing(agent.id)}
+        onUnpublish={() => onUnpublishListing(agent.id)}
       />
     </div>
   );
@@ -4566,6 +4563,12 @@ export default function Dashboard() {
     setPublishStatusOpen(false);
     setLocation(`/list-claw?agentId=${encodeURIComponent(agentId)}`);
   };
+  // The Unpublish confirmation is shared with Publish Status, so the agent
+  // header hands it the same row shape rather than a second dialog.
+  const requestUnpublish = (agentId: string) => {
+    const row = publishRowsFor(allAgents).find((r) => r.id === agentId);
+    if (row) setUnpublishRow(row);
+  };
   const listingHandlers: ListingActionHandlers = {
     onComplete:  (row) => openListingForm(row.id),
     onEdit:      (row) => openListingForm(row.id),
@@ -5032,7 +5035,8 @@ export default function Dashboard() {
               snapshots={snapshots}
               image={runtimeImages[selected.id]}
               savedConfig={savedConfigFor(selected.id)}
-              onOpenPublishStatus={() => setPublishStatusOpen(true)}
+              onPublishListing={openListingForm}
+              onUnpublishListing={requestUnpublish}
               onProvision={handleProvision}
               onAction={handleAction}
               onOpenDetail={openDetail}
