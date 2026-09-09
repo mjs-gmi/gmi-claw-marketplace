@@ -14,6 +14,7 @@ import { SEED_AGENTS } from "@/lib/seedAgents";
 import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
 import V2Badge from "@/components/V2Badge";
 import TerminalV2 from "@/components/TerminalV2";
+import NoApiBadge, { NoApiNote, NO_API_REASON } from "@/components/NoApiBadge";
 import {
   PublishStatusEntry, PublishStatusModal, UnpublishDialog,
   type PublishRow, type ReviewStatus, type ListingActionHandlers,
@@ -327,7 +328,8 @@ function metadataMatches(entries: MetaEntry[] | undefined, query: string): boole
 }
 
 interface InstanceConfig {
-  name?: string;         // optional instance name (e.g. "prod-worker-1")
+  name?: string;         // rides along as metadata.name — create has no name field
+  idc?: string;          // create parameter: idc_name
   envOverrides: { id: string; key: string; value: string }[];
   maxLifetime: string;   // e.g. "1h", "off"
   idleTimeout: string;   // e.g. "5min", "off"
@@ -888,7 +890,7 @@ function MetricCard({ label, value, helper, accent }: {
 function PillSegmented<T extends string>({
   options, active, onChange,
 }: {
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; noApi?: boolean }[];
   active: T;
   onChange: (v: T) => void;
 }) {
@@ -920,6 +922,7 @@ function PillSegmented<T extends string>({
             }}
           >
             {opt.label}
+            {opt.noApi && <NoApiBadge style={{ marginLeft: 6 }} />}
           </button>
         );
       })}
@@ -1055,11 +1058,15 @@ function MetadataEditor({
 // ─── Lifecycle timeline — 2-stage visual (Active → Paused).
 // PRD v2.3: paused instances are never auto-deleted — they persist until Resume
 // or Delete, and storage keeps billing. durationLabel is hoisted below.
+// The R1 API has one wall-clock `timeout` and no pause, so the timeline runs
+// Created → Running → Deleted. It used to end in "Paused", which the swagger
+// cannot deliver and which contradicts what happens at the limit.
 function LifecycleTimeline({ maxActive }: { maxActive?: string }) {
   const activeSub = !maxActive || maxActive === "off" ? "No limit" : `≤ ${durationLabel(maxActive)}`;
   const stages = [
-    { label: "Active", sub: activeSub,                                    color: C.ok },
-    { label: "Paused", sub: "Storage billing continues until Resume or Delete", color: "#60a5fa" },
+    { label: "Created", sub: "timeout starts counting here",   color: C.muted },
+    { label: "Running", sub: activeSub,                        color: C.ok },
+    { label: "Deleted", sub: "released with its disk",         color: C.err },
   ];
   return (
     <div
@@ -1995,10 +2002,10 @@ function InstanceRowMenu({
   }, [open]);
 
   // Lifecycle actions by state — the §4.1 transition matrix is authoritative.
-  type MenuAction = { action: RowAction; label: string; icon: React.ReactNode; release?: Release; danger?: boolean; title?: string };
+  type MenuAction = { action: RowAction; label: string; icon: React.ReactNode; release?: Release; danger?: boolean; title?: string; noApi?: boolean };
   const lifecycle: MenuAction[] = [];
   if (inst.status === "running") {
-    lifecycle.push({ action: "snapshot", label: "Save as Snapshot", icon: <IconSnapshot />, release: "R1" });
+    lifecycle.push({ action: "snapshot", label: "Save as Snapshot", icon: <IconSnapshot />, release: "R1", noApi: true });
   }
   // Snapshot from Suspended is conditional on Q8. While it's unresolved AgentBox
   // never silently resumes: Resume → Snapshot → Suspend stays three steps.
@@ -2067,6 +2074,7 @@ function InstanceRowMenu({
             >
               {it.icon}
               <span style={{ flex: 1 }}>{it.label}</span>
+              {it.noApi && <NoApiBadge />}
               {it.release && <ReleaseBadge r={it.release} />}
             </button>
           ))}
@@ -2203,10 +2211,12 @@ function ConfirmDialog({
 
 // ─── Provision modal — per-task overrides (env + lifecycle) ─────────────
 function ProvisionModal({
-  open, agentName, agentVersion, image, endpoints, savedConfig, onCancel, onSubmit,
+  open, agentName, agentVersion, image, endpoints, savedConfig, idcDefault, onCancel, onSubmit,
 }: {
   open: boolean;
   agentName: string;
+  /** The Template's own region — the IDC picker opens on it. */
+  idcDefault?: string;
   agentVersion: string;
   image?: string;
   endpoints: AgentEndpoint[];
@@ -2215,6 +2225,8 @@ function ProvisionModal({
   onSubmit: (cfg: InstanceConfig) => void;
 }) {
   const [name, setName] = useState("");
+  // idc_name is a create parameter, so it belongs here and nowhere else.
+  const [idc, setIdc] = useState(idcDefault ?? "us-ia-iowa-1");
   // Always start with one empty editable row at the bottom (matches the
   // reference UI — user can start typing without clicking "+ key" first).
   const [env, setEnv] = useState<{ id: string; key: string; value: string }[]>([
@@ -2292,6 +2304,7 @@ function ProvisionModal({
     if (!canCreate) return;
     onSubmit({
       name: name.trim() || undefined,
+      idc,
       envOverrides: env.filter((e) => e.key.trim().length > 0),
       maxLifetime,
       idleTimeout,
@@ -2487,11 +2500,38 @@ function ProvisionModal({
             })()}
           </section>
 
+          {/* IDC — a create parameter. Spec is not: it comes from the Template's
+              `resources`, so Launch shows it and cannot change it (§H). */}
+          <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>IDC</label>
+              <V2Badge />
+              <span style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>idc_name</span>
+            </div>
+            <select
+              value={idc}
+              onChange={(e) => setIdc(e.target.value)}
+              style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "pointer" }}
+            >
+              {Object.entries(REGION_LABELS).map(([id, label]) => (
+                <option key={id} value={id}>{label} · {id}</option>
+              ))}
+            </select>
+            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
+              Chosen per sandbox. Specs are listed per IDC
+              (<span style={{ fontFamily: MONO }}>/sandbox-product-specifications?idc_name=</span>), so the IDC
+              decides what this Template can run.
+            </span>
+          </section>
+
           {/* Name — optional */}
           <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>
               Name <span style={{ color: C.muted, fontWeight: 400 }}>· optional</span>
             </label>
+            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>
+              Stored as <span style={{ fontFamily: MONO }}>metadata.name</span> — the create call has no name field of its own.
+            </span>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -2516,7 +2556,7 @@ function ProvisionModal({
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                 <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "16px" }}>
                   {durationLabel(maxLifetime)} active · pause &amp; keep disk · storage billing continues
-                  {idleTimeout !== "off" && <> · pause when idle {durationLabel(idleTimeout)}</>}
+                  {" · deleted at the limit"}
                   <span style={{ color: C.borderSoft }}> · </span>Organization default
                 </span>
                 <button
@@ -2544,19 +2584,26 @@ function ProvisionModal({
                   </span>
                 </div>
 
-                {/* Pause when inactive (P1-7) — optional toggle + timeout */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                {/* Pause when inactive (P1-7) — the swagger has no idle policy and
+                    no pause, so this cannot be sent. Kept visible and inert
+                    rather than deleted: it is decided design waiting on an API. */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, opacity: 0.72 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "not-allowed" }}>
                     <input
                       type="checkbox"
-                      checked={idleTimeout !== "off"}
-                      onChange={(e) => setIdleTimeout(e.target.checked ? "15min" : "off")}
-                      style={{ accentColor: C.lime, width: 15, height: 15, cursor: "pointer" }}
+                      checked={false}
+                      disabled
+                      style={{ accentColor: C.lime, width: 15, height: 15, cursor: "not-allowed" }}
                     />
-                    <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg }}>
-                      Pause when inactive <span style={{ color: C.muted, fontWeight: 400 }}>· optional</span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>
+                      Pause when inactive
+                      <NoApiBadge title="Create accepts template_id / idc_name / timeout / env_vars / metadata only. There is no idle policy and no pause endpoint." />
                     </span>
                   </label>
+                  <NoApiNote>
+                    No idle policy in the R1 API. A sandbox runs on one wall-clock
+                    <span style={{ fontFamily: MONO }}> timeout</span> and activity does not extend it.
+                  </NoApiNote>
                   {idleTimeout !== "off" && (
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingLeft: 23 }}>
                       <select value={idleTimeout} onChange={(e) => setIdleTimeout(e.target.value)} style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "pointer" }}>
@@ -2590,15 +2637,20 @@ function ProvisionModal({
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 6, padding: "10px 12px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 12 }}>
                     <span style={{ color: C.muted }}>When the limit is reached</span>
-                    <span style={{ color: C.fg, display: "inline-flex", alignItems: "center", gap: 5 }}><IconSuspend size={11} /> Pause &amp; keep disk</span>
+                    <span style={{ color: C.err, display: "inline-flex", alignItems: "center", gap: 5 }}><IconTrash size={11} /> Deleted — disk goes with it</span>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 12 }}>
-                    <span style={{ color: C.muted }}>While paused</span>
-                    <span style={{ color: C.fg }}>Storage billing continues until Resume or Delete</span>
+                    <span style={{ color: C.muted }}>Clock</span>
+                    <span style={{ color: C.fg }}>Wall-clock from creation · activity does not reset it</span>
                   </div>
-                  <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-                    Set at launch and fixed for this Sandbox in R1. Running and pausing time count toward the limit, paused time doesn't,
-                    and a successful Resume resets the clock. Deleting at the limit would need an explicit opt-in — it is never the default.
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+                    <V2Badge />
+                    <span>
+                      One <span style={{ fontFamily: MONO }}>timeout</span>, counted from the moment the sandbox is
+                      created. Running, idle and waiting all count. Nothing you do inside extends it — save anything you
+                      need out through Files first. There is no pause at the limit: the sandbox is released and its
+                      files go with it.
+                    </span>
                   </span>
                 </div>
 
@@ -3276,7 +3328,7 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
 // Everything that used to be stacked in one scrolling popup is grouped into
 // tabs, and the endpoint confirmations are inline instead of a second modal.
 type DrawerTab = "overview" | "access" | "files" | "run" | "terminal" | "logs" | "config";
-const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean }[] = [
+const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean; noApi?: boolean }[] = [
   { key: "overview", label: "Overview" },
   // Access / Files / Run are the V2.0 change set (sections D, G, B).
   { key: "access",   label: "Access", v2: true },
@@ -3285,7 +3337,8 @@ const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: 
   // Confluence §C — a persistent TTY, distinct from Run. Running only: there
   // is nothing to attach to before that.
   { key: "terminal", label: "Terminal", runningOnly: true, v2: true },
-  { key: "logs",     label: "Logs" },
+  // No /logs endpoint in the swagger — the tab stays, marked.
+  { key: "logs",     label: "Logs", noApi: true },
   { key: "config",   label: "Config" },
 ];
 const DRAWER_WIDTH = 560;
@@ -3333,10 +3386,14 @@ function InstanceDrawer({
     </div>
   );
 
-  const actionBtn = (label: string, icon: React.ReactNode, action: RowAction, kind: "primary" | "ghost" | "danger") => (
+  const actionBtn = (label: string, icon: React.ReactNode, action: RowAction, kind: "primary" | "ghost" | "danger", noApi = false) => (
     <button
       onClick={() => onAction(inst.id, action)}
-      title={action === "delete" ? "Available in every state, confirmed or not — never rejected as a lifecycle conflict." : undefined}
+      title={
+        noApi ? NO_API_REASON
+        : action === "delete" ? "Available in every state, confirmed or not — never rejected as a lifecycle conflict."
+        : undefined
+      }
       style={{
         display: "inline-flex", alignItems: "center", gap: 5,
         fontFamily: FONT, fontSize: 12.5, fontWeight: kind === "primary" ? 600 : 500,
@@ -3346,7 +3403,7 @@ function InstanceDrawer({
         padding: "5px 11px", borderRadius: 7, cursor: "pointer",
       }}
     >
-      {icon} {label}
+      {icon} {label} {noApi && <NoApiBadge />}
     </button>
   );
 
@@ -3402,9 +3459,11 @@ function InstanceDrawer({
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-          {running && actionBtn("Pause", <IconSuspend />, "suspend", "ghost")}
-          {inst.status === "suspended" && actionBtn("Resume", <IconResume />, "resume", "primary")}
-          {running && actionBtn("Create Snapshot", <IconSnapshot />, "snapshot", "ghost")}
+          {/* Pause / Resume / Snapshot have no endpoint in the R1 swagger. Kept,
+              marked, and left clickable so the flows stay demoable. */}
+          {running && actionBtn("Pause", <IconSuspend />, "suspend", "ghost", true)}
+          {inst.status === "suspended" && actionBtn("Resume", <IconResume />, "resume", "primary", true)}
+          {running && actionBtn("Create Snapshot", <IconSnapshot />, "snapshot", "ghost", true)}
           {(inst.status === "error" || inst.unconfirmed) && actionBtn("Retry", <IconRestart />, "retry", "ghost")}
           {inst.status !== "deleted" && inst.status !== "deleting" && actionBtn("Delete", <IconTrash />, "delete", "danger")}
         </div>
@@ -3429,6 +3488,7 @@ function InstanceDrawer({
             >
               {t.label}
               {t.v2 && <V2Badge />}
+              {t.noApi && <NoApiBadge />}
             </button>
           );
         })}
@@ -4355,7 +4415,7 @@ function AgentDetailPane({
         options={[
           { value: "monitor", label: "Overview" },
           { value: "integration", label: "API" },
-          { value: "analytics", label: "Usage" },
+          { value: "analytics", label: "Usage", noApi: true },
         ]}
       />
 
@@ -5381,9 +5441,10 @@ export default function Dashboard() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: `1px solid ${C.border}`, padding: "0 32px" }}>
           <div style={{ display: "flex" }}>
           {[
-            { id: "deployments" as const, label: "My Agents", isNew: false },
-            { id: "uses" as const, label: "Agents I Use", isNew: false },
-            { id: "snapshots" as const, label: "Snapshots", isNew: true },
+            { id: "deployments" as const, label: "My Agents", isNew: false, noApi: false },
+            { id: "uses" as const, label: "Agents I Use", isNew: false, noApi: false },
+            // No /snapshots endpoint in the R1 swagger.
+            { id: "snapshots" as const, label: "Snapshots", isNew: true, noApi: true },
           ].map((t) => {
             const isActive = topTab === t.id;
             return (
@@ -5404,6 +5465,7 @@ export default function Dashboard() {
               >
                 {t.label}
                 {t.isNew && <NewBadge />}
+                {t.noApi && <NoApiBadge />}
               </button>
             );
           })}
@@ -5572,6 +5634,7 @@ export default function Dashboard() {
         image={(allAgents.find((a) => a.id === provisionForAgentId) as any)?.dockerImage}
         endpoints={endpointsForAgent(allAgents.find((a) => a.id === provisionForAgentId))}
         savedConfig={savedConfigFor(provisionForAgentId ?? undefined)}
+        idcDefault={allAgents.find((a) => a.id === provisionForAgentId)?.region}
         onCancel={() => setProvisionForAgentId(null)}
         onSubmit={(cfg) => {
           if (provisionForAgentId) actuallyProvision(provisionForAgentId, cfg);
