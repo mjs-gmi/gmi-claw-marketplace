@@ -136,14 +136,25 @@ const RELEASE_META: Record<Release, { label: string; title: string; color: strin
 };
 
 // ─── Publish Status rows — v1.2 §D ─────────────────────────────────────────
-// Derived from the listing state machine rather than stored twice: a listing
-// only appears once it has been submitted, so "draft" is filtered out.
+// Derived from the listing state machine rather than stored twice. Every
+// listing appears, drafts included — Publish Status is the only place listings
+// are managed, so a draft has to be reachable from it (see PublishStatusV2).
 const REVIEW_FOR_LISTING: Record<ListingState, ReviewStatus> = {
   draft:          "draft",
   live:           "approved",
   pending_review: "under_review",
   rejected:       "denied",
 };
+
+// Frozen on first use. Computing this per render made the Updated column tick
+// forward on every re-render and the `updated` sort unstable — but it cannot be
+// a module-load constant either: `_seedDaysAgo` is declared further down, so
+// evaluating it here hits the temporal dead zone and blanks the page.
+let _publishRowFallbackDates: string[] | null = null;
+function publishRowFallbackDate(i: number): string {
+  if (!_publishRowFallbackDates) _publishRowFallbackDates = [1, 2, 3, 4, 5].map((n) => _seedDaysAgo(n));
+  return _publishRowFallbackDates[i % _publishRowFallbackDates.length];
+}
 
 // Stand-in review notes until the review service returns a real reason.
 const DENY_REASONS = [
@@ -159,7 +170,7 @@ function publishRowsFor(agents: MyAgent[]): PublishRow[] {
       listingName: a.name,
       templateName: agentVersionName(a.id, a.name),
       status,
-      updated: a.registeredAt ? fmtDate(new Date(a.registeredAt)) : _seedDaysAgo(1 + (i % 5)),
+      updated: a.registeredAt ? fmtDate(new Date(a.registeredAt)) : publishRowFallbackDate(i),
       denyReason: status === "denied" ? DENY_REASONS[i % DENY_REASONS.length] : undefined,
       locked: !!a.privateImage,
     };
@@ -1567,12 +1578,17 @@ function execResultLine(ex: Execution): { text: string; color: string } {
 function ShellPane({ inst }: { inst: Instance }) {
   const [cmd, setCmd] = useState("");
   const [cwd, setCwd] = useState("/home/user");
-  const [timeoutSeconds, setTimeoutSeconds] = useState(300);
+  // Kept as a string so the field can be emptied mid-edit; coerced on use.
+  const [timeoutText, setTimeoutText] = useState("300");
+  const timeoutSeconds = Math.max(1, Number(timeoutText) || 300);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [history, setHistory] = useState<Execution[]>([]);
   // Drives the live duration readout without re-rendering the whole drawer.
   const [, setTick] = useState(0);
   const timers = useRef<number[]>([]);
+  // Per-execution settle timer. Cancelling has to clear the run's own timer,
+  // or the original outcome fires later and overwrites the cancelled result.
+  const settleTimer = useRef<Record<string, number>>({});
 
   const live = history[0]?.status === "running" || history[0]?.status === "cancelling";
 
@@ -1600,14 +1616,24 @@ function ShellPane({ inst }: { inst: Instance }) {
     const ex = mockExecStart(c, cwd, timeoutSeconds);
     setHistory((h) => [ex, ...h].slice(0, 4));
     setCmd("");
-    const t = window.setTimeout(
-      () => settle(ex.id, mockExecOutcome(c, inst)),
-      mockExecDurationMs(c),
-    );
+    // #14 — honour the timeout the user actually set: whichever comes first.
+    const runMs = Math.min(mockExecDurationMs(c), timeoutSeconds * 1000);
+    const timesOut = runMs < mockExecDurationMs(c);
+    const t = window.setTimeout(() => {
+      delete settleTimer.current[ex.id];
+      settle(ex.id, timesOut
+        ? { status: "timed_out", exitCode: null, stdout: "step 1/50 …\nstep 2/50 …", terminationReason: "execution_timeout reached — process group killed. The Sandbox is unaffected and nothing was retried for you." }
+        : mockExecOutcome(c, inst));
+    }, runMs);
+    settleTimer.current[ex.id] = t;
     timers.current.push(t);
   };
 
   const cancel = (ex: Execution) => {
+    // Stop the run from settling on its own — otherwise the pending outcome
+    // lands later and silently replaces the cancelled result.
+    const pending = settleTimer.current[ex.id];
+    if (pending !== undefined) { window.clearTimeout(pending); delete settleTimer.current[ex.id]; }
     settle(ex.id, { status: "cancelling", elapsedMs: Date.now() - ex.startedAt });
     const t = window.setTimeout(() => {
       const outcome = mockCancelSettles(ex.command);
@@ -1702,8 +1728,9 @@ function ShellPane({ inst }: { inst: Instance }) {
           <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted }}>timeout (s)</span>
             <input
-              type="number" min={1} value={timeoutSeconds} disabled={live}
-              onChange={(e) => setTimeoutSeconds(Math.max(1, Number(e.target.value) || 1))}
+              type="number" min={1} value={timeoutText} disabled={live}
+              onChange={(e) => setTimeoutText(e.target.value)}
+              onBlur={() => setTimeoutText(String(timeoutSeconds))}
               style={advInput}
             />
           </label>
@@ -4990,11 +5017,14 @@ export default function Dashboard() {
 
   // Both panels slide in from the right, so only one can be open at a time.
   const handleProvision = (agentId: string) => { setDrawer(null); setProvisionForAgentId(agentId); };
-  // v1.2 §E1 — Repost sends a live listing back through review. The public
-  // listing stays up until the new review lands, so only the state moves.
+  // v1.2 §E1 — Repost sends a listing back through review. It moves to
+  // Under review, which is the same state a first submission sits in: Unpublish
+  // is not offered again until the review lands. Say so, rather than implying
+  // the listing is both live and re-submitted — the prototype has no state for
+  // that, and pretending otherwise leaves no way to take the listing down.
   const handleRepost = (agentId: string) => {
     setListingState(agentId, "pending_review");
-    pushToast("success", "Resubmitted for review.");
+    pushToast("success", "Resubmitted for review — Unpublish returns once the review lands.");
   };
 
   // Every listing action, in one bag, handed to the Publish Status row menu —
@@ -5013,9 +5043,14 @@ export default function Dashboard() {
     onComplete:  (row) => openListingForm(row.id),
     onEdit:      (row) => openListingForm(row.id),
     onFix:       (row) => openListingForm(row.id),
+    // The public listing lives at /marketplace/:clawId. Agent ids and claw ids
+    // are different namespaces in the prototype, so until a listing carries its
+    // published claw id, send the user to the catalog and say why rather than
+    // to a URL that 404s.
     onView:      (row) => {
       setPublishStatusOpen(false);
-      setLocation(`/marketplace?agent=${encodeURIComponent(row.id)}`);
+      setLocation("/marketplace");
+      pushToast("progress", `${row.listingName} — opening the Marketplace. Per-listing deep links land once listings carry their published id.`);
     },
     onRepost:    (row) => handleRepost(row.id),
     onWithdraw:  (row) => {
@@ -5565,6 +5600,7 @@ export default function Dashboard() {
           rows={publishRowsFor(allAgents)}
           onClose={() => setPublishStatusOpen(false)}
           handlers={listingHandlers}
+          escapeDisabled={!!unpublishRow}
         />
       )}
       <UnpublishDialog

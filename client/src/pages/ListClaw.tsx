@@ -106,6 +106,15 @@ function saveListing(listing: ListingDraft) {
   } catch { /* ignore */ }
 }
 
+// Drafts autosave on every keystroke, so abandoning one has to remove it.
+function clearListing(agentId: string) {
+  try {
+    const obj = JSON.parse(localStorage.getItem(LISTINGS_KEY) || "{}");
+    delete obj[agentId];
+    localStorage.setItem(LISTINGS_KEY, JSON.stringify(obj));
+  } catch { /* ignore */ }
+}
+
 function flipAgentListingState(agentId: string, next: ListingState) {
   try {
     const arr: RegisteredAgent[] = JSON.parse(localStorage.getItem(REGISTERED_AGENTS_KEY) || "[]");
@@ -241,6 +250,8 @@ export default function ListClaw() {
     draft.fullDesc.trim() !== "" ||
     draft.tags.length > 0 ||
     draft.logoDataUrl !== "" ||
+    (draft.sampleOutputs?.length ?? 0) > 0 ||
+    draft.sampleOutputDataUrl !== "" ||
     draft.demoVideoUrl.trim() !== "" ||
     draft.docsUrl.trim() !== "" ||
     draft.publicUrl.trim() !== "";
@@ -259,6 +270,9 @@ export default function ListClaw() {
     if (!draft.category)                  e.category  = "Pick a category";
     if (!draft.shortDesc.trim())          e.shortDesc = "Add a short description for the card";
     if (draft.shortDesc.length > SHORT_DESC_MAX) e.shortDesc = `Max ${SHORT_DESC_MAX} characters`;
+    // The Full Description counter shows a limit, so the limit has to bite —
+    // otherwise an over-length body sails through to review.
+    if (draft.fullDesc.length > FULL_DESC_MAX) e.fullDesc = `Max ${FULL_DESC_MAX} characters`;
     // Full description is now optional — if blank, the detail page falls back
     // to the short description plus auto-generated source info. Power users
     // can expand "Add more details" and provide markdown.
@@ -402,6 +416,7 @@ export default function ListClaw() {
                   required
                   hint={`${draft.fullDesc.length} / ${FULL_DESC_MAX} characters`}
                   hintAlign="right"
+                  error={errors.fullDesc}
                 >
                   <TextArea value={draft.fullDesc} onChange={(v) => update("fullDesc", v)} placeholder={"## What it does\nContract Review Agent ingests PDF or DOCX contracts and produces a clause-by-clause risk report.\n\n## How it works\nCombines deterministic clause extraction with semantic risk classification."} rows={6} monospace />
                 </Field>
@@ -465,7 +480,14 @@ export default function ListClaw() {
       {/* v1.2 §B6 */}
       {confirmLeave && (
         <LeaveListingDialog
-          onLeave={() => { setConfirmLeave(false); setLocation("/dashboard"); }}
+          onLeave={() => {
+            // The draft autosaves on every keystroke, so "Leave" has to
+            // actually discard it — otherwise the dialog's promise is false
+            // and the abandoned draft reappears on the next visit.
+            setConfirmLeave(false);
+            clearListing(agent.id);
+            setLocation("/dashboard");
+          }}
           onContinue={() => setConfirmLeave(false)}
         />
       )}
@@ -492,8 +514,6 @@ function SectionCard({ title, subtitle, required, children }: { title: string; s
   );
 }
 
-// Sample Output uploader — a wide dashed drop target that reads one image to a
-// data URL (prototype stand-in for real upload).
 // ─── Sample Output gallery — v1.2 §C8 ──────────────────────────────────────
 // Up to SAMPLE_MAX tiles, each removable. The Upload tile disappears once the
 // cap is reached rather than sitting there rejecting clicks.
@@ -546,28 +566,6 @@ function SampleGallery({ values, onChange }: { values: string[]; onChange: (v: s
         </label>
       )}
     </div>
-  );
-}
-
-function SampleUploader({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => onChange(String(reader.result || ""));
-    reader.readAsDataURL(file);
-  };
-  return (
-    <label style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 96, border: `1px dashed ${C.border}`, borderRadius: 8, background: C.bg, cursor: "pointer", padding: 12 }}>
-      <input type="file" accept="image/png,image/jpeg" onChange={onFile} style={{ display: "none" }} />
-      {value ? (
-        <img src={value} alt="sample output" style={{ maxWidth: "100%", maxHeight: 160, borderRadius: 6 }} />
-      ) : (
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 13, color: C.muted }}>
-          <Icon.upload /> Upload image (PNG, JPG)
-        </span>
-      )}
-    </label>
   );
 }
 

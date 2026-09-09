@@ -285,6 +285,13 @@ export function UnpublishDialog({
   onCancel: () => void;
   onConfirm: (row: PublishRow) => void;
 }) {
+  useEffect(() => {
+    if (!row) return;
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+  }, [row, onCancel]);
+
   if (!row) return null;
   return (
     <div
@@ -391,18 +398,22 @@ function Th({
 const GRID = "minmax(0,1.15fr) minmax(0,1fr) 128px 168px 34px";
 
 export function PublishStatusModal({
-  rows, onClose, handlers,
+  rows, onClose, handlers, escapeDisabled = false,
 }: {
   rows: PublishRow[];
   onClose: () => void;
   handlers: ListingActionHandlers;
+  /** True while a dialog sits on top — Escape belongs to the topmost layer. */
+  escapeDisabled?: boolean;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("updated");
   const [dir, setDir] = useState<"asc" | "desc">("desc");
 
   const sort = (k: SortKey) => {
+    // A fresh column opens on the direction that is useful first: newest for
+    // dates, but *most actionable* for status — Denied before Approved.
     if (k === sortKey) setDir((d) => (d === "desc" ? "asc" : "desc"));
-    else { setSortKey(k); setDir("desc"); }
+    else { setSortKey(k); setDir(k === "status" ? "asc" : "desc"); }
   };
 
   // Denied first, then Under Review, then Approved — the order in which a
@@ -422,10 +433,11 @@ export function PublishStatusModal({
   }, [rows, sortKey, dir]);
 
   useEffect(() => {
+    if (escapeDisabled) return;
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", esc);
     return () => document.removeEventListener("keydown", esc);
-  }, [onClose]);
+  }, [onClose, escapeDisabled]);
 
   const cellText: React.CSSProperties = {
     fontFamily: FONT, fontSize: 12.5, color: C.fg,
