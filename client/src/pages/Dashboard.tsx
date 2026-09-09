@@ -398,7 +398,7 @@ const INITIAL_INSTANCES: Instance[] = [
     endpointUrl: endpointFor("8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36"),
     maxActive: "1h",
     maxRuntimeAction: "suspend",
-    lifecycleStartedAt: _seedMinsAgo(17), // ~43 min active time remaining
+    lifecycleStartedAt: _seedMinsAgo(53), // ~7 min left — reaches the near-expiry state §五.1 calls for
     // §4.7 — how an orchestrator maps this Runtime back to its own tenant/job.
     config: {
       ...TEMPLATE_DEFAULT_CONFIG,
@@ -897,7 +897,9 @@ function MaasKeyRow({ value, accessUrl }: { value: string; accessUrl?: string })
 }
 
 function MetricCard({ label, value, helper, accent }: {
-  label: string; value: string; helper: string; accent: string;
+  label: string; value: string; accent: string;
+  /** Optional: a card whose label already says it needs no second line. */
+  helper?: string;
 }) {
   return (
     <div
@@ -915,7 +917,7 @@ function MetricCard({ label, value, helper, accent }: {
       <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 2, background: accent }} />
       <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, lineHeight: "20px" }}>{label}</div>
       <div style={{ fontFamily: FONT, fontSize: 24, fontWeight: 600, color: C.fg, lineHeight: "32px" }}>{value}</div>
-      <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>{helper}</div>
+      {helper && <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>{helper}</div>}
     </div>
   );
 }
@@ -2081,18 +2083,24 @@ function ListingActions({
   );
 }
 
-// ─── Lifecycle cell — §A, pulled out of the detail pane ────────────────────
-// The column used to print "43 min remaining active" and stop there, which
-// says nothing about how much of the budget is gone and offers no way to buy
-// more. It is now the countdown, a bar, and Extend — the one lifecycle action
-// the API supports (the timeout can be updated after create).
-function LifecycleCell({
-  inst, onExtend,
+// ─── Expires cell — §A, and §五's four corrections ────────────────────────
+// The spec is blunt about what was wrong here, and two of them were mine:
+//
+//   · say "Expires in", not "43 min remaining active" and not "5h 57m left"
+//   · a colour change is not enough — ours *deletes* the sandbox and its files
+//     at the limit, which is harsher than every competitor, so the consequence
+//     has to be written down
+//   · extending is "set a new expiry", not "+30 min": competitors have people
+//     re-enter a duration, and an additive control teaches the wrong model
+//   · put Extend next to the expiry, not somewhere else
+function ExpiresCell({
+  inst, onSetExpiry,
 }: {
   inst: Instance;
-  onExtend: (id: string, addMins: number) => void;
+  onSetExpiry: (id: string, totalMins: number) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState("");
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!open) return;
@@ -2112,23 +2120,19 @@ function LifecycleCell({
     );
   }
 
-  // §A — the last few minutes have to look different from the first few hours.
-  const urgent = clock.leftMins <= 5;
+  const urgent = clock.leftMins <= 10;
   const warn = clock.leftMins <= 30;
-  const color = urgent ? C.err : warn ? C.warn : C.muted;
+  const color = urgent ? C.err : warn ? C.warn : C.fg;
 
   return (
     <div ref={ref} style={{ position: "relative", display: "flex", flexDirection: "column", gap: 3, minWidth: 0, overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-        <span
-          title={`${remainingShort(clock.leftMins)} left of ${durationLabel(inst.maxActive)} total. Wall-clock from creation — using the sandbox does not extend it. At the limit it is deleted and its disk goes with it.`}
-          style={{ fontFamily: FONT, fontSize: 12, fontWeight: urgent ? 600 : 500, color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-        >
-          {remainingShort(clock.leftMins)} left
+        <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: urgent ? 600 : 500, color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          Expires in {remainingShort(clock.leftMins)}
         </span>
         <button
-          onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
-          title="Add time — updates this sandbox's timeout"
+          onClick={(e) => { e.stopPropagation(); setDraft(String(clock.totalMins)); setOpen((o) => !o); }}
+          title="Set a new expiry for this sandbox"
           style={{
             fontFamily: FONT, fontSize: 10.5, fontWeight: 600,
             color: C.fg, background: "transparent", border: `1px solid ${C.border}`,
@@ -2138,6 +2142,10 @@ function LifecycleCell({
           Extend
         </button>
       </div>
+      {/* The consequence, not just a colour. */}
+      <span style={{ fontFamily: FONT, fontSize: 10.5, color: urgent ? C.err : C.muted, lineHeight: "14px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        {urgent ? "This sandbox and its files will be permanently deleted." : "Deleted with its files at the limit."}
+      </span>
       <div style={{ height: 3, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
         <div style={{ width: `${clock.pct}%`, height: "100%", background: color, transition: "width .3s linear" }} />
       </div>
@@ -2145,27 +2153,36 @@ function LifecycleCell({
         <div
           onClick={(e) => e.stopPropagation()}
           style={{
-            position: "absolute", top: "calc(100% + 5px)", left: 0, zIndex: 40, minWidth: 132,
-            background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 8, padding: 4,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column",
+            position: "absolute", top: "calc(100% + 5px)", left: 0, zIndex: 40, width: 226,
+            background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 8, padding: "11px 12px",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column", gap: 8,
           }}
         >
-          {[30, 60, 360].map((m) => (
-            <button
-              key={m}
-              onClick={() => { setOpen(false); onExtend(inst.id, m); }}
-              style={{
-                fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg,
-                background: "transparent", border: "none", padding: "6px 9px",
-                borderRadius: 6, cursor: "pointer", textAlign: "left",
-              }}
-            >
-              + {durationLabel(m >= 60 ? `${m / 60}h` : `${m}min`)}
-            </button>
-          ))}
-          <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted, padding: "4px 9px 2px", lineHeight: "14px" }}>
-            Pushes the expiry out. Never shortens it.
+          <span style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 600, color: C.fg }}>Set a new expiry</span>
+          <label style={{ display: "flex", alignItems: "center", gap: 7 }}>
+            <input
+              type="number"
+              min={1}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              style={{ width: 78, background: C.pillBg, border: `1px solid ${C.border}`, color: C.fg, fontFamily: MONO, fontSize: 12, padding: "5px 8px", borderRadius: 6, outline: "none" }}
+            />
+            <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>minutes total, from creation</span>
+          </label>
+          <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted, lineHeight: "14px" }}>
+            Currently {durationLabel(inst.maxActive)}, {remainingShort(clock.usedMins)} used. A new expiry
+            can only move later.
           </span>
+          <button
+            onClick={() => {
+              const next = Math.max(1, Number(draft) || clock.totalMins);
+              setOpen(false);
+              onSetExpiry(inst.id, next);
+            }}
+            style={{ alignSelf: "flex-start", fontFamily: FONT, fontSize: 12, fontWeight: 600, background: C.lime, color: C.limeText, border: "none", borderRadius: 6, padding: "5px 12px", cursor: "pointer" }}
+          >
+            Set expiry
+          </button>
         </div>
       )}
     </div>
@@ -3592,31 +3609,23 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
 // list so the list stays visible and the next instance is one click away.
 // Everything that used to be stacked in one scrolling popup is grouped into
 // tabs, and the endpoint confirmations are inline instead of a second modal.
-// No "access" tab. Endpoints are declared on the Agent at Register and
-// versioned with it, so they belong on the Agent — and credentials are fetched,
-// not browsed: Daytona's preview token comes from the SDK/CLI and resets when
-// the sandbox restarts, and its dashboard exposes SSH access as a row action.
-// Ours is the same shape: POST /sandboxes/{id}/connect returns a token.
-type DrawerTab = "overview" | "metrics" | "files" | "run" | "terminal" | "logs" | "config";
-// "run" is not a tab. It resolves to the Terminal, which holds both the session
-// and running one command — Vercel's dashboard does exactly this with a single
-// Connect surface, and neither E2B nor Daytona has a Run tab at all. Keeping
-// the alias means existing links still land somewhere correct.
-const TAB_ALIAS: Partial<Record<DrawerTab, DrawerTab>> = { run: "terminal" };
+// §六.B names the tabs: Overview | Work | Files | Access. Work holds both ways
+// of running something, because §五.2 says the job is to make the two
+// *purposes* legible, not to give each its own tab. Metrics moved to the
+// Agent's Analytics tab, Logs to a row action (the console's own View Log /
+// Download Log), and Config folded into Overview — none of the three is in the
+// spec's list, and all three had somewhere with evidence to go.
+type DrawerTab = "overview" | "work" | "files" | "access" | "run" | "terminal" | "metrics" | "logs" | "config";
+// Old links keep resolving.
+const TAB_ALIAS: Partial<Record<DrawerTab, DrawerTab>> = {
+  run: "work", terminal: "work", metrics: "overview", logs: "overview", config: "overview",
+};
 const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean; noApi?: boolean; question?: string }[] = [
   { key: "overview", label: "Overview" },
+  { key: "work",     label: "Work", runningOnly: true, v2: true },
   // Access / Files / Run are the V2.0 change set (sections D, G, B).
-  // Daytona has Metrics as its own tab. Ours was a block buried inside
-  // Overview, which is why nobody found it.
-  { key: "metrics",  label: "Metrics", runningOnly: true, v2: true, noApi: true },
   { key: "files",    label: "Files",  v2: true },
-  // Terminal holds both modes — the TTY and one-shot exec. They are the same
-  // data plane, so E2B's dashboard and Vercel's Connect tab both keep them in
-  // one place; two adjacent "run something" tabs is how people get lost.
-  { key: "terminal", label: "Terminal", runningOnly: true, v2: true },
-  // No /logs endpoint in the swagger — the tab stays, marked.
-  { key: "logs",     label: "Logs", noApi: true },
-  { key: "config",   label: "Config" },
+  { key: "access",   label: "Access", v2: true },
 ];
 const DRAWER_WIDTH = 560;
 
@@ -3844,16 +3853,27 @@ function InstanceDrawer({
           </>
         )}
 
-        {activeTab === "metrics" && <MetricsPane inst={inst} />}
+
         {activeTab === "files"  && <FilesSection inst={inst} />}
-        {activeTab === "terminal" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-            {/* One command with an exit code sits above the session — not behind
-                a toggle, not in its own tab. It is a few rows tall, so both are
-                on screen the moment this opens, which is the whole point: Run
-                was unfindable when it took a second click to appear. */}
+        {activeTab === "access" && <AccessSection inst={inst} endpoints={endpoints} />}
+        {activeTab === "work" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            {/* §五.2 — the job is not to explain HTTP versus WebSocket, it is to
+                make the two purposes legible. These two lines are the spec's
+                own wording. */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 10 }}>
+              {([
+                { t: "Run Command", d: "Run one command and get the result." },
+                { t: "Terminal",    d: "Open an interactive shell for continuous work." },
+              ]).map((x) => (
+                <div key={x.t} style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "9px 12px" }}>
+                  <div style={{ fontFamily: FONT, fontSize: 12.5, fontWeight: 600, color: C.fg }}>{x.t}</div>
+                  <div style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, marginTop: 2, lineHeight: "16px" }}>{x.d}</div>
+                </div>
+              ))}
+            </div>
             <ShellPane inst={inst} history={execHistory} setHistory={setExecHistory} />
-            <div style={{ borderTop: `1px solid ${C.borderSoft}`, paddingTop: 16 }}>
+            <div style={{ borderTop: `1px solid ${C.borderSoft}`, paddingTop: 18 }}>
               <TerminalV2
                 sandboxId={inst.id}
                 sandboxKey={midId(inst.id)}
@@ -3864,9 +3884,17 @@ function InstanceDrawer({
             </div>
           </div>
         )}
-        {activeTab === "logs"   && <LogsPane inst={inst} />}
 
-        {activeTab === "config" && (
+
+        {/* Metrics and Logs are not in §六.B's tab list either. Metrics belongs to
+            the Agent's Analytics tab now; the console reaches logs through row
+            actions (View Log / Download Log). Both stay glanceable here. */}
+        {activeTab === "overview" && running && <MetricsPane inst={inst} />}
+        {activeTab === "overview" && <LogsPane inst={inst} />}
+
+        {/* §六.B does not name a Config tab; "what this sandbox was created with" is
+            Overview material, so it renders there. */}
+        {activeTab === "overview" && (
           <>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
@@ -3923,8 +3951,8 @@ function MonitorPane({
 }: {
   agent: MyAgent;
   instances: Instance[];
-  /** §A — add time to a sandbox's timeout. */
-  onExtend: (id: string, addMins: number) => void;
+  /** §五 — set a new total lifetime for a sandbox, in minutes from creation. */
+  onExtend: (id: string, totalMins: number) => void;
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
   // A row click opens the drawer. Logs / Run Command / resource usage live there
@@ -3987,10 +4015,14 @@ function MonitorPane({
           Sandbox Overview
         </h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-          <MetricCard label="Running" value={String(agg.active)} helper="status = running" accent={C.ok} />
-          <MetricCard label="Error" value={String(agg.error)} helper="red tab badge if > 0" accent={C.err} />
-          <MetricCard label="Starting" value={String(agg.creating)} helper="status = starting" accent={C.warn} />
-          <MetricCard label="Last Launched" value={agg.lastProvisioned ? agoLabel(agg.lastProvisioned) : "—"} helper="max(createdAt)" accent={C.muted} />
+          {/* §I — these four carried engineering notes ("status = running",
+              "red tab badge if > 0", "max(createdAt)") and were live in front of
+              customers. Replaced with what the number means to the person
+              reading it, or nothing where the label already says it. */}
+          <MetricCard label="Running" value={String(agg.active)} helper="ready to use" accent={C.ok} />
+          <MetricCard label="Failed" value={String(agg.error)} helper={agg.error > 0 ? "needs attention" : undefined} accent={C.err} />
+          <MetricCard label="Creating" value={String(agg.creating)} helper="not usable yet" accent={C.warn} />
+          <MetricCard label="Last launched" value={agg.lastProvisioned ? agoLabel(agg.lastProvisioned) : "—"} accent={C.muted} />
         </div>
       </section>
 
@@ -4068,7 +4100,7 @@ function MonitorPane({
             <div>Sandbox</div>
             <div>Access URL</div>
             <div>Status</div>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Lifecycle <NewBadge /> <V2Badge /></div>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Expires <NewBadge /> <V2Badge /></div>
             <button
               onClick={() => setSortDir((d) => (d === "desc" ? "asc" : "desc"))}
               title={`Sort by created — ${sortDir === "desc" ? "newest first" : "oldest first"}`}
@@ -4210,7 +4242,7 @@ function MonitorPane({
                         PRD v2.3: paused instances are never auto-deleted — no countdown. */}
                     {(() => {
                       if (inst.status === "running") {
-                        return <LifecycleCell inst={inst} onExtend={onExtend} />;
+                        return <ExpiresCell inst={inst} onSetExpiry={onExtend} />;
                       }
                       if (inst.status === "suspended") {
                         const label = `${pausedLifecycleLabel()} (≈$${pausedCostMo(inst)}/mo)`;
@@ -4512,7 +4544,7 @@ function AgentDetailPane({
   image?: RuntimeImage;
   onPublishListing: (agentId: string) => void;
   onUnpublishListing: (agentId: string) => void;
-  onExtend: (id: string, addMins: number) => void;
+  onExtend: (id: string, totalMins: number) => void;
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
   onOpenDetail: (id: string, tab?: DrawerTab) => void;
@@ -5486,19 +5518,24 @@ export default function Dashboard() {
   const patchImage = (agentId: string, patch: Partial<RuntimeImage>) =>
     setRuntimeImages((prev) => ({ ...prev, [agentId]: { ...prev[agentId], ...patch } }));
   // Validate → prepare cycle: validating → valid → preparing → ready.
-  // §A "延长" — the API can update a sandbox's timeout after create, and the
-  // expiry is absolute: adding time pushes it out and never pulls it in. E2B's
-  // setTimeout has the same rule (the new expiry is the later of the two), so
-  // an accidental small value cannot cut a sandbox short.
-  const extendLifecycle = (id: string, addMins: number) => {
-    setInstances((prev) => prev.map((i) => {
-      if (i.id !== id) return i;
-      const total = durationMins(i.maxActive) + addMins;
-      return { ...i, maxActive: total % 60 === 0 ? `${total / 60}h` : `${total}min` };
-    }));
+  // §五 — the user sets a new total, not an increment. The API updates the
+  // sandbox's timeout, and the expiry only ever moves later: E2B's setTimeout
+  // takes whichever of the current and the new expiry is further out, so a
+  // small number cannot cut a running sandbox short by accident.
+  const setSandboxExpiry = (id: string, totalMins: number) => {
     const inst = instances.find((i) => i.id === id);
-    const left = inst ? remainingShort(lifecycleClock(inst).leftMins + addMins) : "";
-    pushToast("success", `Extended by ${durationLabel(addMins >= 60 ? `${addMins / 60}h` : `${addMins}min`)}${left ? ` — ${left} left` : ""}`);
+    const current = inst ? durationMins(inst.maxActive) : 0;
+    if (inst && totalMins <= current) {
+      pushToast("error", `${durationLabel(`${totalMins}min`)} is not later than the current expiry — nothing changed.`);
+      return;
+    }
+    setInstances((prev) => prev.map((i) => (
+      i.id === id
+        ? { ...i, maxActive: totalMins % 60 === 0 ? `${totalMins / 60}h` : `${totalMins}min` }
+        : i
+    )));
+    const left = inst ? remainingShort(Math.max(0, totalMins - lifecycleClock(inst).usedMins)) : "";
+    pushToast("success", `New expiry set${left ? ` — expires in ${left}` : ""}`);
   };
 
   const retryPreparation = (agentId: string) => {
@@ -5984,7 +6021,7 @@ export default function Dashboard() {
               onProvision={handleProvision}
               onAction={handleAction}
               onOpenDetail={openDetail}
-              onExtend={extendLifecycle}
+              onExtend={setSandboxExpiry}
               activeInstanceId={drawer?.id ?? null}
               onRetryPrep={retryPreparation}
               onEditTemplate={handleEditTemplate}
