@@ -2841,36 +2841,196 @@ function MiniCopy({ value }: { value: string }) {
 
 // F-03 Basic File I/O — single-file upload/download on a Running Runtime. No
 // directory browser. Files follow the Runtime disk lifecycle (not persistence).
+// ─── Files — v1.2 §G / Confluence §G ───────────────────────────────────────
+// The data plane gives POST/GET /files?path=… and nothing else: one file, by
+// explicit path, no listing endpoint. So this is a transfer form, not a file
+// manager, and it says so — otherwise people hunt for a tree that cannot exist.
+//
+// Upload and download are separate blocks with separate paths: a single shared
+// path field cannot tell you which direction it belongs to.
+type TransferState =
+  | { kind: "idle" }
+  | { kind: "busy"; pct: number; name: string }
+  | { kind: "done"; msg: string }
+  | { kind: "error"; reason: string; hint: string };
+
+const FILES_DEFAULT_DIR = "/home/user/";
+
+// The three failures the API actually distinguishes, plus what to do about each.
+function uploadFailure(path: string, sizeMb: number): { reason: string; hint: string } | null {
+  if (!path.startsWith("/")) {
+    return { reason: "Invalid path", hint: "Give an absolute path, e.g. /home/user/in.json" };
+  }
+  if (/^\/(proc|sys|dev)\//.test(path) || path.startsWith("/root/")) {
+    return { reason: "Permission denied", hint: "The sandbox user cannot write here. Try somewhere under /home/user/." };
+  }
+  if (sizeMb > 100) {
+    return { reason: "File too large", hint: `${sizeMb.toFixed(1)} MB exceeds the 100 MB per-file limit. Nothing was written — there is no partial file.` };
+  }
+  return null;
+}
+
+function downloadFailure(path: string): { reason: string; hint: string } | null {
+  if (!path.startsWith("/")) {
+    return { reason: "Invalid path", hint: "Give an absolute path, e.g. /home/user/result.json" };
+  }
+  if (/\/$/.test(path)) {
+    return { reason: "Not a file", hint: "There is no directory listing — name the file, not the folder." };
+  }
+  if (!/\.[A-Za-z0-9]+$/.test(path)) {
+    return { reason: "No such file", hint: "Nothing at that path. Run `ls` from the Run tab to check." };
+  }
+  return null;
+}
+
 function FilesSection({ inst }: { inst: Instance }) {
   const running = inst.status === "running";
-  const [path, setPath] = useState("/app/output/result.json");
-  const [msg, setMsg] = useState<string | null>(null);
-  const cellInput: React.CSSProperties = {
-    flex: 1, minWidth: 0, background: running ? C.pillBg : "rgba(255,255,255,0.02)", border: `1px solid ${C.border}`,
-    color: running ? C.fg : C.muted, fontFamily: "'GeistMono', monospace", fontSize: 12, padding: "7px 10px", borderRadius: 8, outline: "none",
+  const creating = inst.status === "pending";
+  const [upPath, setUpPath] = useState(FILES_DEFAULT_DIR);
+  const [downPath, setDownPath] = useState(`${FILES_DEFAULT_DIR}result.json`);
+  const [up, setUp] = useState<TransferState>({ kind: "idle" });
+  const [down, setDown] = useState<TransferState>({ kind: "idle" });
+  const timers = useRef<number[]>([]);
+  useEffect(() => () => { timers.current.forEach(window.clearTimeout); }, []);
+
+  const after = (ms: number, fn: () => void) => { timers.current.push(window.setTimeout(fn, ms)); };
+
+  // Why the whole section is inert, in the sandbox's own words.
+  const blocked =
+    creating ? "The Sandbox is still being created — file transfer opens once it reports Running."
+  : !running  ? `File transfer is available only while the Sandbox is Running (this one is ${statusLabel(inst.status)}). Suspend and Delete cancel an in-flight transfer.`
+  : null;
+
+  const startUpload = (file: File) => {
+    const target = upPath.endsWith("/") ? `${upPath}${file.name}` : upPath;
+    const sizeMb = file.size / (1024 * 1024);
+    const fail = uploadFailure(target, sizeMb);
+    setUp({ kind: "busy", pct: 0, name: file.name });
+    [18, 44, 71, 93].forEach((pct, i) => after(140 * (i + 1), () => setUp((s0) => (s0.kind === "busy" ? { ...s0, pct } : s0))));
+    after(760, () => {
+      if (fail) setUp({ kind: "error", ...fail });
+      else setUp({ kind: "done", msg: `Uploaded ${file.name} → ${target} · ${sizeMb < 1 ? `${Math.max(1, Math.round(file.size / 1024))} KB` : `${sizeMb.toFixed(1)} MB`}` });
+    });
   };
-  const btn = (label: string): React.CSSProperties => ({
-    fontFamily: FONT, fontSize: 12, fontWeight: 600, background: running ? "transparent" : "transparent",
-    color: running ? C.fg : "#5a5a5a", border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px",
+
+  const startDownload = () => {
+    const fail = downloadFailure(downPath);
+    const name = downPath.split("/").filter(Boolean).pop() || "file";
+    setDown({ kind: "busy", pct: 0, name });
+    [22, 58, 88].forEach((pct, i) => after(150 * (i + 1), () => setDown((s0) => (s0.kind === "busy" ? { ...s0, pct } : s0))));
+    after(700, () => {
+      if (fail) setDown({ kind: "error", ...fail });
+      else setDown({ kind: "done", msg: `Downloaded ${name} from ${downPath}` });
+    });
+  };
+
+  const inputStyle_: React.CSSProperties = {
+    flex: 1, minWidth: 0,
+    background: running ? C.pillBg : "rgba(255,255,255,0.02)",
+    border: `1px solid ${C.border}`,
+    color: running ? C.fg : C.muted,
+    fontFamily: MONO, fontSize: 12, padding: "7px 10px", borderRadius: 8, outline: "none",
+  };
+  const btnStyle = (primary = false): React.CSSProperties => ({
+    fontFamily: FONT, fontSize: 12, fontWeight: 600,
+    background: !running ? "transparent" : primary ? C.lime : "transparent",
+    color: !running ? "#5a5a5a" : primary ? C.limeText : C.fg,
+    border: primary && running ? "none" : `1px solid ${C.border}`,
+    borderRadius: 8, padding: "7px 12px",
     cursor: running ? "pointer" : "not-allowed", whiteSpace: "nowrap",
   });
+
+  const feedback = (st: TransferState) => {
+    if (st.kind === "idle") return null;
+    if (st.kind === "busy") {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>{st.name} · {st.pct}%</span>
+          <div style={{ height: 3, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+            <div style={{ width: `${st.pct}%`, height: "100%", background: C.lime, transition: "width .14s linear" }} />
+          </div>
+        </div>
+      );
+    }
+    if (st.kind === "done") {
+      return (
+        <span style={{ display: "inline-flex", alignItems: "flex-start", gap: 6, fontFamily: FONT, fontSize: 11, color: C.ok, lineHeight: "16px" }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M20 6 9 17l-5-5" /></svg>
+          {st.msg}
+        </span>
+      );
+    }
+    return (
+      <span style={{ display: "flex", alignItems: "flex-start", gap: 6, fontFamily: FONT, fontSize: 11, lineHeight: "16px", color: C.err }}>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 2 }}><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg>
+        <span><span style={{ fontWeight: 600 }}>{st.reason}</span> — <span style={{ color: C.muted }}>{st.hint}</span></span>
+      </span>
+    );
+  };
+
   return (
-    <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 8 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <h4 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: 0 }}>Files</h4>
         <ReleaseBadge r="R1" />
-        <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>R0 ships single-file upload/download over the API only</span>
+        <V2Badge />
+        <span style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>/files?path=</span>
       </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <input value={path} disabled={!running} onChange={(e) => setPath(e.target.value)} placeholder="/app/path/to/file" style={cellInput} />
-        <button disabled={!running} onClick={() => setMsg(`Uploaded to ${path}`)} style={btn("Upload")}>Choose file…</button>
-        <button disabled={!running} onClick={() => setMsg(`Downloaded ${path}`)} style={btn("Download")}>Download file</button>
+
+      {blocked && (
+        <span style={{ display: "flex", alignItems: "flex-start", gap: 7, fontFamily: FONT, fontSize: 11.5, color: C.warn, lineHeight: "16px", background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: 8, padding: "8px 11px" }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg>
+          {blocked}
+        </span>
+      )}
+
+      {/* Upload */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>Upload</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input
+            value={upPath}
+            disabled={!running}
+            onChange={(e) => { setUpPath(e.target.value); setUp({ kind: "idle" }); }}
+            placeholder="/home/user/"
+            style={inputStyle_}
+          />
+          <label style={btnStyle(true)}>
+            <input
+              type="file"
+              disabled={!running}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) startUpload(f); e.target.value = ""; }}
+              style={{ display: "none" }}
+            />
+            Choose file…
+          </label>
+        </div>
+        <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted }}>
+          End the path with <span style={{ fontFamily: MONO }}>/</span> to keep the file's own name, or give a full path to rename it.
+        </span>
+        {feedback(up)}
       </div>
-      {!running && <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>File transfer is available only while the sandbox is Running. Suspend and Delete cancel an in-flight transfer.</span>}
-      {running && msg && <span style={{ fontFamily: FONT, fontSize: 11, color: C.ok }}>{msg} (mock)</span>}
+
+      {/* Download */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>Download</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input
+            value={downPath}
+            disabled={!running}
+            onChange={(e) => { setDownPath(e.target.value); setDown({ kind: "idle" }); }}
+            placeholder="/home/user/result.json"
+            style={inputStyle_}
+          />
+          <button disabled={!running} onClick={startDownload} style={btnStyle()}>Download</button>
+        </div>
+        {feedback(down)}
+      </div>
+
       <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-        A path plus a file picker — one file at a time, no directory browser. A failed or oversize upload leaves no partial file;
-        a failed download errors rather than silently truncating.
+        One file at a time, by full path — <span style={{ color: C.fg }}>there is no directory browser</span>, because the
+        API has no listing endpoint. Use <span style={{ fontFamily: MONO }}>ls</span> from the Run tab to see what is there.
+        A failed or oversize upload leaves no partial file; a failed download errors rather than silently truncating.
       </span>
       <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
         Files are stored on this Sandbox. Deleting the Sandbox permanently deletes files unless saved through a Snapshot or exported.
