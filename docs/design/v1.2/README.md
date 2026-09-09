@@ -182,7 +182,52 @@ Overview》（space IE, page 515375122）。两份是**互补**的：
 3. 示例里的 `request_id` 幂等语义在 swagger 里没有对应，只有 `X-Request-ID` 头和
    建模板的 `Idempotency-Key`。重写后的示例不再宣称幂等保证。
 
-## H · Image 与 Spec 的归属
+## H · Run / Files / Terminal（按真实契约做实）
+
+三块都落在 sandbox 详情抽屉，tab 顺序 `Overview · Access · Files · Run · Terminal · Logs · Config`，
+后三个新增的挂 `V2`。行 `⋮` 菜单也加了 `Run` / `Terminal` / `Files` 三个直达入口
+（原来要点三下才摸得到），只在 Running 时出现。
+
+### Run —— `POST /executions`
+
+| 阶段 | 界面 |
+|---|---|
+| 输入 | 命令框 + Run；`cwd`（默认 `/home/user`）和 `timeout` 收在一个折叠里 |
+| 还在跑 | 脉冲点 + 实时耗时，输入框和 Run 锁住，`waiting for output…` |
+| 跑完 | **结果先行** `exit 0 · 2.6s`，输出在下面；底部 `execution_id` / `status` / `exit_code` / `cwd` |
+| 超时 | 保留已产出的部分输出，明说 Sandbox 没事、没有替你重试 |
+| 取消 | 只在跑的时候出现；`cancelling…` → `cancelled` |
+| 取消失败 | 命令先跑完了 —— 报真实结果并说明取消是晚到的，不假装取消成功 |
+
+`running` / `cancelled` 这两个态原来类型里就有、颜色也定了，但 `mockExec` 是同步返回成品的，
+**永远渲染不出来**。拆成 `mockExecStart` / `mockExecOutcome` 才让它们可达。
+
+去掉了原来那句「**Replaces** Open Shell」——§C 要的是两者并存。
+
+### Files —— `/files?path=`
+
+上传和下载**拆成两块、各自一个路径框**（共用一个说不清路径是给哪个方向的）。
+默认路径改成 `/home/user/`（跟 API 示例一致）。路径以 `/` 结尾保留原文件名，
+给全路径则重命名。传输中有进度条，失败按 API 能区分的三类给原因和做法：
+`Invalid path` / `Permission denied` / `File too large`（并说明没写入、没有半截文件），
+下载另有 `Not a file` / `No such file`。非 Running 时说清楚当前是什么状态。
+
+「没有目录浏览」那句补上了**为什么**（API 没有列目录接口），并指向 Run 里的 `ls`。
+
+### Terminal（全新）—— `wss://{sandbox_key}.{domain}/shell/connect`
+
+`connecting → connected → closed / dropped` 四态，`Reconnect` 回到连接中。
+`cd` 保留且提示符跟着变（这是跟 Run 的根本区别），Ctrl-C 打断当前行，
+Ctrl-D / `exit` 关闭，↑↓ 翻历史，`clear` 清屏。
+
+§C 特别点的两件事都做实了：
+- **拖动改大小真的传下去** —— `ResizeObserver` 量真实像素 → 算 cols/rows → 走
+  `resize` 控制消息，终端里能看到 `[control] resize → 67×15`
+- **关闭真的断开** —— `Close session` 发 `close`，不是把面板藏起来
+
+另有一个 `Simulate drop` 按钮（虚线框，仅原型用）走掉线 → 重连那条路。
+
+## I · Image 与 Spec 的归属
 
 Confluence §H 定了 Spec 只能在 Template 上改。**Image 同理**：
 
@@ -190,7 +235,7 @@ Confluence §H 定了 Spec 只能在 Template 上改。**Image 同理**：
 - **Launch 面板**：只读展示，并明说「Set by this Agent's Sandbox Template — change it there with Replace Image, not per sandbox」
 - Template 拥有 Image + Spec；Launch 拥有 IDC、model、lifecycle、env
 
-## I · 命名与错字（其余）
+## J · 命名与错字（其余）
 
 | 位置 | 现状 | 改成 |
 |---|---|---|

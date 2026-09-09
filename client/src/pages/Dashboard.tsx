@@ -13,6 +13,7 @@ import { C as baseC, FONT, MONO } from "@/lib/tokens";
 import { SEED_AGENTS } from "@/lib/seedAgents";
 import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
 import V2Badge from "@/components/V2Badge";
+import TerminalV2 from "@/components/TerminalV2";
 import {
   PublishStatusEntry, PublishStatusModal, UnpublishDialog,
   type PublishRow, type ReviewStatus, type ListingActionHandlers,
@@ -800,6 +801,15 @@ const IconRestart = ({ size = 11 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" />
   </svg>
+);
+const IconPlay = ({ size = 11 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+);
+const IconTerminal = ({ size = 11 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6" /><path d="M12 19h8" /></svg>
+);
+const IconFile = ({ size = 11 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 2v6h6" /><path d="M4 2h10l6 6v14H4z" /></svg>
 );
 const IconNetwork = ({ size = 11 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -2036,6 +2046,29 @@ function InstanceRowMenu({
           {lifecycle.length > 0 && (
             <div style={{ height: 1, background: C.borderSoft, margin: "4px 6px" }} />
           )}
+          {/* Confluence §B/§C — Run and Terminal were three clicks deep. They
+              open the drawer straight onto their own tab. Running only, since
+              neither has anything to talk to otherwise. */}
+          {inst.status === "running" && (
+            <>
+              <button onClick={() => { setOpen(false); onOpenDetail(inst.id, "run"); }} style={itemStyle(false)}>
+                <IconPlay />
+                <span style={{ flex: 1 }}>Run</span>
+                <V2Badge />
+              </button>
+              <button onClick={() => { setOpen(false); onOpenDetail(inst.id, "terminal"); }} style={itemStyle(false)}>
+                <IconTerminal />
+                <span style={{ flex: 1 }}>Terminal</span>
+                <V2Badge />
+              </button>
+              <button onClick={() => { setOpen(false); onOpenDetail(inst.id, "files"); }} style={itemStyle(false)}>
+                <IconFile />
+                <span style={{ flex: 1 }}>Files</span>
+                <V2Badge />
+              </button>
+              <div style={{ height: 1, background: C.borderSoft, margin: "4px 6px" }} />
+            </>
+          )}
           {/* Kept as a fallback path to the drawer for keyboard/menu users —
               the row itself is the primary way in. */}
           <button onClick={() => { setOpen(false); onOpenDetail(inst.id); }} style={itemStyle(false)}>
@@ -3215,13 +3248,16 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
 // list so the list stays visible and the next instance is one click away.
 // Everything that used to be stacked in one scrolling popup is grouped into
 // tabs, and the endpoint confirmations are inline instead of a second modal.
-type DrawerTab = "overview" | "access" | "files" | "run" | "logs" | "config";
+type DrawerTab = "overview" | "access" | "files" | "run" | "terminal" | "logs" | "config";
 const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean }[] = [
   { key: "overview", label: "Overview" },
   // Access / Files / Run are the V2.0 change set (sections D, G, B).
   { key: "access",   label: "Access", v2: true },
   { key: "files",    label: "Files",  v2: true },
   { key: "run",      label: "Run",  runningOnly: true, v2: true },
+  // Confluence §C — a persistent TTY, distinct from Run. Running only: there
+  // is nothing to attach to before that.
+  { key: "terminal", label: "Terminal", runningOnly: true, v2: true },
   { key: "logs",     label: "Logs" },
   { key: "config",   label: "Config" },
 ];
@@ -3426,6 +3462,15 @@ function InstanceDrawer({
         {activeTab === "access" && <AccessSection inst={inst} endpoints={endpoints} />}
         {activeTab === "files"  && <FilesSection inst={inst} />}
         {activeTab === "run"    && <ShellPane inst={inst} />}
+        {activeTab === "terminal" && (
+          <TerminalV2
+            sandboxId={inst.id}
+            sandboxKey={midId(inst.id)}
+            domain="sandbox.gmi.cloud"
+            canConnect={running}
+            blockedReason={`A Terminal needs a Running Sandbox — this one is ${statusLabel(inst.status)}.`}
+          />
+        )}
         {activeTab === "logs"   && <LogsPane inst={inst} />}
 
         {activeTab === "config" && (
