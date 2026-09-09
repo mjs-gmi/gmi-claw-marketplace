@@ -1447,7 +1447,11 @@ function LogsPane({ inst }: { inst: Instance }) {
 // Mock provider behavior for one exec. Mirrors the field set fixed in the PRD:
 // out = execution_id, status, exit_code, stdout, stderr, stdout_truncated,
 // stderr_truncated, termination_reason.
-type ExecStatus = "running" | "succeeded" | "failed" | "timed_out" | "cancelled";
+// "cancelling" is a UI-only waypoint: POST /executions/{id}/cancel is accepted,
+// then the execution settles into cancelled — or, if the process finished first,
+// into whatever it actually became. "cancel_failed" keeps that visible instead
+// of leaving the button spinning.
+type ExecStatus = "running" | "cancelling" | "cancelled" | "cancel_failed" | "succeeded" | "failed" | "timed_out";
 interface Execution {
   id: string;
   command: string;
@@ -1458,21 +1462,49 @@ interface Execution {
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
   terminationReason?: string;
+  /** Advanced fields sent with the run, echoed back on the result. */
+  cwd: string;
+  timeoutSeconds: number;
+  /** Wall-clock ms; live while running, frozen once it settles. */
+  startedAt: number;
+  elapsedMs: number;
 }
 const EXEC_STATUS_COLOR: Record<ExecStatus, string> = {
-  running: "#fbbf24", succeeded: C.ok, failed: C.err, timed_out: "#fb923c", cancelled: "#737373",
+  running: "#fbbf24", cancelling: "#fbbf24", cancelled: "#737373", cancel_failed: C.err,
+  succeeded: C.ok, failed: C.err, timed_out: "#fb923c",
 };
 function newExecutionId(): string {
   const r = () => Math.random().toString(16).slice(2, 8);
   return `exec_${r()}${r()}`;
 }
-function mockExec(cmd: string, inst: Instance): Execution {
+// A submitted run starts in `running` with no result yet — the real call only
+// returns an execution_id when wait=false, and even wait=true can outlive the
+// wait window. `mockExecOutcome` is what it settles into.
+function mockExecStart(cmd: string, cwd: string, timeoutSeconds: number): Execution {
+  return {
+    id: newExecutionId(), command: cmd.trim(), status: "running", exitCode: null,
+    stdout: "", stderr: "", stdoutTruncated: false, stderrTruncated: false,
+    cwd, timeoutSeconds, startedAt: Date.now(), elapsedMs: 0,
+  };
+}
+
+// How long the mock pretends each command takes, so the running state is
+// actually observable and cancel has something to interrupt.
+function mockExecDurationMs(cmd: string): number {
   const c = cmd.trim();
-  const base = { id: newExecutionId(), command: c, stderr: "", stdoutTruncated: false, stderrTruncated: false };
+  if (/\bsleep\b|\btrain\b/.test(c)) return 60_000;          // long enough to cancel
+  if (/\bfind\b|\bdump\b|\byes\b/.test(c)) return 4_200;
+  if (c.startsWith("python") || c.startsWith("node") || c.startsWith("./")) return 2_600;
+  return 700;
+}
+
+function mockExecOutcome(cmd: string, inst: Instance): Partial<Execution> {
+  const c = cmd.trim();
+  const base = { stderr: "", stdoutTruncated: false, stderrTruncated: false };
   // execution_timeout is server-side: it kills the process group and returns
   // timed_out with partial output. The Runtime stays Running (rule 4).
   if (/\bsleep\b|\btrain\b/.test(c)) {
-    return { ...base, status: "timed_out", exitCode: null, stdout: "step 1/50 …\nstep 2/50 …", stderr: "", terminationReason: "execution_timeout (300s) — process group killed" };
+    return { ...base, status: "timed_out", exitCode: null, stdout: "step 1/50 …\nstep 2/50 …", stderr: "", terminationReason: "execution_timeout reached — process group killed. The Sandbox is unaffected and nothing was retried for you." };
   }
   if (/\bfind\b|\bdump\b|\byes\b/.test(c)) {
     return { ...base, status: "succeeded", exitCode: 0, stdout: "…\n(1.9 MB of output)", stdoutTruncated: true };
@@ -1493,18 +1525,98 @@ function mockExec(cmd: string, inst: Instance): Execution {
   return { ...base, status: "failed", exitCode: 127, stdout: "", stderr: `sh: command not found: ${c.split(" ")[0]}` };
 }
 
-// Run Command (§4.8, backed by exec F-02) — ONE command per submission, Running
-// only. Deliberately not a terminal: no persistent session, stdin, PTY, retained
-// cd, or Ctrl-C. Q-18 tracks the real shell story.
+// Cancel is accepted, not instant. A command that was already finishing wins.
+function mockCancelSettles(cmd: string): "cancelled" | "cancel_failed" {
+  return /\bdump\b/.test(cmd) ? "cancel_failed" : "cancelled";
+}
+
+function execDurationLabel(ms: number): string {
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+// The headline for a settled run: result first, output second (§B).
+function execResultLine(ex: Execution): { text: string; color: string } {
+  const d = execDurationLabel(ex.elapsedMs);
+  switch (ex.status) {
+    case "succeeded":     return { text: `exit ${ex.exitCode} · ${d}`, color: C.ok };
+    case "failed":        return { text: `exit ${ex.exitCode} · ${d}`, color: C.err };
+    case "timed_out":     return { text: `timed out after ${ex.timeoutSeconds}s · ${d}`, color: "#fb923c" };
+    case "cancelled":     return { text: `cancelled · ${d}`, color: "#a3a3a3" };
+    case "cancel_failed": return { text: `cancel failed · still ${d}`, color: C.err };
+    case "cancelling":    return { text: `cancelling… · ${d}`, color: C.warn };
+    case "running":       return { text: `running · ${d}`, color: C.warn };
+  }
+}
+
+// Run Command — ONE command per submission, Running only. Backed by the data
+// plane: POST /executions?wait=… returns an execution_id, and
+// POST /executions/{id}/cancel (empty body) interrupts one that is still going.
+//
+// This is not the Terminal. Run submits a command and reports its result; the
+// Terminal tab is a persistent TTY with stdin and Ctrl-C. Both exist.
 function ShellPane({ inst }: { inst: Instance }) {
   const [cmd, setCmd] = useState("");
+  const [cwd, setCwd] = useState("/home/user");
+  const [timeoutSeconds, setTimeoutSeconds] = useState(300);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [history, setHistory] = useState<Execution[]>([]);
+  // Drives the live duration readout without re-rendering the whole drawer.
+  const [, setTick] = useState(0);
+  const timers = useRef<number[]>([]);
+
+  const live = history[0]?.status === "running" || history[0]?.status === "cancelling";
+
+  // One interval while anything is in flight; cleared as soon as it settles.
+  useEffect(() => {
+    if (!live) return;
+    const iv = window.setInterval(() => setTick((t) => t + 1), 100);
+    return () => window.clearInterval(iv);
+  }, [live]);
+
+  // Never leave a pending settle behind when the drawer closes.
+  useEffect(() => () => { timers.current.forEach(window.clearTimeout); }, []);
+
+  const settle = (id: string, patch: Partial<Execution>) => {
+    setHistory((h) => h.map((e) => (
+      e.id === id
+        ? { ...e, ...patch, elapsedMs: patch.elapsedMs ?? Date.now() - e.startedAt }
+        : e
+    )));
+  };
 
   const run = () => {
     const c = cmd.trim();
-    if (!c) return;
-    setHistory((h) => [mockExec(c, inst), ...h].slice(0, 4));
+    if (!c || live) return;
+    const ex = mockExecStart(c, cwd, timeoutSeconds);
+    setHistory((h) => [ex, ...h].slice(0, 4));
     setCmd("");
+    const t = window.setTimeout(
+      () => settle(ex.id, mockExecOutcome(c, inst)),
+      mockExecDurationMs(c),
+    );
+    timers.current.push(t);
+  };
+
+  const cancel = (ex: Execution) => {
+    settle(ex.id, { status: "cancelling", elapsedMs: Date.now() - ex.startedAt });
+    const t = window.setTimeout(() => {
+      const outcome = mockCancelSettles(ex.command);
+      if (outcome === "cancelled") {
+        settle(ex.id, {
+          status: "cancelled",
+          terminationReason: "Cancelled on request — the process group was killed. The Sandbox is unaffected.",
+        });
+      } else {
+        // The command finished before cancel landed; say so rather than
+        // reporting a cancel that did not happen.
+        settle(ex.id, {
+          ...mockExecOutcome(ex.command, inst),
+          status: "cancel_failed",
+          terminationReason: "Cancel arrived after the command had already finished — the result below is the real one.",
+        });
+      }
+    }, 900);
+    timers.current.push(t);
   };
 
   const field = (label: string, value: React.ReactNode, color?: string) => (
@@ -1513,53 +1625,146 @@ function ShellPane({ inst }: { inst: Instance }) {
     </span>
   );
 
+  const advInput: React.CSSProperties = {
+    background: C.pillBg, color: C.fg, border: `1px solid ${C.border}`, outline: "none",
+    borderRadius: 7, padding: "6px 9px", fontFamily: MONO, fontSize: 11.5, minWidth: 0,
+  };
+
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-          Run Command <ReleaseBadge r="R0" /> · POST /runtimes/{midId(inst.id)}/exec
+          Run Command <ReleaseBadge r="R0" /> <V2Badge /> · POST /executions
         </span>
         <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>one command per submission</span>
       </div>
+
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <input
           value={cmd}
           onChange={(e) => setCmd(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") run(); }}
-          placeholder="e.g. python main.py --input /app/input/in.json"
-          style={{ flex: 1, background: C.pillBg, color: C.fg, border: `1px solid ${C.border}`, outline: "none", borderRadius: 8, padding: "8px 10px", fontFamily: MONO, fontSize: 12 }}
+          placeholder="e.g. python main.py --input /home/user/in.json"
+          disabled={live}
+          style={{
+            flex: 1, background: live ? "rgba(255,255,255,0.02)" : C.pillBg,
+            color: live ? C.muted : C.fg,
+            border: `1px solid ${C.border}`, outline: "none", borderRadius: 8,
+            padding: "8px 10px", fontFamily: MONO, fontSize: 12,
+          }}
         />
-        <button onClick={run} style={{ fontFamily: FONT, fontSize: 12, fontWeight: 600, background: C.lime, color: C.limeText, border: "none", borderRadius: 8, padding: "8px 16px", cursor: "pointer" }}>Run</button>
+        <button
+          onClick={run}
+          disabled={live || !cmd.trim()}
+          style={{
+            fontFamily: FONT, fontSize: 12, fontWeight: 600,
+            background: live || !cmd.trim() ? "#3a3a1f" : C.lime,
+            color: live || !cmd.trim() ? "#6b6b52" : C.limeText,
+            border: "none", borderRadius: 8, padding: "8px 16px",
+            cursor: live || !cmd.trim() ? "not-allowed" : "pointer",
+          }}
+        >
+          Run
+        </button>
       </div>
-      <span style={{ display: "block", marginTop: 6, fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-        Replaces Open Shell for Runtime 2.0 instances. Not a terminal — no persistent session, stdin, PTY, retained <span style={{ fontFamily: MONO }}>cd</span>, or Ctrl-C.
-        Over the parallel execution cap a run is rejected immediately as retryable, never silently queued.
+
+      {/* Advanced — collapsed, because the defaults are right nearly always */}
+      <button
+        onClick={() => setShowAdvanced((v) => !v)}
+        style={{
+          alignSelf: "flex-start", marginTop: 7,
+          display: "inline-flex", alignItems: "center", gap: 5,
+          fontFamily: FONT, fontSize: 11, fontWeight: 500, color: C.muted,
+          background: "transparent", border: "none", padding: 0, cursor: "pointer",
+        }}
+      >
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ transform: showAdvanced ? "rotate(90deg)" : "none", transition: "transform .15s" }}>
+          <path d="m9 18 6-6-6-6" />
+        </svg>
+        Working directory · timeout
+      </button>
+      {showAdvanced && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 110px", gap: 8, marginTop: 7 }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted }}>cwd</span>
+            <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={live} style={advInput} />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted }}>timeout (s)</span>
+            <input
+              type="number" min={1} value={timeoutSeconds} disabled={live}
+              onChange={(e) => setTimeoutSeconds(Math.max(1, Number(e.target.value) || 1))}
+              style={advInput}
+            />
+          </label>
+        </div>
+      )}
+
+      <span style={{ display: "block", marginTop: 8, fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+        One command at a time. <span style={{ color: C.fg }}>This is not a persistent terminal</span> — no stdin,
+        no retained <span style={{ fontFamily: MONO }}>cd</span>, no Ctrl-C. For interactive work use the Terminal tab.
         Closing this pane does not stop the command, and every result stays retrievable by
         <span style={{ fontFamily: MONO }}> execution_id</span> after the Sandbox is suspended, fails, or is deleted.
-        Suspend and Delete cancel a running execution; the result is kept.
       </span>
-      {history.map((ex, i) => (
-        <div key={ex.id} style={{ marginTop: 10, background: "#000", border: `1px solid ${i === 0 ? C.border : C.borderSoft}`, borderRadius: 6, padding: "10px 12px", fontFamily: MONO, fontSize: 12, lineHeight: "20px", opacity: i === 0 ? 1 : 0.72 }}>
-          <div style={{ color: C.lime }}>$ {ex.command}</div>
-          {ex.stdout && <div style={{ color: C.fg, whiteSpace: "pre-wrap" }}>{ex.stdout}</div>}
-          {ex.stderr && <div style={{ color: "#fca5a5", whiteSpace: "pre-wrap" }}>{ex.stderr}</div>}
-          {(ex.stdoutTruncated || ex.stderrTruncated) && (
-            <div style={{ color: C.warn, fontFamily: FONT, fontSize: 11, marginTop: 2 }}>
-              Output truncated at the size limit — {ex.stdoutTruncated ? "stdout_truncated" : "stderr_truncated"}: true. The call still succeeded.
+
+      {history.map((ex, i) => {
+        const settling = ex.status === "running" || ex.status === "cancelling";
+        const elapsed = settling ? Date.now() - ex.startedAt : ex.elapsedMs;
+        const result = execResultLine({ ...ex, elapsedMs: elapsed });
+        return (
+          <div key={ex.id} style={{ marginTop: 10, background: "#000", border: `1px solid ${i === 0 ? C.border : C.borderSoft}`, borderRadius: 6, padding: "10px 12px", fontFamily: MONO, fontSize: 12, lineHeight: "20px", opacity: i === 0 ? 1 : 0.72 }}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+              <span style={{ color: C.lime, minWidth: 0, wordBreak: "break-all" }}>$ {ex.command}</span>
+              {/* Cancel only exists while there is something to interrupt */}
+              {ex.status === "running" && (
+                <button
+                  onClick={() => cancel(ex)}
+                  style={{
+                    flexShrink: 0, fontFamily: FONT, fontSize: 11, fontWeight: 600,
+                    color: C.err, background: "transparent", border: `1px solid ${C.err}55`,
+                    borderRadius: 6, padding: "2px 9px", cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+              )}
+              {ex.status === "cancelling" && (
+                <span style={{ flexShrink: 0, fontFamily: FONT, fontSize: 11, color: C.warn }}>Cancelling…</span>
+              )}
             </div>
-          )}
-          {ex.terminationReason && (
-            <div style={{ color: "#fdba74", fontFamily: FONT, fontSize: 11, marginTop: 2 }}>
-              {ex.terminationReason} · the Sandbox stays Running.
+
+            {/* Result first, output second */}
+            <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 4, fontFamily: FONT, fontSize: 11.5, fontWeight: 600, color: result.color }}>
+              {settling && (
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: C.warn, animation: "pulse 1.2s ease-in-out infinite", flexShrink: 0 }} />
+              )}
+              {result.text}
             </div>
-          )}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.borderSoft}` }}>
-            {field("execution_id", ex.id)}
-            {field("status", ex.status, EXEC_STATUS_COLOR[ex.status])}
-            {field("exit_code", ex.exitCode === null ? "null" : ex.exitCode, ex.exitCode === 0 ? C.ok : ex.exitCode === null ? C.muted : C.err)}
+
+            {ex.stdout && <div style={{ color: C.fg, whiteSpace: "pre-wrap", marginTop: 4 }}>{ex.stdout}</div>}
+            {ex.stderr && <div style={{ color: "#fca5a5", whiteSpace: "pre-wrap" }}>{ex.stderr}</div>}
+            {settling && !ex.stdout && (
+              <div style={{ color: C.muted, marginTop: 4 }}>waiting for output…</div>
+            )}
+            {(ex.stdoutTruncated || ex.stderrTruncated) && (
+              <div style={{ color: C.warn, fontFamily: FONT, fontSize: 11, marginTop: 2 }}>
+                Output truncated at the size limit — {ex.stdoutTruncated ? "stdout_truncated" : "stderr_truncated"}: true. The call still succeeded.
+              </div>
+            )}
+            {ex.terminationReason && (
+              <div style={{ color: "#fdba74", fontFamily: FONT, fontSize: 11, marginTop: 2, lineHeight: "16px" }}>
+                {ex.terminationReason}
+              </div>
+            )}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.borderSoft}` }}>
+              {field("execution_id", ex.id)}
+              {field("status", ex.status, EXEC_STATUS_COLOR[ex.status])}
+              {field("exit_code", ex.exitCode === null ? "null" : ex.exitCode, ex.exitCode === 0 ? C.ok : ex.exitCode === null ? C.muted : C.err)}
+              {field("cwd", ex.cwd, C.muted)}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </>
   );
 }
