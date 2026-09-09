@@ -22,6 +22,9 @@ function Router() {
       <Route path={"/marketplace"} component={Marketplace} />
       <Route path={"/marketplace/:id"} component={ClawDetail} />
       <Route path={"/dashboard"} component={Dashboard} />
+      {/* A sandbox detail is its own place — linkable, bookmarkable, and the
+          back button works. Mirrors /sandboxes/[id]/<tab> elsewhere. */}
+      <Route path={"/dashboard/sandbox/:sandboxId/:tab?"} component={Dashboard} />
       <Route path={"/plans"} component={Plans} />
       <Route path={"/deploy"} component={DeployWizard} />
       <Route path={"/list-claw"} component={ListClaw} />

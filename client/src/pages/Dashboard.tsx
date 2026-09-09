@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, Link } from "wouter";
+import { useLocation, Link, useRoute } from "wouter";
 import {
   loadSubscription, isSubscribed, getPlan,
   ALL_MODELS, STANDARD_MODELS, getModel, modelName, isStandardModel, paygUsdPer1M,
@@ -13,7 +13,7 @@ import { C as baseC, FONT, MONO } from "@/lib/tokens";
 import { SEED_AGENTS } from "@/lib/seedAgents";
 import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
 import V2Badge from "@/components/V2Badge";
-import TerminalV2 from "@/components/TerminalV2";
+import TerminalV2, { type TerminalMode } from "@/components/TerminalV2";
 import NoApiBadge, { NoApiNote, NO_API_REASON } from "@/components/NoApiBadge";
 import {
   PublishStatusEntry, PublishStatusModal, UnpublishDialog,
@@ -3334,15 +3334,18 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
 // list so the list stays visible and the next instance is one click away.
 // Everything that used to be stacked in one scrolling popup is grouped into
 // tabs, and the endpoint confirmations are inline instead of a second modal.
+// "run" is kept as an alias so older links still resolve; it lands on the
+// Terminal in one-shot mode.
 type DrawerTab = "overview" | "access" | "files" | "run" | "terminal" | "logs" | "config";
+const TAB_ALIAS: Partial<Record<DrawerTab, DrawerTab>> = { run: "terminal" };
 const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean; noApi?: boolean }[] = [
   { key: "overview", label: "Overview" },
   // Access / Files / Run are the V2.0 change set (sections D, G, B).
   { key: "access",   label: "Access", v2: true },
   { key: "files",    label: "Files",  v2: true },
-  { key: "run",      label: "Run",  runningOnly: true, v2: true },
-  // Confluence §C — a persistent TTY, distinct from Run. Running only: there
-  // is nothing to attach to before that.
+  // Terminal holds both modes — the TTY and one-shot exec. They are the same
+  // data plane, so E2B's dashboard and Vercel's Connect tab both keep them in
+  // one place; two adjacent "run something" tabs is how people get lost.
   { key: "terminal", label: "Terminal", runningOnly: true, v2: true },
   // No /logs endpoint in the swagger — the tab stays, marked.
   { key: "logs",     label: "Logs", noApi: true },
@@ -3352,7 +3355,8 @@ const DRAWER_WIDTH = 560;
 
 function InstanceDrawer({
   inst, deploymentName, agentVersion, endpoints, idc, product, tab, onTab,
-  execHistory, setExecHistory, onAction, onPatchMetadata, onClose,
+  execHistory, setExecHistory, termMode, onTermMode, variant = "drawer", tabHref,
+  onAction, onPatchMetadata, onClose,
 }: {
   inst: Instance | null;
   deploymentName: string;
@@ -3364,6 +3368,12 @@ function InstanceDrawer({
   onTab: (t: DrawerTab) => void;
   execHistory: Execution[];
   setExecHistory: (fn: (prev: Execution[]) => Execution[]) => void;
+  termMode: TerminalMode;
+  onTermMode: (m: TerminalMode) => void;
+  /** "page" renders full width at its own URL; "drawer" is the slide-over. */
+  variant?: "drawer" | "page";
+  /** Tabs are links in page mode, so the URL is the state. */
+  tabHref?: (t: DrawerTab) => string;
   onAction: (id: string, action: RowAction) => void;
   onPatchMetadata: (id: string, next: MetaEntry[]) => void;
   onClose: () => void;
@@ -3417,11 +3427,21 @@ function InstanceDrawer({
   );
 
   const visibleTabs = DRAWER_TABS.filter((t) => !t.runningOnly || running);
-  const activeTab = visibleTabs.some((t) => t.key === tab) ? tab : "overview";
+  const resolvedTab = TAB_ALIAS[tab] ?? tab;
+  const activeTab = visibleTabs.some((t) => t.key === resolvedTab) ? resolvedTab : "overview";
 
+  const isPage = variant === "page";
   return (
     <aside
-      style={{
+      style={isPage ? {
+        // Page mode: its own URL, full width, no shadow, no animation — this is
+        // the primary surface, matching how E2B's dashboard routes
+        // /sandboxes/[id]/terminal and /filesystem rather than burying them.
+        width: "100%",
+        background: "transparent",
+        display: "flex", flexDirection: "column",
+        minHeight: 0,
+      } : {
         position: "fixed", top: 0, right: 0, bottom: 0, width: DRAWER_WIDTH, maxWidth: "100%",
         zIndex: 900,
         background: C.cardSolid,
@@ -3442,13 +3462,18 @@ function InstanceDrawer({
               {inst.id}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            aria-label="Close sandbox detail"
-            style={{ flexShrink: 0, width: 28, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "transparent", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 7, cursor: "pointer" }}
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
-          </button>
+          {/* Only the drawer gets a close affordance. On a page the breadcrumb
+              and the browser's own back button are the way out; an ✕ beside
+              them reads as "dismiss this panel" on something that is not one. */}
+          {!isPage && (
+            <button
+              onClick={onClose}
+              aria-label={isPage ? "Back to My Agents" : "Close sandbox detail"}
+              style={{ flexShrink: 0, width: 28, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "transparent", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 7, cursor: "pointer" }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+            </button>
+          )}
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -3482,11 +3507,14 @@ function InstanceDrawer({
       <div style={{ display: "flex", gap: 2, padding: "0 12px", borderBottom: `1px solid ${C.borderSoft}`, overflowX: "auto" }}>
         {visibleTabs.map((t) => {
           const on = t.key === activeTab;
+          const Tag: any = isPage && tabHref ? Link : "button";
+          const nav = isPage && tabHref ? { href: tabHref(t.key) } : { onClick: () => onTab(t.key) };
           return (
-            <button
+            <Tag
               key={t.key}
-              onClick={() => onTab(t.key)}
+              {...nav}
               style={{
+                textDecoration: "none",
                 fontFamily: FONT, fontSize: 12.5, fontWeight: on ? 600 : 500,
                 color: on ? C.fg : C.muted,
                 background: "transparent", border: "none",
@@ -3498,7 +3526,7 @@ function InstanceDrawer({
               {t.label}
               {t.v2 && <V2Badge />}
               {t.noApi && <NoApiBadge />}
-            </button>
+            </Tag>
           );
         })}
       </div>
@@ -3557,7 +3585,6 @@ function InstanceDrawer({
 
         {activeTab === "access" && <AccessSection inst={inst} endpoints={endpoints} />}
         {activeTab === "files"  && <FilesSection inst={inst} />}
-        {activeTab === "run"    && <ShellPane inst={inst} history={execHistory} setHistory={setExecHistory} />}
         {activeTab === "terminal" && (
           <TerminalV2
             sandboxId={inst.id}
@@ -3565,6 +3592,9 @@ function InstanceDrawer({
             domain="sandbox.gmi.cloud"
             canConnect={running}
             blockedReason={`A Terminal needs a Running Sandbox — this one is ${statusLabel(inst.status)}.`}
+            mode={termMode}
+            onMode={onTermMode}
+            oneShot={<ShellPane inst={inst} history={execHistory} setHistory={setExecHistory} />}
           />
         )}
         {activeTab === "logs"   && <LogsPane inst={inst} />}
@@ -5067,7 +5097,9 @@ export default function Dashboard() {
   const [drawer, setDrawer] = useState<{ id: string; tab: DrawerTab } | null>(null);
   const openDetail = (id: string, tab: DrawerTab = "overview") => {
     setProvisionForAgentId(null);
-    setDrawer({ id, tab });
+    setDrawer(null);
+    if (tab === "run") setTermMode("oneshot");
+    setLocation(sandboxHref(id, tab));
   };
   // F-08 — launcher-owned Saved Launch Configurations, keyed by Agent.
   const [savedConfigs, setSavedConfigs] = useState<Record<string, SavedLaunchConfig>>(INITIAL_SAVED_CONFIGS);
@@ -5094,6 +5126,21 @@ export default function Dashboard() {
   // Provision modal — open per-task override modal first, then provision on submit
   const [provisionForAgentId, setProvisionForAgentId] = useState<string | null>(null);
   // v1.2 §D — Publish Status modal + its unpublish confirmation
+  // A sandbox detail is a place, not a panel: /dashboard/sandbox/:id/:tab is
+  // linkable, bookmarkable and survives the back button. The drawer stays for
+  // the quick peek off a row hover, but the URL is the source of truth.
+  const [onSandboxRoute, routeParams] = useRoute("/dashboard/sandbox/:sandboxId/:tab?");
+  const routeSandboxId = onSandboxRoute ? routeParams?.sandboxId : undefined;
+  const routeTab = (onSandboxRoute ? (routeParams?.tab as DrawerTab | undefined) : undefined) ?? "overview";
+  const [termMode, setTermMode] = useState<TerminalMode>("session");
+  // An older /run link should land on the Terminal in one-shot mode.
+  useEffect(() => {
+    if (routeParams?.tab === "run") setTermMode("oneshot");
+  }, [routeParams?.tab]);
+
+  const sandboxHref = (id: string, tab: DrawerTab = "overview") =>
+    `/dashboard/sandbox/${encodeURIComponent(id)}/${tab}`;
+
   // Run history per sandbox. Lives here so it survives closing the tab or the
   // drawer — the pane promises results stay retrievable by execution_id.
   const [execHistory, setExecHistory] = useState<Record<string, Execution[]>>({});
@@ -5441,6 +5488,77 @@ export default function Dashboard() {
   const drawerInst = drawer ? instances.find((i) => i.id === drawer.id) ?? null : null;
   const drawerAgent = drawerInst ? allAgents.find((a) => a.id === drawerInst.agentId) : undefined;
 
+  // The routed sandbox — the page form of the same panes.
+  const pageInst = routeSandboxId ? instances.find((i) => i.id === routeSandboxId) ?? null : null;
+  const pageAgent = pageInst ? allAgents.find((a) => a.id === pageInst.agentId) : undefined;
+
+  const detailPaneFor = (
+    inst: Instance,
+    agent: MyAgent | undefined,
+    variant: "drawer" | "page",
+  ) => (
+    <InstanceDrawer
+      variant={variant}
+      inst={inst}
+      deploymentName={agent?.name ?? ""}
+      agentVersion={agentVersionName(inst.agentId, agent?.name)}
+      endpoints={endpointsForAgent(agent)}
+      idc={regionLabel(inst.config?.idc ?? agent?.region)}
+      product={productForTier(agent?.tier)}
+      tab={variant === "page" ? routeTab : (drawer?.tab ?? "overview")}
+      onTab={(tab) => {
+        if (variant === "page") setLocation(sandboxHref(inst.id, tab));
+        else setDrawer((d) => (d ? { ...d, tab } : d));
+      }}
+      tabHref={variant === "page" ? (t) => sandboxHref(inst.id, t) : undefined}
+      execHistory={execHistory[inst.id] ?? []}
+      setExecHistory={(fn) => setExecHistory((m) => ({ ...m, [inst.id]: fn(m[inst.id] ?? []) }))}
+      termMode={termMode}
+      onTermMode={setTermMode}
+      onAction={handleAction}
+      onPatchMetadata={patchMetadata}
+      onClose={() => { if (variant === "page") setLocation("/dashboard"); else setDrawer(null); }}
+    />
+  );
+
+  // A routed sandbox replaces the list, the way /sandboxes/[id] does elsewhere.
+  if (onSandboxRoute) {
+    return (
+      <div style={{ minHeight: "100vh", background: C.bg, color: C.fg, fontFamily: FONT }}>
+        <style>{`
+          @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(1.6); } }
+          @keyframes spin { to { transform: rotate(360deg); } }
+        `}</style>
+        <Topbar />
+        <Navbar />
+        <div style={{ marginLeft: 210, paddingTop: 40, display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+          <div style={{ padding: "20px 32px 8px" }}>
+            <Link
+              href="/dashboard"
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 12, color: C.muted, textDecoration: "none" }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+              My Agents
+              {pageAgent && <span style={{ color: C.fg }}> · {pageAgent.name}</span>}
+            </Link>
+          </div>
+          <div style={{ flex: 1, minHeight: 0, padding: "0 32px 32px", display: "flex", flexDirection: "column" }}>
+            {pageInst
+              ? detailPaneFor(pageInst, pageAgent, "page")
+              : (
+                <div style={{ fontFamily: FONT, fontSize: 13, color: C.muted, padding: "48px 0", textAlign: "center" }}>
+                  No sandbox with id <span style={{ fontFamily: MONO, color: C.fg }}>{routeSandboxId}</span>.
+                  It may have reached its lifecycle limit and been released.
+                </div>
+              )}
+          </div>
+        </div>
+        <ConfirmDialog pending={confirm} onClose={() => setConfirm(null)} />
+        <Toaster toasts={toasts} />
+      </div>
+    );
+  }
+
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.fg, fontFamily: FONT }}>
       <style>{`
@@ -5666,25 +5784,7 @@ export default function Dashboard() {
         }}
       />
 
-      <InstanceDrawer
-        inst={drawerInst}
-        deploymentName={drawerAgent?.name ?? ""}
-        agentVersion={agentVersionName(drawerInst?.agentId ?? "", drawerAgent?.name)}
-        endpoints={endpointsForAgent(drawerAgent)}
-        idc={regionLabel(drawerAgent?.region)}
-        product={productForTier(drawerAgent?.tier)}
-        tab={drawer?.tab ?? "overview"}
-        onTab={(tab) => setDrawer((d) => (d ? { ...d, tab } : d))}
-        execHistory={drawerInst ? (execHistory[drawerInst.id] ?? []) : []}
-        setExecHistory={(fn) => {
-          const id = drawerInst?.id;
-          if (!id) return;
-          setExecHistory((m) => ({ ...m, [id]: fn(m[id] ?? []) }));
-        }}
-        onAction={handleAction}
-        onPatchMetadata={patchMetadata}
-        onClose={() => setDrawer(null)}
-      />
+      {drawerInst && detailPaneFor(drawerInst, drawerAgent, "drawer")}
 
       <ConfirmDialog pending={confirm} onClose={() => setConfirm(null)} />
 
