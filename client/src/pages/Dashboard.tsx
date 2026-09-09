@@ -4395,11 +4395,14 @@ function AgentEndpoints({ agent }: { agent: MyAgent }) {
 }
 
 // ─── Integration pane ─────────────────────────────────────────────────────
-// ─── SDK pane ─────────────────────────────────────────────────────────────
-// Was a static curl dump with a Template ID above it. Now the Template ID sits
-// on top of a live SDK playground — the operations are named and visible, and
-// the snippet updates as you edit. Exec is one of them by name, which is the
-// point: it used to be invisible unless you opened a ⋮ menu.
+// ─── Integration pane ─────────────────────────────────────────────────────
+// The console has an Integration tab (docs/design/v1.2/My Agent_intance.png);
+// this is it. What belongs here is what an operator cannot get anywhere else:
+// the Template ID, and the calls that use it.
+//
+// The SDK playground below was mine, not the console's, and not in any spec —
+// it renders only in review mode so the design survives without shipping a
+// code editor inside a management console.
 function IntegrationPane({ agent }: { agent: MyAgent }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -4423,7 +4426,7 @@ function IntegrationPane({ agent }: { agent: MyAgent }) {
         </div>
       </section>
 
-      <SdkPlaygroundV2 templateId={agent.templateId} />
+      {REVIEW_MODE && <SdkPlaygroundV2 templateId={agent.templateId} />}
     </div>
   );
 }
@@ -4518,10 +4521,7 @@ function AgentDetailPane({
   onEditTemplate: (agent: MyAgent) => void;
   canConvert?: boolean;
 }) {
-  // The SDK playground and the cost estimate are gone from the product; the
-  // components stay in the file and render only in review mode, so the design
-  // is not lost while the console stays about operating sandboxes.
-  const [tab] = useState<"monitor" | "integration" | "analytics">("monitor");
+  const [tab, setTab] = useState<"monitor" | "integration" | "analytics">("monitor");
   // Launch gate: the Template must be Ready. That is the only gate now — the
   // saved-launch-configuration surface is gone, so a "confirm a model" block
   // would have had nowhere to send anyone.
@@ -4727,11 +4727,17 @@ function AgentDetailPane({
 
 
 
-      {/* No tab strip: the Agent has one job here, which is its Sandboxes.
-          SDK snippets belong in the docs — nobody opens a console to copy a
-          Python call, they are already in an editor. Cost belongs in Billing,
-          where the real invoice is; an estimate here was a second number that
-          disagreed with it. */}
+      {/* The console's own tabs — see docs/design/v1.2/My Agent_intance.png.
+          Names are the console's, not ours. */}
+      <PillSegmented
+        active={tab}
+        onChange={setTab}
+        options={[
+          { value: "monitor",     label: "Monitor" },
+          { value: "integration", label: "Integration" },
+          { value: "analytics",   label: "Analytics" },
+        ]}
+      />
 
       {/* Body */}
       {tab === "monitor" && (
@@ -4746,8 +4752,8 @@ function AgentDetailPane({
           canConvert={canConvert}
         />
       )}
-      {REVIEW_MODE && tab === "integration" && <IntegrationPane agent={agent} />}
-      {REVIEW_MODE && tab === "analytics" && <AnalyticsPane agent={agent} instances={instances} snapshots={snapshots} />}
+      {tab === "integration" && <IntegrationPane agent={agent} />}
+      {tab === "analytics" && <AnalyticsPane agent={agent} instances={instances} snapshots={snapshots} />}
     </div>
   );
 }
