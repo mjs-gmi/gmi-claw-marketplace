@@ -10,6 +10,7 @@
 // Runtime 2.0 additions, this flags the V2.0 change set. Both can sit side by
 // side on the same label.
 import { C, FONT } from "@/lib/tokens";
+import { REVIEW_MODE } from "@/lib/reviewMode";
 
 export default function V2Badge({
   title = "New in Agentbox V2.0",
@@ -18,6 +19,8 @@ export default function V2Badge({
   title?: string;
   style?: React.CSSProperties;
 }) {
+  // Annotation, not product UI — see lib/reviewMode.
+  if (!REVIEW_MODE) return null;
   return (
     <span
       title={title}

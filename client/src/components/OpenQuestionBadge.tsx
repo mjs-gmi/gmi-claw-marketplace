@@ -7,6 +7,7 @@
 // whoever wrote the code, then never revisited because nothing on screen says
 // it was open.
 import { C, FONT } from "@/lib/tokens";
+import { REVIEW_MODE } from "@/lib/reviewMode";
 
 export default function OpenQuestionBadge({
   title,
@@ -16,6 +17,8 @@ export default function OpenQuestionBadge({
   title: string;
   style?: React.CSSProperties;
 }) {
+  // Annotation, not product UI — see lib/reviewMode.
+  if (!REVIEW_MODE) return null;
   return (
     <span
       title={title}

@@ -17,6 +17,7 @@ import TerminalV2 from "@/components/TerminalV2";
 import NoApiBadge, { NoApiNote, NO_API_REASON } from "@/components/NoApiBadge";
 import SdkPlaygroundV2 from "@/components/SdkPlaygroundV2";
 import OpenQuestionBadge from "@/components/OpenQuestionBadge";
+import { REVIEW_MODE } from "@/lib/reviewMode";
 import {
   PublishStatusEntry, PublishStatusModal, UnpublishDialog,
   type PublishRow, type ReviewStatus, type ListingActionHandlers,
@@ -982,6 +983,7 @@ function statusDot(status: AgentStatus): string {
 
 // ─── NEW feature badge — small lime pill marking Runtime 2.0 additions ──────
 function NewBadge({ style }: { style?: React.CSSProperties }) {
+  if (!REVIEW_MODE) return null;
   return (
     <span
       style={{
@@ -1001,6 +1003,9 @@ function NewBadge({ style }: { style?: React.CSSProperties }) {
 
 // ─── Release badge — which release a surface belongs to (PRD §1) ─────────────
 function ReleaseBadge({ r, style }: { r: Release; style?: React.CSSProperties }) {
+  // Which release a surface ships in is a planning fact, not something the
+  // person using it needs on the label.
+  if (!REVIEW_MODE) return null;
   const m = RELEASE_META[r];
   return (
     <span
@@ -1800,47 +1805,51 @@ function ShellPane({
         </div>
       )}
 
-      {/* Same call, as code. Collapsed by default — it is a reference, not a step. */}
-      <div style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 7 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-          <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>Same call in code:</span>
-          {([
-            { k: "python" as const,     label: "Python" },
-            { k: "typescript" as const, label: "TypeScript" },
-            { k: "curl" as const,       label: "curl" },
-          ]).map((l) => {
-            const on = snippetLang === l.k;
+      {/* The generated snippet moved out with the SDK tab: someone running a
+          command here is operating a sandbox, not writing code, and the call
+          belongs in the docs where it can be versioned. Still available in
+          review mode. */}
+      {REVIEW_MODE && (
+        <div style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 7 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>Same call in code:</span>
+            {([
+              { k: "python" as const,     label: "Python" },
+              { k: "typescript" as const, label: "TypeScript" },
+              { k: "curl" as const,       label: "curl" },
+            ]).map((l) => {
+              const on = snippetLang === l.k;
+              return (
+                <button
+                  key={l.k}
+                  onClick={() => setSnippetLang(on ? null : l.k)}
+                  style={{
+                    fontFamily: FONT, fontSize: 11, fontWeight: on ? 600 : 500,
+                    color: on ? C.limeText : C.fg,
+                    background: on ? C.lime : "transparent",
+                    border: `1px solid ${on ? C.lime : C.border}`,
+                    borderRadius: 6, padding: "1px 9px", cursor: "pointer",
+                  }}
+                >
+                  {l.label}
+                </button>
+              );
+            })}
+          </div>
+          {snippetLang && (() => {
+            const code = execSnippet(cmd, cwd, timeoutSeconds, snippetLang);
             return (
-              <button
-                key={l.k}
-                onClick={() => setSnippetLang(on ? null : l.k)}
-                style={{
-                  fontFamily: FONT, fontSize: 11, fontWeight: on ? 600 : 500,
-                  color: on ? C.limeText : C.fg,
-                  background: on ? C.lime : "transparent",
-                  border: `1px solid ${on ? C.lime : C.border}`,
-                  borderRadius: 6, padding: "1px 9px", cursor: "pointer",
-                }}
-              >
-                {l.label}
-              </button>
-            );
-          })}
-          <V2Badge />
-        </div>
-        {snippetLang && (() => {
-          const code = execSnippet(cmd, cwd, timeoutSeconds, snippetLang);
-          return (
-            <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", background: "#000" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", borderBottom: `1px solid ${C.borderSoft}`, background: C.cardSolid }}>
-                <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted }}>POST /executions</span>
-                <CopyButton value={code} />
+              <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", background: "#000" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", borderBottom: `1px solid ${C.borderSoft}`, background: C.cardSolid }}>
+                  <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted }}>POST /executions</span>
+                  <CopyButton value={code} />
+                </div>
+                <pre style={{ margin: 0, padding: "10px 12px", overflowX: "auto", fontFamily: MONO, fontSize: 11.5, lineHeight: "18px", color: C.fg }}>{code}</pre>
               </div>
-              <pre style={{ margin: 0, padding: "10px 12px", overflowX: "auto", fontFamily: MONO, fontSize: 11.5, lineHeight: "18px", color: C.fg }}>{code}</pre>
-            </div>
-          );
-        })()}
-      </div>
+            );
+          })()}
+        </div>
+      )}
 
       <span style={{ display: "block", marginTop: 8, fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
         One command at a time. <span style={{ color: C.fg }}>This is not a persistent terminal</span> — no stdin,
@@ -3168,7 +3177,10 @@ function MetricsPane({ inst }: { inst: Instance }) {
           Metrics · last 60s
         </span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 11, color: C.muted }}>
-          mock data · 1 Hz <NoApiBadge title="No metrics endpoint in the swagger. Daytona has Metrics and Traces tabs; ours are sparklines over generated data until there is something to read." />
+          live · 1 Hz
+          {/* Where a surface stands belongs inside it, not stamped on the tab
+              everyone navigates by. */}
+          <NoApiBadge title="No metrics endpoint yet — these are generated values until there is something real to read." />
         </span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
@@ -4506,7 +4518,10 @@ function AgentDetailPane({
   onEditTemplate: (agent: MyAgent) => void;
   canConvert?: boolean;
 }) {
-  const [tab, setTab] = useState<"monitor" | "integration" | "analytics">("monitor");
+  // The SDK playground and the cost estimate are gone from the product; the
+  // components stay in the file and render only in review mode, so the design
+  // is not lost while the console stays about operating sandboxes.
+  const [tab] = useState<"monitor" | "integration" | "analytics">("monitor");
   // Launch gate: the Template must be Ready. That is the only gate now — the
   // saved-launch-configuration surface is gone, so a "confirm a model" block
   // would have had nowhere to send anyone.
@@ -4712,22 +4727,11 @@ function AgentDetailPane({
 
 
 
-      {/* Tabs */}
-      <PillSegmented
-        active={tab}
-        onChange={setTab}
-        options={[
-          { value: "monitor", label: "Sandboxes" },
-          {
-            value: "integration", label: "SDK",
-            question: "Agent-level is a guess. Daytona keeps these in a top-level Playground; E2B has no exec UI at all. It sits here because template_id does.",
-          },
-          {
-            value: "analytics", label: "Spending", noApi: true,
-            question: "Agent-level or workspace-level? Daytona puts Spending per sandbox; Modal puts it at workspace level with a budget cap and pushes per-resource detail to the CLI.",
-          },
-        ]}
-      />
+      {/* No tab strip: the Agent has one job here, which is its Sandboxes.
+          SDK snippets belong in the docs — nobody opens a console to copy a
+          Python call, they are already in an editor. Cost belongs in Billing,
+          where the real invoice is; an estimate here was a second number that
+          disagreed with it. */}
 
       {/* Body */}
       {tab === "monitor" && (
@@ -4742,8 +4746,8 @@ function AgentDetailPane({
           canConvert={canConvert}
         />
       )}
-      {tab === "integration" && <IntegrationPane agent={agent} />}
-      {tab === "analytics" && <AnalyticsPane agent={agent} instances={instances} snapshots={snapshots} />}
+      {REVIEW_MODE && tab === "integration" && <IntegrationPane agent={agent} />}
+      {REVIEW_MODE && tab === "analytics" && <AnalyticsPane agent={agent} instances={instances} snapshots={snapshots} />}
     </div>
   );
 }

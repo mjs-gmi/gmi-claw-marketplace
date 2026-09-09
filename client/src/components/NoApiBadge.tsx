@@ -13,6 +13,7 @@
 // nobody reviews them as though they were buildable today, and nobody demos
 // them to a customer as a promise.
 import { C, FONT } from "@/lib/tokens";
+import { REVIEW_MODE } from "@/lib/reviewMode";
 
 export const NO_API_REASON =
   "Not in the R1 Sandbox API — the swagger covers sandboxes, templates, files and executions only. This surface has no endpoint behind it yet.";
@@ -24,6 +25,8 @@ export default function NoApiBadge({
   title?: string;
   style?: React.CSSProperties;
 }) {
+  // Annotation, not product UI — see lib/reviewMode.
+  if (!REVIEW_MODE) return null;
   return (
     <span
       title={title}
@@ -46,6 +49,8 @@ export default function NoApiBadge({
 
 /** Inline one-liner for a whole block that has no endpoint behind it. */
 export function NoApiNote({ children, style }: { children?: React.ReactNode; style?: React.CSSProperties }) {
+  // Annotation, not product UI — see lib/reviewMode.
+  if (!REVIEW_MODE) return null;
   return (
     <span
       style={{
