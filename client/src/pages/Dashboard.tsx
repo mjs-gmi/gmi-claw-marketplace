@@ -2690,7 +2690,7 @@ function ProvisionModal({
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: "-1px", marginRight: 5 }} aria-hidden="true">
                 <rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
               </svg>
-              Set by this Agent's Sandbox Template — change it there with Replace Image, not per sandbox.
+              Set by this Agent's Template — change it with Edit Template, not per sandbox.
               <V2Badge style={{ marginLeft: 5 }} />
             </span>
           </section>
@@ -3852,6 +3852,10 @@ function InstanceDrawer({
 
 
         {activeTab === "files"  && <FilesSection inst={inst} />}
+        {/* No competitor ships an Access tab, so this is not in the product.
+            §六.E does specify content for one and the decision is open, so it
+            stays reachable for review instead of becoming dead code. */}
+        {REVIEW_MODE && activeTab === "overview" && <AccessSection inst={inst} endpoints={endpoints} />}
         {activeTab === "metrics" && <MetricsPane inst={inst} />}
         {activeTab === "logs"    && <LogsPane inst={inst} />}
         {activeTab === "terminal" && (
@@ -4394,58 +4398,6 @@ function MonitorPane({
       </section>
 
     </div>
-  );
-}
-
-// ─── Agent endpoints ──────────────────────────────────────────────────────
-// Endpoints are declared once at Register → Networking and versioned with the
-// Agent, so every Sandbox it launches has the same ones. That makes this Agent
-// information, not per-sandbox information — which is why it used to sit in the
-// wrong place. E2B keeps this kind of identity in a header; Daytona has no
-// equivalent tab at all.
-function AgentEndpoints({ agent }: { agent: MyAgent }) {
-  const endpoints = endpointsForAgent(agent);
-  if (endpoints.length === 0) return null;
-  return (
-    <section style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <h3 style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg, margin: 0 }}>
-          Endpoints <V2Badge />
-        </h3>
-        <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>
-          declared at Register · the same on every Sandbox this Agent launches
-        </span>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 1, background: C.borderSoft, border: `1px solid ${C.borderSoft}`, borderRadius: 8, overflow: "hidden" }}>
-        {endpoints.map((ep) => (
-          <div key={ep.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 96px 84px 92px", gap: 10, alignItems: "center", background: C.cardSolid, padding: "9px 12px" }}>
-            <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ep.name}</span>
-            <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.muted }}>:{ep.internalPort}</span>
-            <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.muted }}>{ep.protocol}</span>
-            <span
-              title={ep.visibility === "public"
-                ? "Reachable from outside once a Sandbox is Running"
-                : "Only reachable with the token /connect returns"}
-              style={{
-                justifySelf: "start",
-                fontFamily: FONT, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase",
-                color: ep.visibility === "public" ? C.warn : C.muted,
-                background: ep.visibility === "public" ? "rgba(251,191,36,0.12)" : "rgba(255,255,255,0.05)",
-                border: `1px solid ${ep.visibility === "public" ? "rgba(251,191,36,0.45)" : C.border}`,
-                padding: "1px 7px", borderRadius: 4,
-              }}
-            >
-              {ep.visibility}
-            </span>
-          </div>
-        ))}
-      </div>
-      <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-        A Sandbox's live URL is not reachable on its own — access needs the token
-        <span style={{ fontFamily: MONO }}> POST /sandboxes/&#123;id&#125;/connect</span> returns, and that token dies
-        with the Sandbox. Fetch it per sandbox from its row, or from the SDK.
-      </span>
-    </section>
   );
 }
 
