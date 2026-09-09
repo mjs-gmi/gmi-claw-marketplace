@@ -15,6 +15,7 @@ import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
 import V2Badge from "@/components/V2Badge";
 import TerminalV2, { type TerminalMode } from "@/components/TerminalV2";
 import NoApiBadge, { NoApiNote, NO_API_REASON } from "@/components/NoApiBadge";
+import SdkPlaygroundV2 from "@/components/SdkPlaygroundV2";
 import {
   PublishStatusEntry, PublishStatusModal, UnpublishDialog,
   type PublishRow, type ReviewStatus, type ListingActionHandlers,
@@ -4104,85 +4105,27 @@ function MonitorPane({
 }
 
 // ─── Integration pane ─────────────────────────────────────────────────────
+// ─── SDK pane ─────────────────────────────────────────────────────────────
+// Was a static curl dump with a Template ID above it. Now the Template ID sits
+// on top of a live SDK playground — the operations are named and visible, and
+// the snippet updates as you edit. Exec is one of them by name, which is the
+// point: it used to be invisible unless you opened a ⋮ menu.
 function IntegrationPane({ agent }: { agent: MyAgent }) {
-  // R0 quick start — the whole release loop as copyable calls, against the real
-  // bs-api Sandbox (Runloop) contract. Source of truth is the swagger at
-  // GET /api/v2/ec/openapi.yaml; see Confluence "bs-api Sandbox (Runloop)".
-  //
-  // Two planes: the control plane ($API_BASE, Bearer session token) creates and
-  // deletes Sandboxes; the data plane (https://{sandbox_key}.{domain},
-  // X-Access-Token) does files, executions and the shell.
-  const curl = [
-    "# 0. Auth — session access token; the swagger is the contract",
-    "export API_BASE='https://ce-tot.gmicloud-dev.com/api/v2'   # GET $API_BASE/ec/openapi.yaml",
-    "export ACCESS_TOKEN=...        # POST /api/v1/me/sessions",
-    "export IDC_NAME='sandbox-runloop-us'",
-    "",
-    "# 1. Create a Sandbox from this Agent's Template.",
-    "#    Create accepts template_id / idc_name / timeout / env_vars / metadata — nothing else.",
-    "#    Spec comes from the Template's resources; it is not a create parameter.",
-    "curl -sS -X POST \"$API_BASE/sandboxes\" \\",
-    "  -H \"Authorization: Bearer $ACCESS_TOKEN\" -H 'Content-Type: application/json' \\",
-    "  -H \"X-Request-ID: req-$(date +%s%3N)\" \\",
-    `  -d '{"template_id": "${agent.templateId}", "idc_name": "'"$IDC_NAME"'", "timeout": 1800,`,
-    "       \"env_vars\": {\"LOG_LEVEL\": \"debug\"}, \"metadata\": {\"tenant\": \"acme-corp\"}}'",
-    "  # -> data.id, data.sandbox_key, data.domain, data.sandbox_access_token, data.state",
-    "",
-    "# 2. Wait for running — timeout starts at creation and runs down from there",
-    "until [ \"$(curl -sS \"$API_BASE/sandboxes/$SANDBOX_ID\" \\",
-    "     -H \"Authorization: Bearer $ACCESS_TOKEN\" | jq -r '.data.state')\" = running ]; do sleep 2; done",
-    "",
-    "# 3. Exchange for data-plane credentials — the URL is not open, this is the swap",
-    "curl -sS -X POST \"$API_BASE/sandboxes/$SANDBOX_ID/connect\" \\",
-    "  -H \"Authorization: Bearer $ACCESS_TOKEN\" -H 'Content-Type: application/json' \\",
-    "  -d '{\"timeout\": 1800}'",
-    "",
-    "# ── data plane ──────────────────────────────────────────────────────────",
-    "export DP_BASE=\"https://$SANDBOX_KEY.$DOMAIN\"",
-    "",
-    "# 4. Upload — one file, by explicit path. There is no directory listing.",
-    "curl -sS -X POST \"$DP_BASE/files?path=/home/user/in.json\" \\",
-    "  -H \"X-Access-Token: $SAT\" -F 'file=@in.json'",
-    "",
-    "# 5. Exec — wait=true blocks; wait=false returns an execution_id to poll",
-    "curl -sS -X POST \"$DP_BASE/executions?wait=true&wait_timeout_seconds=25\" \\",
-    "  -H \"X-Access-Token: $SAT\" -H 'Content-Type: application/json' \\",
-    "  -d '{\"action\": \"exec\", \"parameters\": {",
-    "         \"command\": \"python main.py --input /home/user/in.json\",",
-    "         \"cwd\": \"/home/user\", \"execution_timeout_seconds\": 300}}'",
-    "  # -> execution_id, exit code, stdout, stderr",
-    "",
-    "# 6. Cancel a running execution — empty body",
-    "curl -sS -X POST \"$DP_BASE/executions/$EXEC_ID/cancel\" -H \"X-Access-Token: $SAT\"",
-    "",
-    "# 7. Download the output",
-    "curl -sS \"$DP_BASE/files?path=/home/user/result.json\" \\",
-    "  -H \"X-Access-Token: $SAT\" -o result.json",
-    "",
-    "# 8. Interactive shell — a real TTY over WebSocket, not exec",
-    "#    dial  wss://$SANDBOX_KEY.$DOMAIN/shell/connect",
-    "#    resize/close  POST $DP_BASE/shell/control  {\"action\":\"resize\",\"cols\":120,\"rows\":40}",
-    "",
-    "# 9. Delete — releases the Sandbox and everything on its disk",
-    "curl -sS -X DELETE \"$API_BASE/sandboxes/$SANDBOX_ID\" \\",
-    "  -H \"Authorization: Bearer $ACCESS_TOKEN\"",
-  ].join("\n");
-
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <section>
         <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: "0 0 4px" }}>
           Template ID
         </h3>
         <p style={{ fontFamily: FONT, fontSize: 13, fontWeight: 400, color: C.muted, margin: "0 0 12px" }}>
-          Use this ID when calling the Agentbox API to create sandboxes of this Agent.
+          Every call below starts from this ID — it is what <span style={{ fontFamily: MONO }}>template_id</span> means.
         </p>
         <div
           style={{
             display: "flex", alignItems: "center", gap: 8,
             background: C.card, border: `1px solid ${C.border}`,
             borderRadius: 8, padding: "10px 14px",
-            fontFamily: "'GeistMono', monospace", fontSize: 13, color: C.fg,
+            fontFamily: MONO, fontSize: 13, color: C.fg,
           }}
         >
           <span style={{ flex: 1, overflowX: "auto" }}>{agent.templateId}</span>
@@ -4190,51 +4133,7 @@ function IntegrationPane({ agent }: { agent: MyAgent }) {
         </div>
       </section>
 
-      <section>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 4px", flexWrap: "wrap" }}>
-          <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: 0 }}>
-            Quick start — the R0 loop
-          </h3>
-          <ReleaseBadge r="R0" />
-        </div>
-        <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, margin: "0 0 12px", lineHeight: "18px" }}>
-          Authenticate → create → ready → <span style={{ fontFamily: MONO }}>connect</span> → upload input → exec →
-          download output → delete. Two planes: the control plane creates and deletes Sandboxes; the data plane
-          at <span style={{ fontFamily: MONO }}>{"{sandbox_key}.{domain}"}</span> does files, executions and the shell,
-          authenticated with the token <span style={{ fontFamily: MONO }}>connect</span> returns.
-          AgentBox never defines which commands are valid — the command comes from your own image.
-        </p>
-        <div
-          style={{
-            background: C.card,
-            border: `1px solid ${C.border}`,
-            borderRadius: 10,
-            overflow: "hidden",
-          }}
-        >
-          <div
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "space-between",
-              padding: "8px 12px",
-              borderBottom: `1px solid ${C.border}`,
-              background: "rgba(0,0,0,0.2)",
-            }}
-          >
-            <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>bash</span>
-            <CopyButton value={curl} />
-          </div>
-          <pre
-            style={{
-              margin: 0, padding: "14px 16px",
-              fontFamily: "'GeistMono', monospace", fontSize: 13, lineHeight: "22px",
-              color: C.fg,
-              whiteSpace: "pre", overflowX: "auto",
-            }}
-          >
-            {curl}
-          </pre>
-        </div>
-      </section>
+      <SdkPlaygroundV2 templateId={agent.templateId} />
     </div>
   );
 }
@@ -4312,7 +4211,7 @@ function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instan
 function AgentDetailPane({
   agent, instances, snapshots, image, onProvision, onAction, onOpenDetail, onExtend, activeInstanceId,
   onPublishListing, onUnpublishListing,
-  onRetryPrep, canConvert = false,
+  onRetryPrep, onEditTemplate, canConvert = false,
 }: {
   agent: MyAgent;
   instances: Instance[];
@@ -4326,6 +4225,7 @@ function AgentDetailPane({
   onOpenDetail: (id: string, tab?: DrawerTab) => void;
   activeInstanceId: string | null;
   onRetryPrep: (agentId: string) => void;
+  onEditTemplate: (agent: MyAgent) => void;
   canConvert?: boolean;
 }) {
   const [tab, setTab] = useState<"monitor" | "integration" | "analytics">("monitor");
@@ -4514,6 +4414,17 @@ function AgentDetailPane({
               {(image.preparation === "failed" || image.preparation === "stale") && (
                 <button onClick={() => onRetryPrep(agent.id)} style={{ fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.limeText, background: C.lime, border: "none", padding: "5px 12px", borderRadius: 7, cursor: "pointer" }}>Retry preparation</button>
               )}
+              {/* Image and Spec are Template properties, so this is where they
+                  change. Without it the card had no route to editing at all
+                  and Edit Template was reachable only from the list's ⋮. */}
+              <button
+                onClick={() => onEditTemplate(agent)}
+                title="Change the image, Spec or default IDC — every future Sandbox picks them up"
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg, background: "transparent", border: `1px solid ${C.border}`, padding: "5px 12px", borderRadius: 7, cursor: "pointer" }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+                Edit Template
+              </button>
             </div>
           </section>
         );
@@ -4527,7 +4438,7 @@ function AgentDetailPane({
         onChange={setTab}
         options={[
           { value: "monitor", label: "Sandboxes" },
-          { value: "integration", label: "API" },
+          { value: "integration", label: "SDK" },
           { value: "analytics", label: "Usage", noApi: true },
         ]}
       />
@@ -5774,6 +5685,7 @@ export default function Dashboard() {
               onExtend={extendLifecycle}
               activeInstanceId={drawer?.id ?? null}
               onRetryPrep={retryPreparation}
+              onEditTemplate={handleEditTemplate}
               canConvert
             />
           ) : allAgents.length === 0 ? (

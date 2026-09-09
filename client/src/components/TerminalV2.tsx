@@ -257,8 +257,8 @@ export default function TerminalV2({
         <div style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
           <div style={{ display: "inline-flex", background: "rgba(255,255,255,0.05)", border: `1px solid ${C.border}`, borderRadius: 8, padding: 2 }}>
             {([
-              { key: "session" as const, label: "Session",  path: "/shell/connect" },
-              { key: "oneshot" as const, label: "One-shot", path: "POST /executions" },
+              { key: "session" as const, label: "Shell",    path: "/shell/connect" },
+              { key: "oneshot" as const, label: "Run",      path: "POST /executions" },
             ]).map((m) => {
               const on = mode === m.key;
               return (
@@ -295,7 +295,7 @@ export default function TerminalV2({
           <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
             One command, one result — exit code and duration. Same sandbox, same token;
             <span style={{ fontFamily: MONO }}> POST /executions</span> instead of the shell stream.
-            Switch to <span style={{ color: C.fg }}>Session</span> for anything interactive.
+            Switch to <span style={{ color: C.fg }}>Shell</span> for anything interactive.
           </span>
           {oneShot}
         </>
@@ -403,7 +403,7 @@ export default function TerminalV2({
             the new size is sent as a <span style={{ fontFamily: MONO }}>resize</span> control message, so programs
             inside lay out correctly. <span style={{ color: C.fg }}>Close session really hangs up</span>; it does not
             just hide this pane. For a single command with an exit code, switch to
-            <span style={{ color: C.fg }}> One-shot</span> above.
+            <span style={{ color: C.fg }}> Run</span> above.
           </span>
         </>
       )}
