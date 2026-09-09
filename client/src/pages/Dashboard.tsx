@@ -515,6 +515,16 @@ function durationLabel(v?: string): string {
   return m[2] === "h" ? `${n} hour${n > 1 ? "s" : ""}` : `${n} min`;
 }
 // Round a minute count up to a coarse "N min / N h remaining" label.
+// Compact form for the Lifecycle cell, which already sits under a "Lifecycle"
+// header — "5h 57m" reads better there than "5h 57m remaining left".
+function remainingShort(mins: number): string {
+  if (mins <= 0) return "limit reached";
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem ? `${h}h ${rem}m` : `${h}h`;
+}
+
 function remainingLabel(mins: number): string {
   if (mins <= 0) return "limit reached";
   if (mins < 60) return `${mins} min remaining`;
@@ -524,6 +534,26 @@ function remainingLabel(mins: number): string {
 }
 
 // F-02 Lifecycle column — active-time remaining for a Running runtime.
+// The lifecycle as numbers, so the row can draw a bar and colour the last few
+// minutes rather than printing a sentence. `timeout` is wall-clock from
+// creation and nothing inside the sandbox extends it, so this is the whole
+// truth about how long it has left.
+interface LifecycleClock {
+  unlimited: boolean;
+  totalMins: number;
+  usedMins: number;
+  leftMins: number;
+  pct: number;
+}
+function lifecycleClock(inst: Instance): LifecycleClock {
+  const total = durationMins(inst.maxActive);
+  if (total === 0) return { unlimited: true, totalMins: 0, usedMins: 0, leftMins: 0, pct: 0 };
+  const start = inst.lifecycleStartedAt ? new Date(inst.lifecycleStartedAt.replace(" ", "T")).getTime() : Date.now();
+  const used = Math.max(0, Math.floor((Date.now() - start) / 60000));
+  const left = Math.max(0, total - used);
+  return { unlimited: false, totalMins: total, usedMins: used, leftMins: left, pct: Math.min(100, (used / total) * 100) };
+}
+
 function activeRemaining(inst: Instance): string {
   const total = durationMins(inst.maxActive);
   if (total === 0) return "No automatic limit";
@@ -1980,6 +2010,97 @@ function ListingActions({
   );
 }
 
+// ─── Lifecycle cell — §A, pulled out of the detail pane ────────────────────
+// The column used to print "43 min remaining active" and stop there, which
+// says nothing about how much of the budget is gone and offers no way to buy
+// more. It is now the countdown, a bar, and Extend — the one lifecycle action
+// the API supports (the timeout can be updated after create).
+function LifecycleCell({
+  inst, onExtend,
+}: {
+  inst: Instance;
+  onExtend: (id: string, addMins: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", away);
+    return () => document.removeEventListener("mousedown", away);
+  }, [open]);
+
+  const clock = lifecycleClock(inst);
+  if (clock.unlimited) {
+    return (
+      <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, whiteSpace: "nowrap" }} title="No timeout was set at create — this sandbox runs until you delete it.">
+        No automatic limit
+      </div>
+    );
+  }
+
+  // §A — the last few minutes have to look different from the first few hours.
+  const urgent = clock.leftMins <= 5;
+  const warn = clock.leftMins <= 30;
+  const color = urgent ? C.err : warn ? C.warn : C.muted;
+
+  return (
+    <div ref={ref} style={{ position: "relative", display: "flex", flexDirection: "column", gap: 3, minWidth: 0, overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+        <span
+          title={`${remainingShort(clock.leftMins)} left of ${durationLabel(inst.maxActive)} total. Wall-clock from creation — using the sandbox does not extend it. At the limit it is deleted and its disk goes with it.`}
+          style={{ fontFamily: FONT, fontSize: 12, fontWeight: urgent ? 600 : 500, color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+        >
+          {remainingShort(clock.leftMins)} left
+        </span>
+        <button
+          onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+          title="Add time — updates this sandbox's timeout"
+          style={{
+            fontFamily: FONT, fontSize: 10.5, fontWeight: 600,
+            color: C.fg, background: "transparent", border: `1px solid ${C.border}`,
+            borderRadius: 5, padding: "0 5px", cursor: "pointer", flexShrink: 0, lineHeight: "16px",
+          }}
+        >
+          Extend
+        </button>
+      </div>
+      <div style={{ height: 3, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+        <div style={{ width: `${clock.pct}%`, height: "100%", background: color, transition: "width .3s linear" }} />
+      </div>
+      {open && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute", top: "calc(100% + 5px)", left: 0, zIndex: 40, minWidth: 132,
+            background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 8, padding: 4,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column",
+          }}
+        >
+          {[30, 60, 360].map((m) => (
+            <button
+              key={m}
+              onClick={() => { setOpen(false); onExtend(inst.id, m); }}
+              style={{
+                fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg,
+                background: "transparent", border: "none", padding: "6px 9px",
+                borderRadius: 6, cursor: "pointer", textAlign: "left",
+              }}
+            >
+              + {durationLabel(m >= 60 ? `${m / 60}h` : `${m}min`)}
+            </button>
+          ))}
+          <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted, padding: "4px 9px 2px", lineHeight: "14px" }}>
+            Pushes the expiry out. Never shortens it.
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Per-instance row ⋮ menu ─────────────────────────────────────────────
 // Secondary lifecycle verbs only. Every *view* (details, logs, run, usage,
 // endpoints, files) is one row click away in the drawer, so nothing is reachable
@@ -2101,11 +2222,6 @@ function InstanceRowMenu({
               <button onClick={() => { setOpen(false); onOpenDetail(inst.id, "terminal"); }} style={itemStyle(false)}>
                 <IconTerminal />
                 <span style={{ flex: 1 }}>Terminal</span>
-                <V2Badge />
-              </button>
-              <button onClick={() => { setOpen(false); onOpenDetail(inst.id, "files"); }} style={itemStyle(false)}>
-                <IconFile />
-                <span style={{ flex: 1 }}>Files</span>
                 <V2Badge />
               </button>
               <div style={{ height: 1, background: C.borderSoft, margin: "4px 6px" }} />
@@ -3634,10 +3750,12 @@ function InstanceDrawer({
 
 // ─── Monitor pane ─────────────────────────────────────────────────────────
 function MonitorPane({
-  agent, instances, onProvision, onAction, onOpenDetail, activeInstanceId, canConvert = false,
+  agent, instances, onProvision, onAction, onOpenDetail, onExtend, activeInstanceId, canConvert = false,
 }: {
   agent: MyAgent;
   instances: Instance[];
+  /** §A — add time to a sandbox's timeout. */
+  onExtend: (id: string, addMins: number) => void;
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
   // A row click opens the drawer. Logs / Run Command / resource usage live there
@@ -3765,7 +3883,8 @@ function MonitorPane({
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "1.2fr 1.5fr 0.9fr 1.35fr 0.85fr 1.25fr",
+              // Header must track the row grid below.
+              gridTemplateColumns: "1.1fr 1.3fr 0.85fr 1.7fr 0.65fr 1.4fr",
               padding: "10px 16px",
               borderBottom: `1px solid ${C.border}`,
               background: "rgba(255,255,255,0.02)",
@@ -3817,7 +3936,9 @@ function MonitorPane({
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenDetail(inst.id); } }}
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "1.2fr 1.5fr 0.9fr 1.35fr 0.85fr 1.25fr",
+                      // Lifecycle carries a countdown, a bar and Extend now, so it
+                      // takes the width Launched no longer needs.
+                      gridTemplateColumns: "1.1fr 1.3fr 0.85fr 1.7fr 0.65fr 1.4fr",
                       padding: "10px 16px",
                       borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`,
                       borderLeft: `2px solid ${active ? C.lime : "transparent"}`,
@@ -3879,12 +4000,18 @@ function MonitorPane({
                         )}
                         {statusLabel(inst.status)}
                       </span>
+                      {/* In the row this was a two-line chip that spilled over the
+                          Lifecycle column. The full sentence lives on the glyph,
+                          and the drawer header still spells it out. */}
                       {inst.unconfirmed && (
                         <span
-                          title="Unknown provider outcome — last confirmed state shown while we reconcile (§4.1)"
-                          style={{ marginLeft: 6, display: "inline-flex", alignItems: "center", gap: 3, fontFamily: FONT, fontSize: 10, fontWeight: 600, color: C.warn, background: `${C.warn}1f`, border: `1px solid ${C.warn}55`, padding: "1px 6px", borderRadius: 4 }}
+                          title="Confirmation pending — unknown provider outcome; the last confirmed state is shown while we reconcile (§4.1)"
+                          aria-label="Confirmation pending"
+                          style={{ marginLeft: 6, flexShrink: 0, display: "inline-flex", alignItems: "center", color: C.warn, cursor: "help" }}
                         >
-                          Confirmation pending
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" />
+                          </svg>
                         </span>
                       )}
                     </div>
@@ -3892,7 +4019,7 @@ function MonitorPane({
                         PRD v2.3: paused instances are never auto-deleted — no countdown. */}
                     {(() => {
                       if (inst.status === "running") {
-                        return <div style={{ fontSize: 12, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={activeRemaining(inst)}>{activeRemaining(inst)}</div>;
+                        return <LifecycleCell inst={inst} onExtend={onExtend} />;
                       }
                       if (inst.status === "suspended") {
                         const label = `${pausedLifecycleLabel()} (≈$${pausedCostMo(inst)}/mo)`;
@@ -3911,19 +4038,28 @@ function MonitorPane({
                           needs the token POST /sandboxes/{id}/connect returns, so a
                           bare link would 401. This opens the Terminal, which does
                           the exchange. */}
-                      {inst.status === "running" && inst.endpointUrl && (
-                        <button
-                          onClick={(e) => {
-                            // Stop it here too: the row itself opens the drawer on
-                            // Overview, and that would win the race and drop the tab.
-                            e.stopPropagation();
-                            onOpenDetail(inst.id, "terminal");
-                          }}
-                          title={`${inst.endpointUrl} — not directly reachable. Access needs a token from POST /sandboxes/{id}/connect; opening the Terminal performs that exchange.`}
-                          style={rowBtnGhost}
-                        >
-                          <IconTerminal /> Open terminal
-                        </button>
+                      {/* Terminal and Files are the two things people open a
+                          sandbox to do, so they are buttons, not ⋮ entries.
+                          Terminal also carries §D: the data-plane URL is not
+                          reachable directly — the token comes from
+                          POST /sandboxes/{id}/connect, which happens in there. */}
+                      {inst.status === "running" && (
+                        <>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onOpenDetail(inst.id, "terminal"); }}
+                            title={`${inst.endpointUrl ?? "This sandbox"} is not reachable by URL — access needs a token from POST /sandboxes/{id}/connect, which opening the Terminal performs.`}
+                            style={rowBtnGhost}
+                          >
+                            <IconTerminal /> Terminal
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onOpenDetail(inst.id, "files"); }}
+                            title="Upload or download one file by path"
+                            style={rowBtnGhost}
+                          >
+                            <IconFile /> Files
+                          </button>
+                        </>
                       )}
                       {/* One primary lifecycle verb per state; the rest live in the drawer */}
                       {inst.status === "running" && (
@@ -4174,7 +4310,7 @@ function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instan
 
 // ─── Right detail pane ────────────────────────────────────────────────────
 function AgentDetailPane({
-  agent, instances, snapshots, image, onProvision, onAction, onOpenDetail, activeInstanceId,
+  agent, instances, snapshots, image, onProvision, onAction, onOpenDetail, onExtend, activeInstanceId,
   onPublishListing, onUnpublishListing,
   onRetryPrep, canConvert = false,
 }: {
@@ -4184,6 +4320,7 @@ function AgentDetailPane({
   image?: RuntimeImage;
   onPublishListing: (agentId: string) => void;
   onUnpublishListing: (agentId: string) => void;
+  onExtend: (id: string, addMins: number) => void;
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
   onOpenDetail: (id: string, tab?: DrawerTab) => void;
@@ -4389,7 +4526,7 @@ function AgentDetailPane({
         active={tab}
         onChange={setTab}
         options={[
-          { value: "monitor", label: "Overview" },
+          { value: "monitor", label: "Sandboxes" },
           { value: "integration", label: "API" },
           { value: "analytics", label: "Usage", noApi: true },
         ]}
@@ -4403,6 +4540,7 @@ function AgentDetailPane({
           onProvision={onProvision}
           onAction={onAction}
           onOpenDetail={onOpenDetail}
+          onExtend={onExtend}
           activeInstanceId={activeInstanceId}
           canConvert={canConvert}
         />
@@ -5146,6 +5284,21 @@ export default function Dashboard() {
   const patchImage = (agentId: string, patch: Partial<RuntimeImage>) =>
     setRuntimeImages((prev) => ({ ...prev, [agentId]: { ...prev[agentId], ...patch } }));
   // Validate → prepare cycle: validating → valid → preparing → ready.
+  // §A "延长" — the API can update a sandbox's timeout after create, and the
+  // expiry is absolute: adding time pushes it out and never pulls it in. E2B's
+  // setTimeout has the same rule (the new expiry is the later of the two), so
+  // an accidental small value cannot cut a sandbox short.
+  const extendLifecycle = (id: string, addMins: number) => {
+    setInstances((prev) => prev.map((i) => {
+      if (i.id !== id) return i;
+      const total = durationMins(i.maxActive) + addMins;
+      return { ...i, maxActive: total % 60 === 0 ? `${total / 60}h` : `${total}min` };
+    }));
+    const inst = instances.find((i) => i.id === id);
+    const left = inst ? remainingShort(lifecycleClock(inst).leftMins + addMins) : "";
+    pushToast("success", `Extended by ${durationLabel(addMins >= 60 ? `${addMins / 60}h` : `${addMins}min`)}${left ? ` — ${left} left` : ""}`);
+  };
+
   const retryPreparation = (agentId: string) => {
     const t = pushToast("progress", "Preparing template…");
     patchImage(agentId, { preparation: "preparing" });
@@ -5618,6 +5771,7 @@ export default function Dashboard() {
               onProvision={handleProvision}
               onAction={handleAction}
               onOpenDetail={openDetail}
+              onExtend={extendLifecycle}
               activeInstanceId={drawer?.id ?? null}
               onRetryPrep={retryPreparation}
               canConvert
