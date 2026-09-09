@@ -227,7 +227,59 @@ Ctrl-D / `exit` 关闭，↑↓ 翻历史，`clear` 清屏。
 
 另有一个 `Simulate drop` 按钮（虚线框，仅原型用）走掉线 → 重连那条路。
 
-## I · Image 与 Spec 的归属
+## I · 按 swagger 对齐（本轮）
+
+契约见 §G。以下按「create 只收五个字段」和「swagger 没有 pause/snapshots/actions、
+没有 /logs 和 /usage」逐条对齐。
+
+### Launch 面板 = create 的五个参数，多一个不给
+
+| 参数 | 界面 |
+|---|---|
+| `template_id` | 只读展示 Sandbox Template + 镜像 |
+| `idc_name` | **新增 IDC 下拉**（原来完全没有），默认取 Template 的 region |
+| `timeout` | Maximum active time |
+| `env_vars` | Environment variables |
+| `metadata` | Metadata 表 + Name 说明它存成 `metadata.name`（create 没有 name 字段） |
+
+**Spec 不在里面** —— 它是 Template 的 `resources`，Launch 只读。这一条 §H 说对了，
+swagger 也证实了：create 接口不接受这个参数。
+
+### Lifecycle：一个墙钟 timeout，到点删除
+
+- 文案明写**从创建那刻起算、操作不会重置** —— 这是最容易踩的坑：Daytona 默认是
+  闲置 15 分钟停，Runloop 有 `after_idle`，从那些工具过来的人会以为「我一直在用就不会停」
+- 「到达上限时」原来写 `Pause & keep disk` —— **swagger 没有 pause**，改成
+  `Deleted — disk goes with it`
+- LifecycleTimeline 原来最后一站是 `Paused`（不可能，且跟下面两行自相矛盾），
+  改成 `Created → Running → Deleted`
+- 「Pause when inactive」整块保留但置灰 + 说明原因（swagger 没有 idle policy）
+
+### Register：Compute Tier / Data Center → Spec / Default IDC
+
+- `Compute size` → **`Spec`**，并说明它进 Template 的 `resources`、Launch 改不了
+- `Data Center` → **`Default IDC`**，并说明每个 Sandbox 在 Launch 时自己选
+- 「Select a region first」→「Select an IDC first — Specs are listed per IDC」，
+  对应 `GET /sandbox-product-specifications?idc_name=`
+
+### `Open ↗` → `Open terminal`
+
+原来是个裸 `<a href>`，直接点数据面地址会 401 —— §D 说的「点不开了」就是这个。
+改成打开 Terminal，凭据交换（`POST /sandboxes/{id}/connect`）在那里发生。
+
+### Run 历史提到页面层
+
+原来存在 ShellPane 的 local state，切个 tab 就没了，而同一个面板写着
+「every result stays retrievable by `execution_id`」。现在按 sandbox id 存在页面层。
+
+### `NO API` 标记
+
+新组件 `client/src/components/NoApiBadge.tsx`。swagger 覆盖不到的界面**保留但打标**，
+不删：Pause / Resume / Create Snapshot、Snapshots 顶部 tab、Logs tab、Usage tab。
+理由是 E2B 已有 sandbox persistence、Runloop 有 `after_idle: suspend`，这些概念不是臆想，
+只是我们的 R1 接口还没到。
+
+## J · Image 与 Spec 的归属
 
 Confluence §H 定了 Spec 只能在 Template 上改。**Image 同理**：
 
@@ -235,7 +287,7 @@ Confluence §H 定了 Spec 只能在 Template 上改。**Image 同理**：
 - **Launch 面板**：只读展示，并明说「Set by this Agent's Sandbox Template — change it there with Replace Image, not per sandbox」
 - Template 拥有 Image + Spec；Launch 拥有 IDC、model、lifecycle、env
 
-## J · 命名与错字（其余）
+## K · 命名与错字（其余）
 
 | 位置 | 现状 | 改成 |
 |---|---|---|

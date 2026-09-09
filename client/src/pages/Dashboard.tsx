@@ -1582,14 +1582,21 @@ function execResultLine(ex: Execution): { text: string; color: string } {
 //
 // This is not the Terminal. Run submits a command and reports its result; the
 // Terminal tab is a persistent TTY with stdin and Ctrl-C. Both exist.
-function ShellPane({ inst }: { inst: Instance }) {
+function ShellPane({
+  inst, history, setHistory,
+}: {
+  inst: Instance;
+  // Owned by the page, keyed by sandbox: executions stay retrievable by
+  // execution_id, so switching tabs must not throw them away.
+  history: Execution[];
+  setHistory: (fn: (prev: Execution[]) => Execution[]) => void;
+}) {
   const [cmd, setCmd] = useState("");
   const [cwd, setCwd] = useState("/home/user");
   // Kept as a string so the field can be emptied mid-edit; coerced on use.
   const [timeoutText, setTimeoutText] = useState("300");
   const timeoutSeconds = Math.max(1, Number(timeoutText) || 300);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [history, setHistory] = useState<Execution[]>([]);
   // Drives the live duration readout without re-rendering the whole drawer.
   const [, setTick] = useState(0);
   const timers = useRef<number[]>([]);
@@ -3345,7 +3352,7 @@ const DRAWER_WIDTH = 560;
 
 function InstanceDrawer({
   inst, deploymentName, agentVersion, endpoints, idc, product, tab, onTab,
-  onAction, onPatchMetadata, onClose,
+  execHistory, setExecHistory, onAction, onPatchMetadata, onClose,
 }: {
   inst: Instance | null;
   deploymentName: string;
@@ -3355,6 +3362,8 @@ function InstanceDrawer({
   product: string;
   tab: DrawerTab;
   onTab: (t: DrawerTab) => void;
+  execHistory: Execution[];
+  setExecHistory: (fn: (prev: Execution[]) => Execution[]) => void;
   onAction: (id: string, action: RowAction) => void;
   onPatchMetadata: (id: string, next: MetaEntry[]) => void;
   onClose: () => void;
@@ -3548,7 +3557,7 @@ function InstanceDrawer({
 
         {activeTab === "access" && <AccessSection inst={inst} endpoints={endpoints} />}
         {activeTab === "files"  && <FilesSection inst={inst} />}
-        {activeTab === "run"    && <ShellPane inst={inst} />}
+        {activeTab === "run"    && <ShellPane inst={inst} history={execHistory} setHistory={setExecHistory} />}
         {activeTab === "terminal" && (
           <TerminalV2
             sandboxId={inst.id}
@@ -3886,10 +3895,23 @@ function MonitorPane({
                     <div style={{ color: C.muted }}>{agoLabel(inst.created)}</div>
                     {/* Row actions stop propagation so they never double as "open detail" */}
                     <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
+                      {/* §D — the data-plane URL is not open. Reaching a Sandbox
+                          needs the token POST /sandboxes/{id}/connect returns, so a
+                          bare link would 401. This opens the Terminal, which does
+                          the exchange. */}
                       {inst.status === "running" && inst.endpointUrl && (
-                        <a href={inst.endpointUrl} target="_blank" rel="noreferrer" title={inst.endpointUrl} style={rowBtnGhost}>
-                          Open ↗
-                        </a>
+                        <button
+                          onClick={(e) => {
+                            // Stop it here too: the row itself opens the drawer on
+                            // Overview, and that would win the race and drop the tab.
+                            e.stopPropagation();
+                            onOpenDetail(inst.id, "terminal");
+                          }}
+                          title={`${inst.endpointUrl} — not directly reachable. Access needs a token from POST /sandboxes/{id}/connect; opening the Terminal performs that exchange.`}
+                          style={rowBtnGhost}
+                        >
+                          <IconTerminal /> Open terminal
+                        </button>
                       )}
                       {/* One primary lifecycle verb per state; the rest live in the drawer */}
                       {inst.status === "running" && (
@@ -5072,6 +5094,9 @@ export default function Dashboard() {
   // Provision modal — open per-task override modal first, then provision on submit
   const [provisionForAgentId, setProvisionForAgentId] = useState<string | null>(null);
   // v1.2 §D — Publish Status modal + its unpublish confirmation
+  // Run history per sandbox. Lives here so it survives closing the tab or the
+  // drawer — the pane promises results stay retrievable by execution_id.
+  const [execHistory, setExecHistory] = useState<Record<string, Execution[]>>({});
   const [publishStatusOpen, setPublishStatusOpen] = useState(false);
   const [unpublishRow, setUnpublishRow] = useState<PublishRow | null>(null);
 
@@ -5650,6 +5675,12 @@ export default function Dashboard() {
         product={productForTier(drawerAgent?.tier)}
         tab={drawer?.tab ?? "overview"}
         onTab={(tab) => setDrawer((d) => (d ? { ...d, tab } : d))}
+        execHistory={drawerInst ? (execHistory[drawerInst.id] ?? []) : []}
+        setExecHistory={(fn) => {
+          const id = drawerInst?.id;
+          if (!id) return;
+          setExecHistory((m) => ({ ...m, [id]: fn(m[id] ?? []) }));
+        }}
         onAction={handleAction}
         onPatchMetadata={patchMetadata}
         onClose={() => setDrawer(null)}

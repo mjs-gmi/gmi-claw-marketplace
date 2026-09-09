@@ -1012,8 +1012,8 @@ function StepInfrastructure({
           <>
             <SpecChip label="Docker Image" value={dockerImage.trim() || "Not set"} mono={!!dockerImage.trim()} />
             <SpecChip label="Registry Credentials" value={enableCreds ? "Configured" : "Public image"} />
-            <SpecChip label="Compute Tier" value={tier ? `${tier.name} · ${tier.cpu} · ${tier.ram} · ${tier.storage}` : "—"} />
-            <SpecChip label="Data Center Region" value={reg ? `${reg.name} · ${reg.sub}` : "—"} />
+            <SpecChip label="Spec" value={tier ? `${tier.name} · ${tier.cpu} · ${tier.ram} · ${tier.storage}` : "—"} />
+            <SpecChip label="Default IDC" value={reg ? `${reg.name} · ${reg.sub}` : "—"} />
             <SpecChip label="MaaS" value={addModels ? (model ? model.name : "Not selected") : "Off"} />
           </>
         )}
@@ -1115,13 +1115,23 @@ function StepInfrastructure({
 
         {/* Data Center — searchable combobox */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <FieldLabel required>Data Center</FieldLabel>
+          <FieldLabel required>Default IDC</FieldLabel>
           <RegionSelect value={region} onChange={setRegion} options={REGIONS} />
+          <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>
+            The default for this Agent. <span style={{ color: C.fg }}>Each Sandbox picks its own IDC at Launch</span> —
+            it is a create parameter (<span style={{ fontFamily: MONO }}>idc_name</span>).
+          </span>
         </div>
 
-        {/* Compute Tier */}
+        {/* Spec — the Template's `resources`. Not a create parameter, so it can
+            only be changed here; Launch shows it read-only. */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <FieldLabel required>Compute size</FieldLabel>
+          <FieldLabel required>Spec</FieldLabel>
+          <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>
+            Fixed on this Agent's Template (<span style={{ fontFamily: MONO }}>resources</span>) and the same for
+            every Sandbox it launches. <span style={{ color: C.fg }}>Launch cannot override it</span> — to change the
+            size later, change the Template.
+          </span>
           {!region ? (
             <div
               style={{
@@ -1132,7 +1142,7 @@ function StepInfrastructure({
                 padding: "12px 14px",
               }}
             >
-              Select a region first
+              Select an IDC first — Specs are listed per IDC
             </div>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8 }}>
@@ -2602,7 +2612,7 @@ export default function DeployWizard() {
         { label: "Project Name",         value: projectName || "—" },
         { label: "Docker Image",         value: dockerImage || "—" },
         { label: "Registry Credentials", value: enableCreds ? "Configured" : "Public image" },
-        { label: "Compute Tier",         value: tierInfo ? `${tierInfo.name} - ${tierInfo.sub}` : "—" },
+        { label: "Spec",                 value: tierInfo ? `${tierInfo.name} - ${tierInfo.sub}` : "—" },
         { label: "Region",               value: regionInfo ? `${regionInfo.name} · ${regionInfo.sub}` : "—" },
       ],
     },
