@@ -12,12 +12,10 @@
 // render at the wrong width), and closing must really send close (otherwise the
 // session leaks while the UI just hid it).
 //
-// Two modes, one tab. Files, executions and the shell are all the same data
-// plane — one host, one X-Access-Token, different paths — so splitting exec off
-// into its own tab put two "run something in here" entry points side by side.
-// E2B's dashboard has Terminal + Filesystem and no exec tab even though its SDK
-// has both modules; Vercel puts shell, files and commands behind one Connect
-// tab. Same here: Session is the TTY, One-shot is POST /executions.
+// The shell, and only the shell. Running one command with an exit code is the
+// Run tab next door — two sibling tabs, each named for what it does. They were
+// one tab with a mode toggle, which is exactly how Run became unfindable:
+// nothing on screen said the word "Run" until you had already opened Terminal.
 //
 // This is a prototype: the transport is simulated, but every state the real
 // stream produces has a rendering, and resize/close go through the same code
@@ -78,10 +76,8 @@ function respond(cmd: string, cwdRef: { cwd: string }): Responded {
   return { lines: [{ text: `sh: command not found: ${c.split(" ")[0]}`, kind: "err" }] };
 }
 
-export type TerminalMode = "session" | "oneshot";
-
 export default function TerminalV2({
-  sandboxId, sandboxKey, domain, canConnect, blockedReason, mode, onMode, oneShot,
+  sandboxId, sandboxKey, domain, canConnect, blockedReason,
 }: {
   sandboxId: string;
   sandboxKey: string;
@@ -89,10 +85,6 @@ export default function TerminalV2({
   /** Running only — a pending or suspended Sandbox has no TTY to attach to. */
   canConnect: boolean;
   blockedReason?: string;
-  mode: TerminalMode;
-  onMode: (m: TerminalMode) => void;
-  /** The one-shot pane (exec), rendered in place of the session. */
-  oneShot: React.ReactNode;
 }) {
   const [conn, setConn] = useState<Conn>("connecting");
   const [lines, setLines] = useState<Line[]>([]);
@@ -138,12 +130,9 @@ export default function TerminalV2({
 
   useEffect(() => {
     if (!canConnect) { setConn("closed"); return; }
-    // Only hold a session open while the session mode is on screen: a socket
-    // nobody is looking at is still a socket, and close has to mean close.
-    if (mode !== "session") { setConn("closed"); return; }
     open();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canConnect, sandboxId, mode]);
+  }, [canConnect, sandboxId]);
 
   // Track the pane's real width so the reported size is the real size.
   useEffect(() => {
@@ -253,53 +242,17 @@ export default function TerminalV2({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-        {/* One tab, two modes — the endpoint differs, the place does not. */}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+          Terminal <V2Badge /> · <span style={{ fontFamily: MONO, textTransform: "none", letterSpacing: "normal" }}>/shell/connect</span>
+        </span>
         <div style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-          <div style={{ display: "inline-flex", background: "rgba(255,255,255,0.05)", border: `1px solid ${C.border}`, borderRadius: 8, padding: 2 }}>
-            {([
-              { key: "session" as const, label: "Shell",    path: "/shell/connect" },
-              { key: "oneshot" as const, label: "Run",      path: "POST /executions" },
-            ]).map((m) => {
-              const on = mode === m.key;
-              return (
-                <button
-                  key={m.key}
-                  onClick={() => onMode(m.key)}
-                  title={m.path}
-                  style={{
-                    fontFamily: FONT, fontSize: 12, fontWeight: on ? 600 : 500,
-                    color: on ? C.limeText : C.muted,
-                    background: on ? C.lime : "transparent",
-                    border: "none", borderRadius: 6, padding: "3px 11px", cursor: "pointer",
-                  }}
-                >
-                  {m.label}
-                </button>
-              );
-            })}
-          </div>
-          <V2Badge />
+          {statusChip()}
+          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted }}>
+            {lastResize ? `${lastResize.cols}×${lastResize.rows}` : `${size.cols}×${size.rows}`}
+          </span>
         </div>
-        {mode === "session" && (
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-            {statusChip()}
-            <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted }}>
-              {lastResize ? `${lastResize.cols}×${lastResize.rows}` : `${size.cols}×${size.rows}`}
-            </span>
-          </div>
-        )}
       </div>
 
-      {mode === "oneshot" ? (
-        <>
-          <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-            One command, one result — exit code and duration. Same sandbox, same token;
-            <span style={{ fontFamily: MONO }}> POST /executions</span> instead of the shell stream.
-            Switch to <span style={{ color: C.fg }}>Shell</span> for anything interactive.
-          </span>
-          {oneShot}
-        </>
-      ) : (
       <>
 
       {!canConnect ? (
@@ -402,13 +355,12 @@ export default function TerminalV2({
             Ctrl-D or <span style={{ fontFamily: MONO }}>exit</span> closes. Drag the bottom edge to resize —
             the new size is sent as a <span style={{ fontFamily: MONO }}>resize</span> control message, so programs
             inside lay out correctly. <span style={{ color: C.fg }}>Close session really hangs up</span>; it does not
-            just hide this pane. For a single command with an exit code, switch to
-            <span style={{ color: C.fg }}> Run</span> above.
+            just hide this pane. For a single command with an exit code, use the
+            <span style={{ color: C.fg }}> Run</span> tab.
           </span>
         </>
       )}
       </>
-      )}
     </div>
   );
 }

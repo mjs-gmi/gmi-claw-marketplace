@@ -58,7 +58,7 @@ function ops(templateId: string): Op[] {
   return [
     {
       id: "create",
-      group: "Lifecycle",
+      group: "Management",
       name: "Create a Sandbox",
       endpoint: "POST /sandboxes",
       plane: "control",
@@ -81,7 +81,7 @@ function ops(templateId: string): Op[] {
     },
     {
       id: "exec",
-      group: "Process & execution",
+      group: "Process and code execution",
       name: "Run a command",
       endpoint: "POST /executions",
       plane: "data",
@@ -103,7 +103,7 @@ function ops(templateId: string): Op[] {
     },
     {
       id: "cancel",
-      group: "Process & execution",
+      group: "Process and code execution",
       name: "Cancel a running command",
       endpoint: "POST /executions/{id}/cancel",
       plane: "data",
@@ -120,7 +120,7 @@ function ops(templateId: string): Op[] {
     },
     {
       id: "upload",
-      group: "Files",
+      group: "File system operations",
       name: "Upload a file",
       endpoint: "POST /files?path=",
       plane: "data",
@@ -140,7 +140,7 @@ function ops(templateId: string): Op[] {
     },
     {
       id: "download",
-      group: "Files",
+      group: "File system operations",
       name: "Download a file",
       endpoint: "GET /files?path=",
       plane: "data",
@@ -160,7 +160,7 @@ function ops(templateId: string): Op[] {
     },
     {
       id: "shell",
-      group: "Process & execution",
+      group: "Process and code execution",
       name: "Open an interactive shell",
       endpoint: "wss://{sandbox_key}.{domain}/shell/connect",
       plane: "data",
@@ -179,7 +179,7 @@ function ops(templateId: string): Op[] {
     },
     {
       id: "extend",
-      group: "Lifecycle",
+      group: "Management",
       name: "Extend the timeout",
       endpoint: "PATCH /sandboxes/{id}",
       plane: "control",
@@ -196,7 +196,7 @@ function ops(templateId: string): Op[] {
     },
     {
       id: "delete",
-      group: "Lifecycle",
+      group: "Management",
       name: "Delete the Sandbox",
       endpoint: "DELETE /sandboxes/{id}",
       plane: "control",
@@ -214,7 +214,13 @@ function ops(templateId: string): Op[] {
   ];
 }
 
-export default function SdkPlaygroundV2({ templateId }: { templateId: string }) {
+export default function SdkPlaygroundV2({
+  templateId, compact = false,
+}: {
+  templateId: string;
+  /** Hides the heading when the Playground shell already provides one. */
+  compact?: boolean;
+}) {
   const all = useMemo(() => ops(templateId), [templateId]);
   const [opId, setOpId] = useState(all[0].id);
   const [lang, setLang] = useState<Lang>("python");
@@ -250,14 +256,18 @@ export default function SdkPlaygroundV2({ templateId }: { templateId: string }) 
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <h3 style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>
-            SDK <V2Badge />
-          </h3>
-          <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "4px 0 0", lineHeight: "18px", maxWidth: 640 }}>
-            Every operation this Agent's Sandboxes support, with the call you would paste.
-            Edit the parameters and the snippet follows. The endpoint is on each one, because
-            the swagger is the contract.
-          </p>
+          {!compact && (
+            <>
+              <h3 style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>
+                SDK <V2Badge />
+              </h3>
+              <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "4px 0 0", lineHeight: "18px", maxWidth: 640 }}>
+                Every operation a Sandbox supports, with the call you would paste. Edit the
+                parameters and the snippet follows. The endpoint is on each one, because the
+                swagger is the contract.
+              </p>
+            </>
+          )}
         </div>
         <div style={{ display: "inline-flex", background: "rgba(255,255,255,0.05)", border: `1px solid ${C.border}`, borderRadius: 8, padding: 2 }}>
           {LANGS.map((l) => {

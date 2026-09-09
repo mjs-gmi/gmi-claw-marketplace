@@ -13,7 +13,7 @@ import { C as baseC, FONT, MONO } from "@/lib/tokens";
 import { SEED_AGENTS } from "@/lib/seedAgents";
 import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
 import V2Badge from "@/components/V2Badge";
-import TerminalV2, { type TerminalMode } from "@/components/TerminalV2";
+import TerminalV2 from "@/components/TerminalV2";
 import NoApiBadge, { NoApiNote, NO_API_REASON } from "@/components/NoApiBadge";
 import SdkPlaygroundV2 from "@/components/SdkPlaygroundV2";
 import OpenQuestionBadge from "@/components/OpenQuestionBadge";
@@ -1609,6 +1609,21 @@ function execResultLine(ex: Execution): { text: string; color: string } {
   }
 }
 
+// The exec call for whatever is in the form right now. Daytona's Playground
+// generates a snippet beside the operation you are configuring; that idea is
+// worth having without building a separate Playground for it — the command you
+// just ran is the one you want to paste into your own code.
+function execSnippet(cmd: string, cwd: string, timeoutSeconds: number, lang: "python" | "typescript" | "curl"): string {
+  const c = cmd.trim() || "python main.py";
+  if (lang === "python") {
+    return `run = sandbox.exec(\n    "${c}",\n    cwd="${cwd}",\n    timeout=${timeoutSeconds},\n)\nprint(run.exit_code, run.stdout)`;
+  }
+  if (lang === "typescript") {
+    return `const run = await sandbox.exec("${c}", {\n  cwd: "${cwd}",\n  timeout: ${timeoutSeconds},\n});\nconsole.log(run.exitCode, run.stdout);`;
+  }
+  return `curl -sS -X POST "$DP_BASE/executions?wait=true&wait_timeout_seconds=25" \\\n  -H "X-Access-Token: $SAT" -H 'Content-Type: application/json' \\\n  -d '{"action":"exec","parameters":{"command":"${c}",\n       "cwd":"${cwd}","execution_timeout_seconds":${timeoutSeconds}}}'`;
+}
+
 // Run Command — ONE command per submission, Running only. Backed by the data
 // plane: POST /executions?wait=… returns an execution_id, and
 // POST /executions/{id}/cancel (empty body) interrupts one that is still going.
@@ -1630,6 +1645,7 @@ function ShellPane({
   const [timeoutText, setTimeoutText] = useState("300");
   const timeoutSeconds = Math.max(1, Number(timeoutText) || 300);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [snippetLang, setSnippetLang] = useState<"python" | "typescript" | "curl" | null>(null);
   // Drives the live duration readout without re-rendering the whole drawer.
   const [, setTick] = useState(0);
   const timers = useRef<number[]>([]);
@@ -1784,9 +1800,52 @@ function ShellPane({
         </div>
       )}
 
+      {/* Same call, as code. Collapsed by default — it is a reference, not a step. */}
+      <div style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 7 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+          <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>Same call in code:</span>
+          {([
+            { k: "python" as const,     label: "Python" },
+            { k: "typescript" as const, label: "TypeScript" },
+            { k: "curl" as const,       label: "curl" },
+          ]).map((l) => {
+            const on = snippetLang === l.k;
+            return (
+              <button
+                key={l.k}
+                onClick={() => setSnippetLang(on ? null : l.k)}
+                style={{
+                  fontFamily: FONT, fontSize: 11, fontWeight: on ? 600 : 500,
+                  color: on ? C.limeText : C.fg,
+                  background: on ? C.lime : "transparent",
+                  border: `1px solid ${on ? C.lime : C.border}`,
+                  borderRadius: 6, padding: "1px 9px", cursor: "pointer",
+                }}
+              >
+                {l.label}
+              </button>
+            );
+          })}
+          <V2Badge />
+        </div>
+        {snippetLang && (() => {
+          const code = execSnippet(cmd, cwd, timeoutSeconds, snippetLang);
+          return (
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", background: "#000" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", borderBottom: `1px solid ${C.borderSoft}`, background: C.cardSolid }}>
+                <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted }}>POST /executions</span>
+                <CopyButton value={code} />
+              </div>
+              <pre style={{ margin: 0, padding: "10px 12px", overflowX: "auto", fontFamily: MONO, fontSize: 11.5, lineHeight: "18px", color: C.fg }}>{code}</pre>
+            </div>
+          );
+        })()}
+      </div>
+
       <span style={{ display: "block", marginTop: 8, fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
         One command at a time. <span style={{ color: C.fg }}>This is not a persistent terminal</span> — no stdin,
-        no retained <span style={{ fontFamily: MONO }}>cd</span>, no Ctrl-C. For interactive work use the Terminal tab.
+        no retained <span style={{ fontFamily: MONO }}>cd</span>, no Ctrl-C. For interactive work use the
+        <span style={{ color: C.fg }}> Terminal</span> tab next door.
         Closing this pane does not stop the command, and every result stays retrievable by
         <span style={{ fontFamily: MONO }}> execution_id</span> after the Sandbox is suspended, fails, or is deleted.
       </span>
@@ -3437,10 +3496,8 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
 // list so the list stays visible and the next instance is one click away.
 // Everything that used to be stacked in one scrolling popup is grouped into
 // tabs, and the endpoint confirmations are inline instead of a second modal.
-// "run" is kept as an alias so older links still resolve; it lands on the
-// Terminal in one-shot mode.
 type DrawerTab = "overview" | "access" | "metrics" | "files" | "run" | "terminal" | "logs" | "config";
-const TAB_ALIAS: Partial<Record<DrawerTab, DrawerTab>> = { run: "terminal" };
+const TAB_ALIAS: Partial<Record<DrawerTab, DrawerTab>> = {};
 const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean; noApi?: boolean; question?: string }[] = [
   { key: "overview", label: "Overview" },
   // Access / Files / Run are the V2.0 change set (sections D, G, B).
@@ -3453,6 +3510,10 @@ const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: 
   // Daytona has Metrics as its own tab. Ours was a block buried inside
   // Overview, which is why nobody found it.
   { key: "metrics",  label: "Metrics", runningOnly: true, v2: true, noApi: true },
+  // Run and Terminal are siblings, not two modes of one thing: one submits a
+  // command and reports an exit code, the other is a session. Both named, both
+  // visible — the mode toggle was what made Run impossible to find.
+  { key: "run",      label: "Run", runningOnly: true, v2: true },
   { key: "files",    label: "Files",  v2: true },
   // Terminal holds both modes — the TTY and one-shot exec. They are the same
   // data plane, so E2B's dashboard and Vercel's Connect tab both keep them in
@@ -3466,7 +3527,7 @@ const DRAWER_WIDTH = 560;
 
 function InstanceDrawer({
   inst, deploymentName, agentVersion, endpoints, idc, product, tab, onTab,
-  execHistory, setExecHistory, termMode, onTermMode, variant = "drawer", tabHref,
+  execHistory, setExecHistory, variant = "drawer", tabHref,
   onAction, onPatchMetadata, onClose,
 }: {
   inst: Instance | null;
@@ -3479,8 +3540,6 @@ function InstanceDrawer({
   onTab: (t: DrawerTab) => void;
   execHistory: Execution[];
   setExecHistory: (fn: (prev: Execution[]) => Execution[]) => void;
-  termMode: TerminalMode;
-  onTermMode: (m: TerminalMode) => void;
   /** "page" renders full width at its own URL; "drawer" is the slide-over. */
   variant?: "drawer" | "page";
   /** Tabs are links in page mode, so the URL is the state. */
@@ -3692,6 +3751,7 @@ function InstanceDrawer({
 
         {activeTab === "access" && <AccessSection inst={inst} endpoints={endpoints} />}
         {activeTab === "metrics" && <MetricsPane inst={inst} />}
+        {activeTab === "run"     && <ShellPane inst={inst} history={execHistory} setHistory={setExecHistory} />}
         {activeTab === "files"  && <FilesSection inst={inst} />}
         {activeTab === "terminal" && (
           <TerminalV2
@@ -3700,9 +3760,6 @@ function InstanceDrawer({
             domain="sandbox.gmi.cloud"
             canConnect={running}
             blockedReason={`A Terminal needs a Running Sandbox — this one is ${statusLabel(inst.status)}.`}
-            mode={termMode}
-            onMode={onTermMode}
-            oneShot={<ShellPane inst={inst} history={execHistory} setHistory={setExecHistory} />}
           />
         )}
         {activeTab === "logs"   && <LogsPane inst={inst} />}
@@ -4449,10 +4506,7 @@ function AgentDetailPane({
           { value: "monitor", label: "Sandboxes" },
           {
             value: "integration", label: "SDK",
-            // Daytona keeps exec in a Playground; E2B has no exec UI at all and
-            // leaves it to the SDK. Both are defensible; neither puts it on the
-            // Agent. Flagged rather than quietly settled.
-            question: "Does exec belong on the Agent at all? Daytona keeps it in a top-level Playground; E2B has no exec UI and leaves it to the SDK. Undecided.",
+            question: "Agent-level is a guess. Daytona keeps these in a top-level Playground; E2B has no exec UI at all. It sits here because template_id does.",
           },
           {
             value: "analytics", label: "Spending", noApi: true,
@@ -5089,7 +5143,6 @@ export default function Dashboard() {
   const openDetail = (id: string, tab: DrawerTab = "overview") => {
     setProvisionForAgentId(null);
     setDrawer(null);
-    if (tab === "run") setTermMode("oneshot");
     setLocation(sandboxHref(id, tab));
   };
   // F-08 — launcher-owned Saved Launch Configurations, keyed by Agent.
@@ -5116,11 +5169,6 @@ export default function Dashboard() {
   const [onSandboxRoute, routeParams] = useRoute("/dashboard/sandbox/:sandboxId/:tab?");
   const routeSandboxId = onSandboxRoute ? routeParams?.sandboxId : undefined;
   const routeTab = (onSandboxRoute ? (routeParams?.tab as DrawerTab | undefined) : undefined) ?? "overview";
-  const [termMode, setTermMode] = useState<TerminalMode>("session");
-  // An older /run link should land on the Terminal in one-shot mode.
-  useEffect(() => {
-    if (routeParams?.tab === "run") setTermMode("oneshot");
-  }, [routeParams?.tab]);
 
   const sandboxHref = (id: string, tab: DrawerTab = "overview") =>
     `/dashboard/sandbox/${encodeURIComponent(id)}/${tab}`;
@@ -5494,8 +5542,6 @@ export default function Dashboard() {
       tabHref={variant === "page" ? (t) => sandboxHref(inst.id, t) : undefined}
       execHistory={execHistory[inst.id] ?? []}
       setExecHistory={(fn) => setExecHistory((m) => ({ ...m, [inst.id]: fn(m[inst.id] ?? []) }))}
-      termMode={termMode}
-      onTermMode={setTermMode}
       onAction={handleAction}
       onPatchMetadata={patchMetadata}
       onClose={() => { if (variant === "page") setLocation("/dashboard"); else setDrawer(null); }}
@@ -5589,6 +5635,7 @@ export default function Dashboard() {
               >
                 {t.label}
                 {t.isNew && <NewBadge />}
+                {(t as { v2?: boolean }).v2 && <V2Badge />}
                 {t.noApi && <NoApiBadge />}
               </button>
             );
