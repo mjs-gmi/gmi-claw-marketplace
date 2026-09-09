@@ -88,7 +88,7 @@ interface ComputeTier {
   cpu: string; ram: string; storage: string; pricePerHr: number;
 }
 const COMPUTE_TIERS: ComputeTier[] = [
-  { id: "container", name: "Container", sub: "Instance type for the Agentbox marketplace",
+  { id: "container", name: "Container", sub: "Sandbox type for the Agentbox marketplace",
     cpu: "0.5 Core CPU", ram: "800 MiB Memory", storage: "10 GiB OS Storage (Ephemeral)", pricePerHr: 0.0098 },
   { id: "standard",  name: "Standard",  sub: "Most production agents",
     cpu: "4 Core CPU", ram: "8 GiB Memory", storage: "40 GiB OS Storage", pricePerHr: 0.094 },
@@ -695,7 +695,7 @@ function LiveCostPanel({
           ${computeRate.toFixed(4)}<span style={{ fontSize: 16, fontWeight: 500, color: C.muted }}>/hr</span>
         </div>
         <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>
-          {computeRate === 0 ? "Select a compute tier · per active instance" : "Compute size · per active instance"}
+          {computeRate === 0 ? "Select a compute tier · per active sandbox" : "Compute size · per active sandbox"}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, paddingTop: 10, borderTop: `1px solid ${C.borderSoft}` }}>
           <span style={{ width: 6, height: 6, background: C.muted, borderRadius: 2 }} />
@@ -813,7 +813,7 @@ function RegisterPanel({
             <div style={{ fontFamily: FONT, fontSize: 30, fontWeight: 700, lineHeight: "36px", color: C.fg, letterSpacing: "-0.02em" }}>
               ${computeRate.toFixed(4)}<span style={{ fontSize: 16, fontWeight: 500, color: C.muted }}>/hr</span>
             </div>
-            <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>Container tier · per active instance</div>
+            <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>Container tier · per active sandbox</div>
           </>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, paddingTop: 10, borderTop: `1px solid ${C.borderSoft}` }}>
@@ -1366,9 +1366,9 @@ function StepNetworking({
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
         <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px", maxWidth: 560 }}>
-          <span style={{ color: C.fg, fontWeight: 600 }}>Optional.</span> Expose HTTP services from each running instance. Agents used only for command execution or file I/O can skip this section.
+          <span style={{ color: C.fg, fontWeight: 600 }}>Optional.</span> Expose HTTP services from each running sandbox. Agents used only for command execution or file I/O can skip this section.
           {" "}Listening on an undeclared port never exposes it. Visibility here is a default, not a lock — a launcher may tighten it, never loosen it —
-          and these declarations are versioned with the Agent, so changes affect only new instances.
+          and these declarations are versioned with the Agent, so changes affect only new sandboxes.
         </span>
         {(allDefault || ports.length > 0) && (
           <button
@@ -2101,7 +2101,7 @@ function SuccessView({
         </h1>
         <p style={{ fontFamily: FONT, fontSize: 14, fontWeight: 400, lineHeight: "20px", color: C.muted, margin: "8px 0 0", maxWidth: 880 }}>
           {isGmi
-            ? "Your template is saved. Provision your first instance from My Agents to get an endpoint URL. Not yet listed on the Agentbox; only your account is linked until you publish."
+            ? "Your template is saved. Provision your first sandbox from My Agents to get an endpoint URL. Not yet listed on the Agentbox; only your account is linked until you publish."
             : "Auto-approved — your MaaS key is active (Inference-scoped) and your external endpoint is reachable. Not yet listed on the Agentbox; only your account is linked to this Agent until you publish."}
         </p>
       </div>
@@ -2482,7 +2482,7 @@ function EditCostPanel({
         <div style={{ fontFamily: FONT, fontSize: 28, fontWeight: 700, color: C.fg, letterSpacing: "-0.02em", lineHeight: "32px" }}>
           ${computeRate.toFixed(4)}<span style={{ fontSize: 15, fontWeight: 500, color: C.muted }}>/hr</span>
         </div>
-        <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Container tier · per active instance</div>
+        <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Container tier · per active sandbox</div>
         <div style={{ borderTop: `1px solid ${C.borderSoft}`, marginTop: 4, paddingTop: 10, display: "flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 12, color: C.muted }}>
           <span style={{ width: 8, height: 8, borderRadius: 2, background: C.lime, display: "inline-block", flexShrink: 0 }} />
           MaaS: pay per token used
@@ -2808,7 +2808,7 @@ export default function DeployWizard() {
                     >
                       <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                         <span style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg }}>Advanced settings</span>
-                        <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Runtime image · Infrastructure · Networking · Environment — using GMI defaults</span>
+                        <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Sandbox image · Infrastructure · Networking · Environment — using GMI defaults</span>
                       </span>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: advancedOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}><path d="m6 9 6 6 6-6" /></svg>
                     </button>
@@ -2837,8 +2837,8 @@ export default function DeployWizard() {
                                 <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
                               </svg>
                               <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "18px" }}>
-                                <span style={{ color: C.fg, fontWeight: 600 }}>Runtime lifecycle is configured per instance at Launch</span> — maximum active runtime, inactivity, and disk retention use your Organization default and can be customized when you launch an instance (not here).{" "}
-                                <span style={{ color: C.muted }}>Register defines how the Agent runs; Launch defines how long each instance runs.</span>
+                                <span style={{ color: C.fg, fontWeight: 600 }}>Sandbox lifecycle is configured per sandbox at Launch</span> — maximum active time, inactivity, and disk retention use your Organization default and can be customized when you launch a sandbox (not here).{" "}
+                                <span style={{ color: C.muted }}>Register defines how the Agent runs; Launch defines how long each sandbox runs.</span>
                               </span>
                             </div>
                           </div>

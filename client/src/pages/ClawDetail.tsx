@@ -429,7 +429,7 @@ export default function ClawDetail() {
                         Deploy
                       </button>
                       <p style={{ fontFamily: FONT, fontSize: 12, lineHeight: "17px", color: "#8a8a8a", margin: 0 }}>
-                        Opens the deploy wizard with this template — launch and manage instances from My Agents.
+                        Opens the deploy wizard with this template — launch and manage sandboxes from My Agents.
                       </p>
                     </div>
                   )}

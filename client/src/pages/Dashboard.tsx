@@ -332,7 +332,7 @@ interface Instance {
   endpointUrl?: string;       // populated when status=running (per swagger F-03)
   config?: InstanceConfig;    // per-task override (PRD F-04 / F-09 — empty = template defaults)
   // ── Runtime 2.0 lifecycle (PRD §2) ──────────────────────────────────────
-  maxActive?: string;             // F-02 Maximum active runtime: "1h"|"6h"|"24h"|"48h"|"off"
+  maxActive?: string;             // F-02 Maximum active time: "1h"|"6h"|"24h"|"48h"|"off"
   maxRuntimeAction?: "suspend" | "delete"; // F-02 default action at the limit
   lifecycleStartedAt?: string;    // anchor for active-time-remaining countdown
   suspendedAt?: string;           // F-05 retention clock start (set on entering suspended)
@@ -694,7 +694,7 @@ const VALIDATION_LABEL: Record<ImageValidation, string> = {
   incompatible: "Incompatible", failed: "Unable to validate",
 };
 const PREP_LABEL: Record<RuntimePrep, string> = {
-  not_started: "Not started", preparing: "Preparing runtime", ready: "Ready",
+  not_started: "Not started", preparing: "Preparing template", ready: "Ready",
   failed: "Preparation failed", stale: "Revalidation required",
 };
 function validationColor(v: ImageValidation): string {
@@ -1354,7 +1354,7 @@ function AgentListItem({
           }}
         />
         <span style={{ fontSize: 12, fontWeight: 500, color: C.muted, lineHeight: "16px" }}>
-          {agg.active === 0 ? "No running instances" : `${agg.active} running instance${agg.active === 1 ? "" : "s"}`}
+          {agg.active === 0 ? "No running sandboxes" : `${agg.active} running sandbox${agg.active === 1 ? "" : "es"}`}
         </span>
       </div>
     </div>
@@ -1382,7 +1382,7 @@ function menuItemStyle(color: string): React.CSSProperties {
 // backend access. Readable in every state, including Deleted.
 function stateHistory(inst: Instance): { at: string; label: string; tone?: "err" | "warn" }[] {
   const out: { at: string; label: string; tone?: "err" | "warn" }[] = [
-    { at: inst.created, label: "pending — Runtime record persisted, ID returned" },
+    { at: inst.created, label: "pending — Sandbox record persisted, ID returned" },
     { at: inst.created, label: "initializing — provisioning with the provider" },
   ];
   if (inst.lifecycleStartedAt) out.push({ at: inst.lifecycleStartedAt, label: "running — readiness passed, compute metering started" });
@@ -1535,7 +1535,7 @@ function ShellPane({ inst }: { inst: Instance }) {
         Replaces Open Shell for Runtime 2.0 instances. Not a terminal — no persistent session, stdin, PTY, retained <span style={{ fontFamily: MONO }}>cd</span>, or Ctrl-C.
         Over the parallel execution cap a run is rejected immediately as retryable, never silently queued.
         Closing this pane does not stop the command, and every result stays retrievable by
-        <span style={{ fontFamily: MONO }}> execution_id</span> after the Runtime is suspended, fails, or is deleted.
+        <span style={{ fontFamily: MONO }}> execution_id</span> after the Sandbox is suspended, fails, or is deleted.
         Suspend and Delete cancel a running execution; the result is kept.
       </span>
       {history.map((ex, i) => (
@@ -1550,7 +1550,7 @@ function ShellPane({ inst }: { inst: Instance }) {
           )}
           {ex.terminationReason && (
             <div style={{ color: "#fdba74", fontFamily: FONT, fontSize: 11, marginTop: 2 }}>
-              {ex.terminationReason} · the Runtime stays Running.
+              {ex.terminationReason} · the Sandbox stays Running.
             </div>
           )}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.borderSoft}` }}>
@@ -1641,7 +1641,7 @@ function DetailRow({ label, value, accent }: { label: string; value: React.React
 // "View public listing" is the high-frequency action (external link) so it
 // stays inline as a lime CTA. "Edit listing" + "Unpublish" fold into a ⋮ menu
 // to reduce button density on the agent detail header.
-// Single "Listing ▼" dropdown sits next to "+ Instance" in the agent detail
+// Single "Listing ▼" dropdown sits next to "+ Sandbox" in the agent detail
 // header. All listing actions live behind one trigger — no inline primary
 // button — so the header stays tight even as state changes. State badge
 // inside the trigger (DRAFT / PENDING / LIVE / REJECTED) tells the user where
@@ -1768,7 +1768,7 @@ function InstanceRowMenu({
   // no-op, so the entry drops once release is already under way.
   if (inst.status !== "deleted" && inst.status !== "deleting") {
     lifecycle.push({
-      action: "delete", label: "Delete Instance", icon: <IconTrash />, danger: true,
+      action: "delete", label: "Delete Sandbox", icon: <IconTrash />, danger: true,
       title: "Available in every state — an in-flight or unconfirmed operation is aborted or awaited internally, then release proceeds.",
     });
   }
@@ -1785,7 +1785,7 @@ function InstanceRowMenu({
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <button
-        aria-label={`Instance ${inst.id.slice(0, 8)} actions`}
+        aria-label={`Sandbox ${inst.id.slice(0, 8)} actions`}
         onClick={() => setOpen((o) => !o)}
         style={{
           width: 26, height: 26,
@@ -2085,10 +2085,10 @@ function ProvisionModal({
         <div style={{ padding: "14px 18px 12px", borderBottom: `1px solid ${C.borderSoft}`, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
           <div style={{ minWidth: 0 }}>
             <h3 style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg, margin: 0 }}>
-              Launch instance {agentName && <span style={{ color: C.muted, fontWeight: 500 }}> — {agentName}</span>}
+              Launch sandbox {agentName && <span style={{ color: C.muted, fontWeight: 500 }}> — {agentName}</span>}
             </h3>
             <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "4px 0 0", lineHeight: "16px" }}>
-              Provision a new container instance from this deployment.
+              Provision a new Sandbox from this deployment.
             </p>
           </div>
           <button
@@ -2102,12 +2102,14 @@ function ProvisionModal({
 
         {/* Body — scrollable */}
         <div style={{ flex: 1, minHeight: 0, padding: "16px 18px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 18 }}>
-          {/* Runtime Template (F-01) — read-only. In R1 a Runtime launches from a
+          {/* Sandbox Template (F-01) — read-only. In R1 a Sandbox launches from a
               Ready Template produced by the Agent Version build: the image pull and
-              dependency install happen at register time, never at create time. */}
+              dependency install happen at register time, never at create time.
+              Image and Spec are both Template-owned; Launch owns IDC, model,
+              lifecycle and env. */}
           <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-              Runtime Template <span style={{ letterSpacing: "normal", textTransform: "none", fontWeight: 500 }}>· {agentVersion}</span>
+              Sandbox Template <span style={{ letterSpacing: "normal", textTransform: "none", fontWeight: 500 }}>· {agentVersion}</span>
             </span>
             <code style={{
               ...inputStyle,
@@ -2119,6 +2121,16 @@ function ProvisionModal({
             </code>
             <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
               Prepared when the Agent Version was registered — no image pull or dependency install at launch.
+            </span>
+            {/* The image is a Template property, like Spec. Launch shows it and
+                never offers to change it, so say where it *is* changed rather
+                than leaving a read-only field with no explanation. */}
+            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: "-1px", marginRight: 5 }} aria-hidden="true">
+                <rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
+              </svg>
+              Set by this Agent's Sandbox Template — change it there with Replace Image, not per sandbox.
+              <V2Badge style={{ marginLeft: 5 }} />
             </span>
           </section>
 
@@ -2137,7 +2149,7 @@ function ProvisionModal({
                 <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "17px" }}>
                   <span style={{ fontWeight: 600 }}>Action required</span> — the model saved for this Agent
                   (<span style={{ fontFamily: MONO }}>{savedConfig.model}</span>) is no longer offered to your Organization.
-                  Your saved configuration is kept, but no Runtime is created until you confirm another model.
+                  Your saved configuration is kept, but no Sandbox is created until you confirm another model.
                   Nothing is substituted for you.
                 </span>
               </div>
@@ -2190,7 +2202,7 @@ function ProvisionModal({
               {savedConfig.status === "ok"
                 ? <>Saved default for this Agent: <span style={{ color: C.fg }}>{modelDisplayName(savedConfig.model)}</span>. </>
                 : null}
-              Injected as locked <span style={{ fontFamily: MONO }}>GMI_MODEL_ID</span> · applies only to Runtimes created after this change; running Runtimes are unaffected.
+              Injected as locked <span style={{ fontFamily: MONO }}>GMI_MODEL_ID</span> · applies only to Sandboxes created after this change; running Sandboxes are unaffected.
             </span>
             {/* Threshold nudge — how this run bills, based on the launcher's subscription */}
             {(() => {
@@ -2253,9 +2265,9 @@ function ProvisionModal({
             ) : (
               /* Expanded — the two editable controls + read-only policy rows */
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {/* Maximum active runtime (F-02) */}
+                {/* Maximum active time (F-02) */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg }}>Maximum active runtime</span>
+                  <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg }}>Maximum active time</span>
                   <select value={maxLifetime} onChange={(e) => setMaxLifetime(e.target.value)} style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "pointer" }}>
                     <option value="1h">1 hour</option>
                     <option value="6h">6 hours</option>
@@ -2303,7 +2315,7 @@ function ProvisionModal({
                       </label>
                       <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
                         Run Command and file transfer always reset the timer. Health checks, probes, rejected requests, and platform traffic never do.
-                        This policy only pauses a Runtime — it never deletes one.
+                        This policy only pauses a Sandbox — it never deletes one.
                       </span>
                     </div>
                   )}
@@ -2320,7 +2332,7 @@ function ProvisionModal({
                     <span style={{ color: C.fg }}>Storage billing continues until Resume or Delete</span>
                   </div>
                   <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-                    Set at launch and fixed for this Runtime in R1. Running and pausing time count toward the limit, paused time doesn't,
+                    Set at launch and fixed for this Sandbox in R1. Running and pausing time count toward the limit, paused time doesn't,
                     and a successful Resume resets the clock. Deleting at the limit would need an explicit opt-in — it is never the default.
                   </span>
                 </div>
@@ -2516,8 +2528,8 @@ function ProvisionModal({
               ))}
             </div>
             <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-              Endpoints come from the Agent. Their live URLs and tokens appear under Access once the instance is running —
-              and a Running instance does not guarantee its Endpoint is Available.
+              Endpoints come from the Agent. Their live URLs and tokens appear under Access once the sandbox is running —
+              and a Running sandbox does not guarantee its Endpoint is Available.
             </span>
           </section>
 
@@ -2531,7 +2543,7 @@ function ProvisionModal({
             </div>
             <MetadataEditor entries={meta} onChange={setMeta} />
             <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-              Opaque to AgentBox — never used for routing, quota, billing attribution, or access control. Returned by Get and List, and filterable in the instance list.
+              Opaque to AgentBox — never used for routing, quota, billing attribution, or access control. Returned by Get and List, and filterable in the sandbox list.
             </span>
           </section>
         </div>
@@ -2542,7 +2554,7 @@ function ProvisionModal({
               never waits on provider acceptance; Running is only reported once
               readiness passes, and transition time is not billed (§4.5). */}
           <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px", maxWidth: 290 }}>
-            Returns a Runtime ID right away in Pending. Running is reported only after readiness passes; starting time is not billed.
+            Returns a Sandbox ID right away in Pending. Running is reported only after readiness passes; starting time is not billed.
           </span>
           <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
             <button
@@ -2559,7 +2571,7 @@ function ProvisionModal({
             <button
               onClick={submit}
               disabled={!canCreate}
-              title={canCreate ? undefined : "Confirm a model before creating a Runtime"}
+              title={canCreate ? undefined : "Confirm a model before creating a Sandbox"}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 6,
                 fontFamily: FONT, fontSize: 13, fontWeight: 600,
@@ -2568,7 +2580,7 @@ function ProvisionModal({
                 padding: "6px 16px", borderRadius: 8, cursor: canCreate ? "pointer" : "not-allowed",
               }}
             >
-              Create Instance
+              Create Sandbox
             </button>
           </div>
         </div>
@@ -2649,14 +2661,14 @@ function FilesSection({ inst }: { inst: Instance }) {
         <button disabled={!running} onClick={() => setMsg(`Uploaded to ${path}`)} style={btn("Upload")}>Choose file…</button>
         <button disabled={!running} onClick={() => setMsg(`Downloaded ${path}`)} style={btn("Download")}>Download file</button>
       </div>
-      {!running && <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>File transfer is available only while the instance is Running. Suspend and Delete cancel an in-flight transfer.</span>}
+      {!running && <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>File transfer is available only while the sandbox is Running. Suspend and Delete cancel an in-flight transfer.</span>}
       {running && msg && <span style={{ fontFamily: FONT, fontSize: 11, color: C.ok }}>{msg} (mock)</span>}
       <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
         A path plus a file picker — one file at a time, no directory browser. A failed or oversize upload leaves no partial file;
         a failed download errors rather than silently truncating.
       </span>
       <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-        Files are stored on this Runtime. Deleting the Runtime permanently deletes files unless saved through a Snapshot or exported.
+        Files are stored on this Sandbox. Deleting the Sandbox permanently deletes files unless saved through a Snapshot or exported.
       </span>
     </div>
   );
@@ -2711,9 +2723,9 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
         const authRequest = `curl ${url} \\\n  -H "Authorization: Bearer $GMI_ENDPOINT_TOKEN"`;
         const note =
           deleted.includes(ep.id) ? "Deleted — the route, authenticated access, and any signed links are revoked. This URL is never reused for another tenant." :
-          revoked ? "Revoked — this endpoint was torn down with the instance." :
+          revoked ? "Revoked — this endpoint was torn down with the sandbox." :
           (st === "unavailable" && (inst.status === "suspended" || inst.status === "suspending"))
-            ? "Unavailable while the instance is suspended. The URL will remain unchanged after it resumes." :
+            ? "Unavailable while the sandbox is suspended. The URL will remain unchanged after it resumes." :
           st === "unavailable" ? `Service unavailable — check the app is listening on 0.0.0.0:${ep.internalPort}.` :
           st === "pending" ? "Route is starting — the URL is reserved and becomes reachable shortly." :
           st === "error" ? "Endpoint error — route or tunnel failed. The URL is unchanged; retrying automatically." :
@@ -2724,7 +2736,7 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>{ep.name}</span>
               <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", color: isPublic ? "#fbbf24" : "#7dd3fc", background: isPublic ? "rgba(251,191,36,0.14)" : "rgba(125,211,252,0.14)", border: `1px solid ${isPublic ? "rgba(251,191,36,0.45)" : "rgba(125,211,252,0.45)"}`, padding: "1px 7px", borderRadius: 5 }}>{isPublic ? "Public" : "Private"}</span>
-              <span title="Endpoint state — independent of the instance's runtime state" style={{ fontFamily: FONT, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", color: meta.color, background: `${meta.color}1f`, border: `1px solid ${meta.color}55`, padding: "1px 7px", borderRadius: 5 }}>{meta.label}</span>
+              <span title="Endpoint state — independent of the sandbox's state" style={{ fontFamily: FONT, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", color: meta.color, background: `${meta.color}1f`, border: `1px solid ${meta.color}55`, padding: "1px 7px", borderRadius: 5 }}>{meta.label}</span>
             </div>
 
             {/* URL + copy */}
@@ -2773,7 +2785,7 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
             )}
             {tightened && (
               <span style={{ fontFamily: FONT, fontSize: 11, color: C.ok, lineHeight: "15px" }}>
-                Tightened to Private for this Runtime — applied without a restart. The Agent's declared default is unchanged.
+                Tightened to Private for this Sandbox — applied without a restart. The Agent's declared default is unchanged.
               </span>
             )}
 
@@ -2794,7 +2806,7 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
               <div style={{ background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.35)", borderRadius: 8, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
                 <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "17px" }}>
                   Delete <span style={{ fontFamily: MONO }}>{ep.name}</span>? The route, authenticated access, and any signed links are revoked.
-                  The URL is never reused for another tenant, and the Runtime keeps running.
+                  The URL is never reused for another tenant, and the Sandbox keeps running.
                 </span>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button
@@ -2825,7 +2837,7 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
       })}
 
       <p style={{ fontFamily: FONT, fontSize: 11, color: C.muted, margin: 0, lineHeight: "15px" }}>
-        Endpoints are declared on the Agent (Register → Networking) and versioned with it — declaration changes affect only new Runtimes.
+        Endpoints are declared on the Agent (Register → Networking) and versioned with it — declaration changes affect only new Sandboxes.
         Listening on an undeclared port never exposes it. The URL, visibility, and authentication survive Pause/Resume; Delete revokes them.
       </p>
 
@@ -2938,7 +2950,7 @@ function InstanceDrawer({
           </div>
           <button
             onClick={onClose}
-            aria-label="Close instance detail"
+            aria-label="Close sandbox detail"
             style={{ flexShrink: 0, width: 28, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "transparent", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 7, cursor: "pointer" }}
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
@@ -3014,7 +3026,7 @@ function InstanceDrawer({
                 <h4 style={{ fontFamily: FONT, fontSize: 13.5, fontWeight: 600, color: C.fg, margin: 0 }}>Lifecycle</h4>
                 <ReleaseBadge r="R1" />
               </div>
-              <DetailRow label="Maximum active runtime" value={durationLabel(inst.maxActive)} />
+              <DetailRow label="Maximum active time" value={durationLabel(inst.maxActive)} />
               <DetailRow label="Active time used" value={totalMins ? `${usedMins} min` : "—"} />
               <DetailRow label="Remaining" value={totalMins ? remainingLabel(totalMins - usedMins) : "No automatic limit"} />
               <DetailRow label="At the limit" value="Pause & keep disk" />
@@ -3067,7 +3079,7 @@ function InstanceDrawer({
             <div style={{ marginTop: 20 }}>
               <h4 style={{ fontFamily: FONT, fontSize: 13.5, fontWeight: 600, color: C.fg, margin: "0 0 2px" }}>Environment variables</h4>
               <p style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, margin: "0 0 10px", lineHeight: "16px" }}>
-                What this instance was created with. Platform keys are locked; overrides were fixed at create.
+                What this sandbox was created with. Platform keys are locked; overrides were fixed at create.
               </p>
               <div style={{ border: `1px solid ${C.border}`, borderRadius: 6, overflow: "hidden" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 0.7fr", gap: 6, padding: "8px 10px", background: "rgba(255,255,255,0.02)", borderBottom: `1px solid ${C.borderSoft}`, fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted }}>
@@ -3161,10 +3173,10 @@ function MonitorPane({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      {/* Instance Overview — rollup across this agent's instances */}
+      {/* Sandbox Overview — rollup across this agent's instances */}
       <section>
         <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: "0 0 12px" }}>
-          Instance Overview
+          Sandbox Overview
         </h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
           <MetricCard label="Running" value={String(agg.active)} helper="status = running" accent={C.ok} />
@@ -3174,16 +3186,16 @@ function MonitorPane({
         </div>
       </section>
 
-      {/* Instances — header is just a label now; "+ Instance" lives in
+      {/* Instances — header is just a label now; "+ Sandbox" lives in
           the agent detail header next to Manage Listing ▼. */}
       <section>
         <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: "0 0 4px" }}>
-          Instances
+          Sandboxes
         </h3>
         <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, margin: "0 0 12px" }}>
-          Create returns a Runtime ID immediately in Pending — Running is reported only once readiness passes.
+          Create returns a Sandbox ID immediately in Pending — Running is reported only once readiness passes.
           Filter by customer metadata with <span style={{ fontFamily: MONO }}>key=value</span>.
-          Snapshotting a paused instance means Resume → Snapshot → Pause: three explicit steps, never a silent resume.
+          Snapshotting a paused sandbox means Resume → Snapshot → Pause: three explicit steps, never a silent resume.
         </p>
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
@@ -3243,7 +3255,7 @@ function MonitorPane({
               alignItems: "center",
             }}
           >
-            <div>Instance</div>
+            <div>Sandbox</div>
             <div>Access URL</div>
             <div>Status</div>
             <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Lifecycle <NewBadge /> <V2Badge /></div>
@@ -3272,7 +3284,7 @@ function MonitorPane({
                 fontFamily: FONT, fontSize: 13, fontWeight: 400, color: C.muted, lineHeight: "18px",
               }}
             >
-              No instances yet
+              No sandboxes yet
             </div>
           ) : (
             filtered.map((inst, i) => {
@@ -3282,7 +3294,7 @@ function MonitorPane({
                   <div
                     role="button"
                     tabIndex={0}
-                    title="Open instance detail"
+                    title="Open sandbox detail"
                     onClick={() => onOpenDetail(inst.id)}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenDetail(inst.id); } }}
                     style={{
@@ -3384,12 +3396,12 @@ function MonitorPane({
                       )}
                       {/* One primary lifecycle verb per state; the rest live in the drawer */}
                       {inst.status === "running" && (
-                        <button onClick={() => onAction(inst.id, "suspend")} title="Pause compute and keep the instance files." style={rowBtnGhost}>
+                        <button onClick={() => onAction(inst.id, "suspend")} title="Pause compute and keep the sandbox files." style={rowBtnGhost}>
                           <IconSuspend /> Pause
                         </button>
                       )}
                       {inst.status === "suspended" && (
-                        <button onClick={() => onAction(inst.id, "resume")} title="Resume the instance from its kept files." style={rowBtnPrimary}>
+                        <button onClick={() => onAction(inst.id, "resume")} title="Resume the sandbox from its kept files." style={rowBtnPrimary}>
                           <IconResume /> Resume
                         </button>
                       )}
@@ -3480,7 +3492,7 @@ function IntegrationPane({ agent }: { agent: MyAgent }) {
           Template ID
         </h3>
         <p style={{ fontFamily: FONT, fontSize: 13, fontWeight: 400, color: C.muted, margin: "0 0 12px" }}>
-          Use this ID when calling the Agentbox API to create instances of this Agent.
+          Use this ID when calling the Agentbox API to create sandboxes of this Agent.
         </p>
         <div
           style={{
@@ -3504,7 +3516,7 @@ function IntegrationPane({ agent }: { agent: MyAgent }) {
         </div>
         <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, margin: "0 0 12px", lineHeight: "18px" }}>
           Authenticate → create → ready → upload input → exec → result / logs → download output → delete → final usage.
-          Reusing a <span style={{ fontFamily: MONO }}>request_id</span> never creates a second Runtime, execution, file, or charge.
+          Reusing a <span style={{ fontFamily: MONO }}>request_id</span> never creates a second Sandbox, execution, file, or charge.
           AgentBox never defines which commands are valid — the command comes from your own image.
         </p>
         <div
@@ -3546,7 +3558,7 @@ function IntegrationPane({ agent }: { agent: MyAgent }) {
 function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instances: Instance[]; snapshots: Snapshot[] }) {
   const cost = agentCostBreakdown(agent.id, instances, snapshots);
   const costLines = [
-    { label: "Compute", note: "per active instance", val: cost.computeMo },
+    { label: "Compute", note: "per active sandbox", val: cost.computeMo },
     { label: "Paused storage", note: `${cost.suspendedGiB} GiB`, val: cost.suspendedMo },
     { label: "Snapshot storage", note: `${cost.snapGiB.toFixed(1)} GiB`, val: cost.snapMo },
   ];
@@ -3576,7 +3588,7 @@ function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instan
         <ul style={{ margin: "10px 0 0", padding: "0 0 0 16px", display: "flex", flexDirection: "column", gap: 4, fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
           <li>Every meter starts and stops on a confirmed state — never on request acceptance.</li>
           <li>Starting, pausing, and resuming time is free to you; GMI absorbs the provider cost for those states.</li>
-          <li>Paused Runtimes bill retained disk only, from confirmed Pause until Resume or confirmed release.</li>
+          <li>Paused Sandboxes bill retained disk only, from confirmed Pause until Resume or confirmed release.</li>
           <li>Snapshot storage bills from Ready — never during capture — on the reported billable size.</li>
           <li>Unconfirmed periods accrue provisional usage only; nothing is invoiced until reconciliation settles it.</li>
           <li>Failed, retried, or delayed operations never produce a duplicate or incorrect charge.</li>
@@ -3640,7 +3652,7 @@ function AgentDetailPane({
   const templateReady = isLaunchable(image);
   const modelBlocked = savedConfig.status === "action_required";
   const launchable = templateReady && !modelBlocked;
-  // + Instance + Listing ▼ now share the top-right of the agent header.
+  // + Sandbox + Listing ▼ now share the top-right of the agent header.
   // Provisioning is the highest-frequency action so it gets the lime fill;
   // listing actions sit behind a single dropdown next to it.
   const headerActions = (
@@ -3649,9 +3661,9 @@ function AgentDetailPane({
         onClick={() => launchable && onProvision(agent.id)}
         disabled={!launchable}
         title={
-          launchable ? "Launch a new instance"
+          launchable ? "Launch a new sandbox"
             : modelBlocked ? "Blocked — confirm a model in the saved launch configuration below, then launch"
-            : "Launch is available once the Runtime Template is validated and prepared"
+            : "Launch is available once the Sandbox Template is validated and prepared"
         }
         style={{
           display: "inline-flex", alignItems: "center", gap: 6,
@@ -3664,7 +3676,7 @@ function AgentDetailPane({
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M12 5v14M5 12h14" />
         </svg>
-        Instance
+        Sandbox
       </button>
       <ListingActions
         state={agent.listingState}
@@ -3753,7 +3765,7 @@ function AgentDetailPane({
         {headerActions}
       </div>
 
-      {/* Runtime Template — built from this Agent Version's config at register
+      {/* Sandbox Template — built from this Agent Version's config at register
           time; image pull and dependency install happen here, never at create.
           A Snapshot is the other thing entirely: captured from a live instance's
           disk (F-07). Image-based builds always belong to this track. */}
@@ -3770,7 +3782,7 @@ function AgentDetailPane({
           <section style={{ border: `1px solid ${notReady ? "rgba(251,191,36,0.35)" : C.border}`, borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, background: notReady ? "rgba(251,191,36,0.04)" : "transparent" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
               <h3 style={{ display: "inline-flex", alignItems: "baseline", gap: 8, fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg, margin: 0 }}>
-                Runtime Template
+                Sandbox Template
                 <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 500, color: C.muted }}>{agentVersionName(agent.id, agent.name)}</span>
               </h3>
               <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -3805,7 +3817,7 @@ function AgentDetailPane({
             )}
 
             <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-              Prepared once, at register time — creating a Runtime from a Ready Template pulls no image and installs no dependencies.
+              Prepared once, at register time — creating a Sandbox from a Ready Template pulls no image and installs no dependencies.
             </span>
 
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -3842,7 +3854,7 @@ function AgentDetailPane({
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.err} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M12 9v4M12 17h.01" /><circle cx="12" cy="12" r="10" /></svg>
             <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "17px" }}>
               <span style={{ fontWeight: 600 }}>Action required</span> — <span style={{ fontFamily: MONO }}>{savedConfig.model}</span> is
-              no longer offered to your Organization. Your configuration is kept as-is, and new Runtimes are blocked until you confirm a
+              no longer offered to your Organization. Your configuration is kept as-is, and new Sandboxes are blocked until you confirm a
               replacement. Nothing is substituted automatically.
             </span>
           </div>
@@ -3875,8 +3887,8 @@ function AgentDetailPane({
         </div>
 
         <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-          Applies only to Runtimes created after the change — running Runtimes keep the model they started with, and there is no
-          hot-switching (delete and create instead). Resolved as: per-Runtime override → this default → the Agent Version's Featured model,
+          Applies only to Sandboxes created after the change — running Sandboxes keep the model they started with, and there is no
+          hot-switching (delete and create instead). Resolved as: per-Sandbox override → this default → the Agent Version's Featured model,
           then injected as locked <span style={{ fontFamily: MONO }}>GMI_MODEL_ID</span>. The Agent must read that variable or switching is a silent no-op.
         </span>
       </section>
@@ -3964,10 +3976,10 @@ function CreateSnapshotModal({
     fontFamily: MONO, fontSize: 12, padding: "7px 10px", borderRadius: 6, outline: "none", width: "100%",
   };
   const inherited: [string, string][] = [
-    ["Source Runtime", midId(inst.id)],
+    ["Source Sandbox", midId(inst.id)],
     ["Source Agent Version", agentVersion],
     ["Region", region],
-    ["Runtime class", runtimeClass],
+    ["Spec", runtimeClass],
     ["Architecture", architecture],
   ];
 
@@ -3979,7 +3991,7 @@ function CreateSnapshotModal({
             Create Snapshot <ReleaseBadge r="R1" />
           </h3>
           <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "4px 0 0", lineHeight: "17px" }}>
-            Capture this Runtime's filesystem so you can launch new Runtimes without repeating setup. {agentName} · {midId(inst.id)} keeps running.
+            Capture this Sandbox's filesystem so you can launch new Sandboxes without repeating setup. {agentName} · {midId(inst.id)} keeps running.
           </p>
         </div>
 
@@ -4047,7 +4059,7 @@ function CreateSnapshotModal({
           <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "rgba(251,191,36,0.05)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: 8, padding: "10px 12px" }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.warn} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M12 9v4M12 17h.01" /><circle cx="12" cy="12" r="10" /></svg>
             <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "17px" }}>
-              Snapshots preserve the Runtime filesystem only. Memory, running processes, active connections, and temporary secrets are not preserved.
+              Snapshots preserve the Sandbox filesystem only. Memory, running processes, active connections, and temporary secrets are not preserved.
               Stop or flush stateful applications before capture where that matters — application-consistent state is not guaranteed.
             </span>
           </div>
@@ -4107,7 +4119,7 @@ function RestoreSnapshotModal({
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.78)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: 520, maxWidth: "100%", background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 10, display: "flex", flexDirection: "column", maxHeight: "90vh", overflow: "hidden" }}>
         <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}` }}>
-          <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>Launch New Instance</h3>
+          <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>Launch New Sandbox</h3>
           <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "4px 0 0" }}>
             <span style={{ fontFamily: MONO }}>{snapshotLabel(snapshot)}</span> · loads the captured filesystem into a Version of the same Agent
           </p>
@@ -4146,7 +4158,7 @@ function RestoreSnapshotModal({
           })}
           {anyCompatible && (
             <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-              Only Versions of this Agent are eligible. Region, runtime class, and architecture
+              Only Versions of this Agent are eligible. Region, Spec, and architecture
               ({snapshot.region} · {snapshot.runtimeClass} · {snapshot.architecture}) are validated before any resource is created.
             </span>
           )}
@@ -4157,14 +4169,14 @@ function RestoreSnapshotModal({
             return (
               <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 9, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "11px 12px" }}>
                 <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px" }}>
-                  <span style={{ color: C.fg, fontWeight: 600 }}>Snapshot provides</span> filesystem state · <span style={{ color: C.fg, fontWeight: 600 }}>Target Version provides</span> startup command, permissions, network, Endpoints, lifecycle and fresh secrets. The new Runtime gets its own ID, Endpoints and access.
+                  <span style={{ color: C.fg, fontWeight: 600 }}>Snapshot provides</span> filesystem state · <span style={{ color: C.fg, fontWeight: 600 }}>Target Version provides</span> startup command, permissions, network, Endpoints, lifecycle and fresh secrets. The new Sandbox gets its own ID, Endpoints and access.
                 </div>
                 <div style={{ display: "flex", gap: 6, alignItems: "flex-start", fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px" }}>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1, color: C.warn }}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
                   <span><span style={{ color: C.fg, fontWeight: 600 }}>Secrets are injected fresh</span> — never taken from the Snapshot. Credentials that were written to the captured disk may still be there.</span>
                 </div>
                 <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px" }}>
-                  Each launch is independent and there is no batch API. Sending the same request twice produces one Runtime, not two.
+                  Each launch is independent and there is no batch API. Sending the same request twice produces one Sandbox, not two.
                   A failed launch leaves this Snapshot Ready and unchanged.
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, fontFamily: FONT, fontSize: 12 }}>
@@ -4185,7 +4197,7 @@ function RestoreSnapshotModal({
             disabled={!targetId}
             style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, background: targetId ? C.lime : "#3a3a1f", color: targetId ? C.limeText : "#666", border: "none", padding: "6px 16px", borderRadius: 8, cursor: targetId ? "pointer" : "not-allowed" }}
           >
-            Launch New Instance
+            Launch New Sandbox
           </button>
         </div>
       </div>
@@ -4217,8 +4229,8 @@ function OrganizationSnapshots({
         <ReleaseBadge r="R1" />
       </div>
       <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, margin: 0, lineHeight: "19px" }}>
-        Immutable, Organization-owned, point-in-time copies of a Runtime's disk. Launch a new Runtime from one into the same Agent —
-        this is where Launch and Delete happen. Snapshots outlive their source Runtime, and the Snapshot ID is the canonical reference
+        Immutable, Organization-owned, point-in-time copies of a Sandbox's disk. Launch a new Sandbox from one into the same Agent —
+        this is where Launch and Delete happen. Snapshots outlive their source Sandbox, and the Snapshot ID is the canonical reference
         for API, SDK, launch, update, and delete. Nothing is ever addressed by name.
       </p>
 
@@ -4256,7 +4268,7 @@ function OrganizationSnapshots({
         {rows.length === 0 ? (
           <div style={{ padding: "48px 16px", textAlign: "center", fontFamily: FONT, fontSize: 13, color: C.muted }}>
             {snapshots.length === 0
-              ? "No snapshots yet. Capture one from a running instance in My Agents → Instance Detail."
+              ? "No snapshots yet. Capture one from a running sandbox in My Agents → Sandbox Detail."
               : "No snapshots match this filter."}
           </div>
         ) : (
@@ -4298,7 +4310,7 @@ function OrganizationSnapshots({
                 })()}
                 {/* Launch is blocked while Creating — a Snapshot is usable only from Ready */}
                 {s.status === "ready" && (
-                  <button onClick={() => onRestore(s)} style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.limeText, background: C.lime, border: "none", padding: "3px 10px", borderRadius: 6, cursor: "pointer" }}>Launch New Instance</button>
+                  <button onClick={() => onRestore(s)} style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.limeText, background: C.lime, border: "none", padding: "3px 10px", borderRadius: 6, cursor: "pointer" }}>Launch New Sandbox</button>
                 )}
                 {/* Delete is permission-gated and blocked while Creating */}
                 {(s.status === "ready" || s.status === "failed") && (
@@ -4310,9 +4322,9 @@ function OrganizationSnapshots({
         )}
       </div>
       <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-        A Snapshot is captured from a live Runtime's disk. It is not a Template — Templates are built from developer config at
+        A Snapshot is captured from a live Sandbox's disk. It is not a Template — Templates are built from developer config at
         Register → Agent Version build and are reproducible by construction. Renaming or clearing a name never breaks the link to the
-        source Agent Version. Deleting a Snapshot prevents future launches and stops its storage metering; Runtimes already launched
+        source Agent Version. Deleting a Snapshot prevents future launches and stops its storage metering; Sandboxes already launched
         from it own their own disk and are unaffected.
       </span>
     </section>
@@ -4413,12 +4425,12 @@ function NotificationBell({
             {/* Group 2 — Paused instances (cost reminders; never deleted) */}
             {paused.length > 0 && (
               <>
-                <div style={{ padding: "10px 14px 6px", fontFamily: FONT, fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: "0.04em", textTransform: "uppercase" }}>Paused instances</div>
+                <div style={{ padding: "10px 14px 6px", fontFamily: FONT, fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: "0.04em", textTransform: "uppercase" }}>Paused sandboxes</div>
                 {paused.map((it) => (
                   <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: `1px solid ${C.borderSoft}` }}>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></svg>
                     <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ display: "block", fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Instance · {it.name}</span>
+                      <span style={{ display: "block", fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Sandbox · {it.name}</span>
                       <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>Paused · storage charges continue (≈${it.cost}/mo)</span>
                     </span>
                   </div>
@@ -4473,7 +4485,7 @@ export default function Dashboard() {
         <>
           You're about to delete the template{" "}
           <span style={{ color: C.fg, fontFamily: MONO }}>{agent.name}</span>.
-          This cannot be undone. Existing running instances will not be affected.
+          This cannot be undone. Existing running sandboxes will not be affected.
         </>
       ),
       confirmLabel: "Delete template",
@@ -4526,7 +4538,7 @@ export default function Dashboard() {
     resolveSavedConfig(agentId ? savedConfigs[agentId] : undefined);
   const saveModel = (agentId: string, model: string) => {
     setSavedConfigs((prev) => ({ ...prev, [agentId]: { model, status: "ok" } }));
-    pushToast("success", `Saved default model — applies to Runtimes created from now on`);
+    pushToast("success", `Saved default model — applies to Sandboxes created from now on`);
   };
   // Operation feedback toasts (PRD §4.2 — Accepted → in-progress → resolved)
   const [toasts, setToasts] = useState<ToastMsg[]>([]);
@@ -4627,19 +4639,19 @@ export default function Dashboard() {
     patchImage(agentId, { validation: "validating", preparation: "not_started", compatibilityIssue: undefined });
     setTimeout(() => {
       patchImage(agentId, { validation: "valid", preparation: "preparing", lastValidated: fmtNow() });
-      settleToast(t, "progress", "Preparing runtime…");
+      settleToast(t, "progress", "Preparing template…");
       setTimeout(() => {
         patchImage(agentId, { preparation: "ready" });
-        settleToast(t, "success", "Runtime ready — Launch enabled");
+        settleToast(t, "success", "Template ready — Launch enabled");
       }, 1600);
     }, 1400);
   };
   const retryPreparation = (agentId: string) => {
-    const t = pushToast("progress", "Preparing runtime…");
+    const t = pushToast("progress", "Preparing template…");
     patchImage(agentId, { preparation: "preparing" });
     setTimeout(() => {
       patchImage(agentId, { preparation: "ready" });
-      settleToast(t, "success", "Runtime ready — Launch enabled");
+      settleToast(t, "success", "Template ready — Launch enabled");
     }, 1600);
   };
 
@@ -4708,7 +4720,7 @@ export default function Dashboard() {
       setInstances((prev) => prev.map((i) =>
         i.id === id ? { ...i, status: "running", endpointUrl: endpointFor(i.id), lifecycleStartedAt: fmtNow() } : i,
       ));
-      settleToast(t, "success", "Instance running");
+      settleToast(t, "success", "Sandbox running");
     }, 1600);
   };
 
@@ -4719,17 +4731,17 @@ export default function Dashboard() {
       case "suspend": {
         const cost = inst ? pausedCostMo(inst) : 4;
         setConfirm({
-          title: "Pause instance?",
+          title: "Pause sandbox?",
           body: (
             <>
-              Compute billing stops and the instance keeps its ID and files until you Resume or Delete —
+              Compute billing stops and the sandbox keeps its ID and files until you Resume or Delete —
               storage keeps billing ≈${cost}/mo. Memory, running processes, and live connections are lost,
               and any command running now is cancelled (its result stays retrievable).
               Endpoint URLs survive but return the unavailable response while paused.
               For long-term reuse, create a Snapshot instead.
             </>
           ),
-          confirmLabel: "Pause Instance",
+          confirmLabel: "Pause Sandbox",
           destructive: false,
           onConfirm: () => performSuspend(id),
         });
@@ -4737,7 +4749,7 @@ export default function Dashboard() {
       }
       case "resume":
         setConfirm({
-          title: "Resume instance?",
+          title: "Resume sandbox?",
           body: (
             <>
               Resume is a fresh boot of the same disk, not a restored session: the declared startup command runs
@@ -4746,7 +4758,7 @@ export default function Dashboard() {
               independently and may lag behind Running.
             </>
           ),
-          confirmLabel: "Resume Instance",
+          confirmLabel: "Resume Sandbox",
           destructive: false,
           onConfirm: () => performResume(id),
         });
@@ -4756,17 +4768,17 @@ export default function Dashboard() {
         break;
       case "delete":
         setConfirm({
-          title: "Delete instance?",
+          title: "Delete sandbox?",
           body: (
             <>
               This cannot be undone. Compute, retained disk, and every Endpoint route for
               {" "}<span style={{ color: C.fg, fontFamily: MONO }}>{shortId}</span> are released, and all files on it are
               permanently deleted unless they were saved through a Snapshot or downloaded.
-              Snapshots and the Agent's Runtime Template are separate resources and survive.
+              Snapshots and the Agent's Sandbox Template are separate resources and survive.
               Deleted is reported only after release is confirmed — that is when all billing stops.
             </>
           ),
-          confirmLabel: "Delete Instance",
+          confirmLabel: "Delete Sandbox",
           destructive: true,
           onConfirm: () => performDelete(id),
         });
@@ -4837,7 +4849,7 @@ export default function Dashboard() {
         <>
           Snapshot <span style={{ color: C.fg, fontFamily: MONO }}>{snap ? snapshotLabel(snap) : sid}</span> will be
           permanently deleted once release is confirmed. This cannot be undone. Future launches from it are prevented and its
-          storage metering stops; Runtimes already launched from it own their own disk and are unaffected.
+          storage metering stops; Sandboxes already launched from it own their own disk and are unaffected.
           The name becomes reusable only after the deletion is confirmed.
         </>
       ),
@@ -4867,7 +4879,7 @@ export default function Dashboard() {
       model: cfg.model,
       metadata: snapshot.metadata ?? [],
     });
-    pushToast("success", `Launching a new instance from this Snapshot on ${version} — see My Agents`);
+    pushToast("success", `Launching a new sandbox from this Snapshot on ${version} — see My Agents`);
   };
 
   const list = useMemo(() => {

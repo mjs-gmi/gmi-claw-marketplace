@@ -25,7 +25,7 @@ const DEPLOY_STEPS: DeployStep[] = [
   { text: "Validating credentials...", delay: 800 },
   { text: "Allocating compute (H100 × 2)...", delay: 1400 },
   { text: "Pulling model weights...", delay: 2200 },
-  { text: "Configuring runtime environment...", delay: 3000 },
+  { text: "Configuring sandbox environment...", delay: 3000 },
   { text: "Running health checks...", delay: 3800 },
   { text: "Registering endpoint...", delay: 4400 },
 ];

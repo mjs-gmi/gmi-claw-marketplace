@@ -116,7 +116,40 @@ Overview》（space IE, page 515375122）。两份是**互补**的：
 | E5 | 审核中 | `Listing ▾` 旁出现置灰 `Under review` 药丸 |
 | E6 | 被锁 | `Listing` 变 `🔒 Listing`，去掉 `▾`，不可点；hover → `Unable to Publish` + `Listing to public requires a public image with no embedded secrets or credentials.` |
 
-## F · 命名与错字（Confluence I 节 + 本设计稿）
+## F · 全站统一叫 Sandbox（Confluence I 节）
+
+只改**界面文案**，代码标识符（`Instance` / `RuntimeImage` / `runtimeClass` /
+`sourceRuntimeId` / `instanceId` …）一律不动 —— 这是文案改名，不是重构。
+
+| 原文案 | 改成 |
+|---|---|
+| `+ Instance` | `+ Sandbox` |
+| `Instances` / `Instance Overview` / `Instance Detail` | `Sandboxes` / `Sandbox Overview` / `Sandbox Detail` |
+| `Create Instance` / `Launch New Instance` / `Launch instance` | `Create Sandbox` / `Launch New Sandbox` / `Launch sandbox` |
+| `Pause / Resume / Delete Instance` | `Pause / Resume / Delete Sandbox` |
+| `N running instances` / `No instances yet` / `Paused instances` | `N running sandboxes` / `No sandboxes yet` / `Paused sandboxes` |
+| `Runtime Template` | `Sandbox Template` |
+| `Runtime ID` | `Sandbox ID` |
+| `Runtimes`（正文里指运行实体的） | `Sandboxes` |
+| `Source Runtime` | `Source Sandbox` |
+| `Runtime class` | `Spec`（§I 的 `Compute Tier → Spec` 同一概念） |
+| `Maximum active runtime` | `Maximum active time`（§A 说 lifecycle 文案要重写） |
+| `Preparing runtime` / `Runtime ready — Launch enabled` | `Preparing template` / `Template ready — Launch enabled`（准备的是 Template，不是 sandbox） |
+
+**故意没改的三处**：
+1. Browse Agents 副文案 `Compare publisher, runtime, and access details` —— 这句是 v1.2 设计稿原文，`runtime` 在这里是「怎么跑的」，换成 sandbox 反而读不通
+2. `curl … /v1/agents/{id}/runtimes` 和 `runtime_id` —— API 字段名，不是界面文案。**API 要不要跟着改，需要后端确认**
+3. 模拟的容器日志行 `[t] runtime: starting container` —— 那是容器进程的输出，不是产品命名
+
+## G · Image 与 Spec 的归属
+
+Confluence §H 定了 Spec 只能在 Template 上改。**Image 同理**：
+
+- **改的地方**：Register 时定，之后在 Sandbox Template 卡片上用 `Replace Image` 改
+- **Launch 面板**：只读展示，并明说「Set by this Agent's Sandbox Template — change it there with Replace Image, not per sandbox」
+- Template 拥有 Image + Spec；Launch 拥有 IDC、model、lifecycle、env
+
+## H · 命名与错字（其余）
 
 | 位置 | 现状 | 改成 |
 |---|---|---|
