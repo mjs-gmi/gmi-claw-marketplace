@@ -3438,51 +3438,67 @@ function MonitorPane({
 
 // ─── Integration pane ─────────────────────────────────────────────────────
 function IntegrationPane({ agent }: { agent: MyAgent }) {
-  // R0 quick start — the whole release loop as copyable calls. R0 does not ship
-  // without the exec step, and every call carries a request_id so a retry can
-  // never produce a second Runtime, execution, file, or charge (§4.2).
+  // R0 quick start — the whole release loop as copyable calls, against the real
+  // bs-api Sandbox (Runloop) contract. Source of truth is the swagger at
+  // GET /api/v2/ec/openapi.yaml; see Confluence "bs-api Sandbox (Runloop)".
+  //
+  // Two planes: the control plane ($API_BASE, Bearer session token) creates and
+  // deletes Sandboxes; the data plane (https://{sandbox_key}.{domain},
+  // X-Access-Token) does files, executions and the shell.
   const curl = [
-    "# 0. Authenticate — organization_id is derived from the key, never sent",
-    "export GMI_API_KEY=...   # https://console.gmicloud.ai/api-keys",
+    "# 0. Auth — session access token; the swagger is the contract",
+    "export API_BASE='https://ce-tot.gmicloud-dev.com/api/v2'   # GET $API_BASE/ec/openapi.yaml",
+    "export ACCESS_TOKEN=...        # POST /api/v1/me/sessions",
+    "export IDC_NAME='sandbox-runloop-us'",
     "",
-    "# 1. Create a Runtime → durable runtime_id, state = pending",
-    `curl -X POST https://api.gmicloud.ai/v1/agents/${agent.id}/runtimes \\`,
-    "  -H \"Authorization: Bearer $GMI_API_KEY\" -H \"Content-Type: application/json\" \\",
-    "  -d '{\"request_id\": \"req-001\", \"metadata\": {\"tenant\": \"acme-corp\"}}'",
+    "# 1. Create a Sandbox from this Agent's Template.",
+    "#    Create accepts template_id / idc_name / timeout / env_vars / metadata — nothing else.",
+    "#    Spec comes from the Template's resources; it is not a create parameter.",
+    "curl -sS -X POST \"$API_BASE/sandboxes\" \\",
+    "  -H \"Authorization: Bearer $ACCESS_TOKEN\" -H 'Content-Type: application/json' \\",
+    "  -H \"X-Request-ID: req-$(date +%s%3N)\" \\",
+    `  -d '{"template_id": "${agent.templateId}", "idc_name": "'"$IDC_NAME"'", "timeout": 1800,`,
+    "       \"env_vars\": {\"LOG_LEVEL\": \"debug\"}, \"metadata\": {\"tenant\": \"acme-corp\"}}'",
+    "  # -> data.id, data.sandbox_key, data.domain, data.sandbox_access_token, data.state",
     "",
-    "# 2. Wait for Ready — exec and file transfer work the moment state = running",
-    "curl https://api.gmicloud.ai/v1/runtimes/$RUNTIME_ID \\",
-    "  -H \"Authorization: Bearer $GMI_API_KEY\"",
-    "  # -> state, confirmation_status, latest_operation, metadata",
+    "# 2. Wait for running — timeout starts at creation and runs down from there",
+    "until [ \"$(curl -sS \"$API_BASE/sandboxes/$SANDBOX_ID\" \\",
+    "     -H \"Authorization: Bearer $ACCESS_TOKEN\" | jq -r '.data.state')\" = running ]; do sleep 2; done",
     "",
-    "# 3. Upload the input file (single file, at most once per request_id)",
-    "curl -X PUT \"https://api.gmicloud.ai/v1/runtimes/$RUNTIME_ID/files?path=/app/input/in.json\" \\",
-    "  -H \"Authorization: Bearer $GMI_API_KEY\" -H \"X-Request-Id: req-002\" \\",
-    "  --data-binary @in.json",
+    "# 3. Exchange for data-plane credentials — the URL is not open, this is the swap",
+    "curl -sS -X POST \"$API_BASE/sandboxes/$SANDBOX_ID/connect\" \\",
+    "  -H \"Authorization: Bearer $ACCESS_TOKEN\" -H 'Content-Type: application/json' \\",
+    "  -d '{\"timeout\": 1800}'",
     "",
-    "# 4. Exec — synchronous wait; status: running means keep the execution_id",
-    "curl -X POST https://api.gmicloud.ai/v1/runtimes/$RUNTIME_ID/exec \\",
-    "  -H \"Authorization: Bearer $GMI_API_KEY\" -H \"Content-Type: application/json\" \\",
-    "  -d '{\"command\": \"python main.py --input /app/input/in.json\",",
-    "       \"cwd\": \"/app\", \"execution_timeout\": 300, \"request_id\": \"req-003\"}'",
-    "  # -> execution_id, status, exit_code, stdout, stderr, stdout_truncated",
+    "# ── data plane ──────────────────────────────────────────────────────────",
+    "export DP_BASE=\"https://$SANDBOX_KEY.$DOMAIN\"",
     "",
-    "# 5. Result + logs — readable without backend access, even after Delete",
-    "curl https://api.gmicloud.ai/v1/executions/$EXECUTION_ID -H \"Authorization: Bearer $GMI_API_KEY\"",
-    "curl https://api.gmicloud.ai/v1/runtimes/$RUNTIME_ID/logs -H \"Authorization: Bearer $GMI_API_KEY\"",
+    "# 4. Upload — one file, by explicit path. There is no directory listing.",
+    "curl -sS -X POST \"$DP_BASE/files?path=/home/user/in.json\" \\",
+    "  -H \"X-Access-Token: $SAT\" -F 'file=@in.json'",
     "",
-    "# 6. Download the output file",
-    "curl -o result.json \\",
-    "  \"https://api.gmicloud.ai/v1/runtimes/$RUNTIME_ID/files?path=/app/output/result.json\" \\",
-    "  -H \"Authorization: Bearer $GMI_API_KEY\"",
+    "# 5. Exec — wait=true blocks; wait=false returns an execution_id to poll",
+    "curl -sS -X POST \"$DP_BASE/executions?wait=true&wait_timeout_seconds=25\" \\",
+    "  -H \"X-Access-Token: $SAT\" -H 'Content-Type: application/json' \\",
+    "  -d '{\"action\": \"exec\", \"parameters\": {",
+    "         \"command\": \"python main.py --input /home/user/in.json\",",
+    "         \"cwd\": \"/home/user\", \"execution_timeout_seconds\": 300}}'",
+    "  # -> execution_id, exit code, stdout, stderr",
     "",
-    "# 7. Delete — Deleted is reported only after release is confirmed",
-    "curl -X DELETE https://api.gmicloud.ai/v1/runtimes/$RUNTIME_ID \\",
-    "  -H \"Authorization: Bearer $GMI_API_KEY\"",
+    "# 6. Cancel a running execution — empty body",
+    "curl -sS -X POST \"$DP_BASE/executions/$EXEC_ID/cancel\" -H \"X-Access-Token: $SAT\"",
     "",
-    "# 8. Final usage — the record is final after Delete and stops growing",
-    "curl https://api.gmicloud.ai/v1/runtimes/$RUNTIME_ID/usage \\",
-    "  -H \"Authorization: Bearer $GMI_API_KEY\"",
+    "# 7. Download the output",
+    "curl -sS \"$DP_BASE/files?path=/home/user/result.json\" \\",
+    "  -H \"X-Access-Token: $SAT\" -o result.json",
+    "",
+    "# 8. Interactive shell — a real TTY over WebSocket, not exec",
+    "#    dial  wss://$SANDBOX_KEY.$DOMAIN/shell/connect",
+    "#    resize/close  POST $DP_BASE/shell/control  {\"action\":\"resize\",\"cols\":120,\"rows\":40}",
+    "",
+    "# 9. Delete — releases the Sandbox and everything on its disk",
+    "curl -sS -X DELETE \"$API_BASE/sandboxes/$SANDBOX_ID\" \\",
+    "  -H \"Authorization: Bearer $ACCESS_TOKEN\"",
   ].join("\n");
 
   return (
@@ -3515,8 +3531,10 @@ function IntegrationPane({ agent }: { agent: MyAgent }) {
           <ReleaseBadge r="R0" />
         </div>
         <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, margin: "0 0 12px", lineHeight: "18px" }}>
-          Authenticate → create → ready → upload input → exec → result / logs → download output → delete → final usage.
-          Reusing a <span style={{ fontFamily: MONO }}>request_id</span> never creates a second Sandbox, execution, file, or charge.
+          Authenticate → create → ready → <span style={{ fontFamily: MONO }}>connect</span> → upload input → exec →
+          download output → delete. Two planes: the control plane creates and deletes Sandboxes; the data plane
+          at <span style={{ fontFamily: MONO }}>{"{sandbox_key}.{domain}"}</span> does files, executions and the shell,
+          authenticated with the token <span style={{ fontFamily: MONO }}>connect</span> returns.
           AgentBox never defines which commands are valid — the command comes from your own image.
         </p>
         <div

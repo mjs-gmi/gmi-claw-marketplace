@@ -141,7 +141,48 @@ Overview》（space IE, page 515375122）。两份是**互补**的：
 2. `curl … /v1/agents/{id}/runtimes` 和 `runtime_id` —— API 字段名，不是界面文案。**API 要不要跟着改，需要后端确认**
 3. 模拟的容器日志行 `[t] runtime: starting container` —— 那是容器进程的输出，不是产品命名
 
-## G · Image 与 Spec 的归属
+## G · 真实 API 契约（bs-api Sandbox / Runloop）
+
+来源：Confluence《bs-api Sandbox (Runloop)》（space Elasticclo, page 495485321），
+契约以 swagger 为准（`GET /api/v2/ec/openapi.yaml`），2026-08-13 复测 24/24 PASS。
+
+**控制面** `$API_BASE = …/api/v2`，`Authorization: Bearer <session access token>`
+- `POST /sandboxes` —— **只收** `template_id` / `idc_name` / `timeout` / `env_vars` / `metadata`
+- `GET /sandboxes/{id}` → `data.state`
+- `POST /sandboxes/{id}/connect` `{timeout}` → 换数据面凭据
+- `DELETE /sandboxes/{id}`
+- `GET /sandbox-product-specifications?idc_name=`、`GET/POST /templates`（建模板必填 `name/idc_name/resources/build` + `Idempotency-Key` 头）
+
+**数据面** `https://{sandbox_key}.{domain}`，`X-Access-Token: <sandbox_access_token>`
+- `POST/GET /files?path=` —— 单文件、按显式路径
+- `POST /executions?wait=true&wait_timeout_seconds=` → `execution_id`；`wait=false` 异步
+- `POST /executions/{id}/cancel` —— **空 body**
+- `POST /shell`、`POST /shell/control`（`{action:"resize",cols,rows}` / `{action:"close"}`）、`wss://{sandbox_key}.{domain}/shell/connect`
+
+### 这份契约替我们答掉的问题
+
+| 原来的疑问 | 答案 |
+|---|---|
+| API 要不要跟着改叫 sandbox | **不用改，本来就是** `/api/v2/sandboxes`。原型里那段 `/v1/agents/{id}/runtimes` 是编的，已按真实契约重写 |
+| Spec 能不能在 Launch 改（§H） | **不能**。create 只收五个字段，Spec 在 Template 的 `resources` 里 —— §H 说的没错 |
+| IDC 能不能在 Launch 选（§H） | **能**，`idc_name` 是 create 参数 |
+| Lifecycle 是什么（§A） | 一个 `timeout`，创建时给，从创建那刻算起 —— §A 描述的就是它 |
+| Files 为什么不能浏览目录（§G） | 数据面只有按 path 的单文件读写，**没有列目录接口** |
+| Run 的取消（§B） | `POST /executions/{id}/cancel`，空 body |
+| Terminal 是不是真 TTY（§C） | 是，WebSocket `/shell/connect`；resize 和 close 都是真的控制消息 |
+| 访问凭据怎么换（§D） | `POST /sandboxes/{id}/connect` |
+
+### ⚠️ 这份契约暴露的冲突
+
+1. **swagger 里没有 pause / snapshots / actions**（原文：「**没有**：pause/snapshots/actions、aliases、shell*（数据面）」）。
+   而原型里 Pause / Resume / Snapshot 是**大块功能** —— Snapshots 顶部 tab、
+   Create/Restore Snapshot 弹窗、Organization Snapshots、暂停盘费成本模型，
+   全部没有 API 支撑。**这是产品决策，不是我能定的。**
+2. **没有 `/logs`、没有 `/usage`** —— 原型的 Analytics/Usage 面板同样没有后端。
+3. 示例里的 `request_id` 幂等语义在 swagger 里没有对应，只有 `X-Request-ID` 头和
+   建模板的 `Idempotency-Key`。重写后的示例不再宣称幂等保证。
+
+## H · Image 与 Spec 的归属
 
 Confluence §H 定了 Spec 只能在 Template 上改。**Image 同理**：
 
@@ -149,7 +190,7 @@ Confluence §H 定了 Spec 只能在 Template 上改。**Image 同理**：
 - **Launch 面板**：只读展示，并明说「Set by this Agent's Sandbox Template — change it there with Replace Image, not per sandbox」
 - Template 拥有 Image + Spec；Launch 拥有 IDC、model、lifecycle、env
 
-## H · 命名与错字（其余）
+## I · 命名与错字（其余）
 
 | 位置 | 现状 | 改成 |
 |---|---|---|
