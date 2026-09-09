@@ -51,7 +51,7 @@ type AgentStatus = TaskStatus | "idle";
 function statusLabel(status: AgentStatus): string {
   switch (status) {
     case "pending":
-    case "creating":   return "starting";
+    case "creating":   return "creating";
     case "running":    return "running";
     case "suspending": return "pausing";
     case "suspended":  return "paused";
@@ -2195,7 +2195,7 @@ function ExpiresCell({
 // through this menu alone.
 // §4.8 — for 2.0 instances the old "Terminate" control IS F-04 Delete: same path,
 // same semantics, and no surface may offer a terminate that leaves storage behind.
-type RowAction = "suspend" | "resume" | "keep" | "delete" | "snapshot" | "convert" | "retry" | "credentials";
+type RowAction = "suspend" | "resume" | "keep" | "delete" | "snapshot" | "convert" | "retry";
 
 function InstanceRowMenu({
   inst, onAction, onOpenDetail, canConvert = false, dropUp = false,
@@ -2303,99 +2303,6 @@ function InstanceRowMenu({
               should ever hold. */}
         </div>
       )}
-    </div>
-  );
-}
-
-// ─── Access credentials ───────────────────────────────────────────────────
-// A fetch, not a page. The token is scoped to one Sandbox and dies with it, so
-// there is nothing durable to browse — Daytona's preview token behaves the same
-// way and its dashboard offers it as a row action rather than a tab.
-function CredentialsDialog({ inst, onClose }: { inst: Instance | null; onClose: () => void }) {
-  const [token, setToken] = useState<string | null>(null);
-  const [fetching, setFetching] = useState(false);
-
-  useEffect(() => {
-    if (!inst) { setToken(null); setFetching(false); }
-  }, [inst]);
-
-  useEffect(() => {
-    if (!inst) return;
-    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", esc);
-    return () => document.removeEventListener("keydown", esc);
-  }, [inst, onClose]);
-
-  if (!inst) return null;
-  const host = `${midId(inst.id)}.sandbox.gmi.cloud`;
-
-  const fetchToken = () => {
-    setFetching(true);
-    window.setTimeout(() => {
-      setToken(`sbx_${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`);
-      setFetching(false);
-    }, 700);
-  };
-
-  const row = (label: string, value: React.ReactNode) => (
-    <div style={{ display: "grid", gridTemplateColumns: "112px 1fr", gap: 10, alignItems: "center", padding: "8px 0", borderTop: `1px solid ${C.borderSoft}` }}>
-      <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>{label}</span>
-      <span style={{ fontFamily: MONO, fontSize: 12, color: C.fg, wordBreak: "break-all" }}>{value}</span>
-    </div>
-  );
-
-  return (
-    <div
-      onClick={onClose}
-      style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-label="Access credentials"
-        style={{ width: 520, maxWidth: "100%", background: "#111111", border: `1px solid ${C.border}`, borderRadius: 10, padding: "18px 20px 16px", boxShadow: "0 20px 48px rgba(0,0,0,0.6)" }}
-      >
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-          <h3 style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>
-            Access credentials <V2Badge />
-          </h3>
-          <button onClick={onClose} aria-label="Close" style={{ background: "transparent", border: "none", color: C.muted, cursor: "pointer", display: "flex", padding: 0 }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
-          </button>
-        </div>
-        <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "8px 0 4px", lineHeight: "18px" }}>
-          This Sandbox is not reachable by URL alone. The token below is scoped to it and
-          dies with it — there is nothing to keep.
-        </p>
-        {row("Host", host)}
-        {row("Exchange", <span style={{ color: C.lime }}>POST /sandboxes/{midId(inst.id)}/connect</span>)}
-        {row("Header", "X-Access-Token: <token>")}
-        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-          {token ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#000", border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 12px" }}>
-              <span style={{ flex: 1, minWidth: 0, fontFamily: MONO, fontSize: 12, color: C.fg, overflowX: "auto" }}>{token}</span>
-              <CopyButton value={token} />
-            </div>
-          ) : (
-            <button
-              onClick={fetchToken}
-              disabled={fetching}
-              style={{
-                alignSelf: "flex-start",
-                fontFamily: FONT, fontSize: 13, fontWeight: 600,
-                background: fetching ? "#3a3a1f" : C.lime, color: fetching ? "#6b6b52" : C.limeText,
-                border: "none", borderRadius: 8, padding: "7px 15px", cursor: fetching ? "wait" : "pointer",
-              }}
-            >
-              {fetching ? "Exchanging…" : "Get a token"}
-            </button>
-          )}
-          <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-            Shown once. Deleting or restarting the Sandbox invalidates it — fetch again rather
-            than storing it. The SDK does this exchange for you.
-          </span>
-        </div>
-      </div>
     </div>
   );
 }
@@ -4094,7 +4001,7 @@ function MonitorPane({
           >
             <div />
             <div>Sandbox</div>
-            <div>Access URL</div>
+            <div>Endpoint</div>
             <div>Status</div>
             <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Expires <NewBadge /> <V2Badge /></div>
             <button
@@ -4195,13 +4102,32 @@ function MonitorPane({
                         </div>
                       )}
                     </div>
-                    <div
-                      title={inst.status === "suspended" ? "Endpoint is unavailable while suspended" : inst.endpointUrl}
-                      style={{ fontFamily: inst.status === "suspended" ? FONT : "'GeistMono', monospace", fontSize: 12, color: inst.endpointUrl && inst.status !== "suspended" ? C.muted : C.borderSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                    >
-                      {inst.status === "suspended" ? "Unavailable while paused"
-                        : inst.endpointUrl ? inst.endpointUrl.replace(/^https?:\/\//, "") : "—"}
-                    </div>
+                    {(() => {
+                      const pending = inst.status === "pending" || inst.status === "creating";
+                      const label =
+                        inst.status === "suspended" ? "Unavailable while paused"
+                        : pending ? "Not ready yet"
+                        : inst.endpointUrl ? inst.endpointUrl.replace(/^https?:\/\//, "")
+                        : "—";
+                      const plain = inst.status === "suspended" || pending;
+                      return (
+                        <div
+                          title={
+                            inst.status === "suspended" ? "Endpoint is unavailable while suspended"
+                            : pending ? "The address exists once the Sandbox reports Running. It is never reachable on its own — the system exchanges a token for you."
+                            : `${inst.endpointUrl ?? ""} — not reachable on its own; the system exchanges a token when you open the Terminal`
+                          }
+                          style={{
+                            fontFamily: plain ? FONT : "'GeistMono', monospace",
+                            fontSize: 12,
+                            color: plain ? C.muted : inst.endpointUrl ? C.muted : C.borderSoft,
+                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          }}
+                        >
+                          {label}
+                        </div>
+                      );
+                    })()}
                     <div style={{ display: "inline-flex", alignItems: "center" }}>
                       <span
                         style={{
@@ -4368,20 +4294,6 @@ function MonitorPane({
                         ))}
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                        {inst.status === "running" && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); onAction(inst.id, "credentials"); }}
-                            title="This Sandbox is not reachable by URL alone — fetch the token POST /sandboxes/{id}/connect returns"
-                            style={{
-                              display: "inline-flex", alignItems: "center", gap: 6,
-                              fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg,
-                              background: "transparent", border: `1px solid ${C.border}`,
-                              borderRadius: 7, padding: "4px 10px", cursor: "pointer",
-                            }}
-                          >
-                            <IconNetwork /> Get access credentials <V2Badge />
-                          </button>
-                        )}
                         <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
                           Each destination has its own URL —
                           <span style={{ fontFamily: MONO }}> /dashboard/sandbox/{midId(inst.id)}/…</span> — so it can be
@@ -5378,7 +5290,6 @@ export default function Dashboard() {
   // Run history per sandbox. Lives here so it survives closing the tab or the
   // drawer — the pane promises results stay retrievable by execution_id.
   const [execHistory, setExecHistory] = useState<Record<string, Execution[]>>({});
-  const [credentialsFor, setCredentialsFor] = useState<string | null>(null);
   const [publishStatusOpen, setPublishStatusOpen] = useState(false);
   const [unpublishRow, setUnpublishRow] = useState<PublishRow | null>(null);
 
@@ -5445,7 +5356,7 @@ export default function Dashboard() {
     setProvisionForAgentId(null);
     // pending → initializing → running. Compute metering and the active-time
     // clock start only when Running is confirmed (§4.5); transition time is free.
-    setTimeout(() => patchInstance(id, { status: "creating" }), 500);
+    setTimeout(() => patchInstance(id, { status: "creating" }), 1200);
     setTimeout(() => {
       setInstances((prev) =>
         prev.map((i) =>
@@ -5457,7 +5368,10 @@ export default function Dashboard() {
             : i,
         ),
       );
-    }, 1800);
+      // §F wants this wait to hold up for about a minute. A 1.8s mock made the
+      // state impossible to see, let alone review, so it runs long enough to
+      // watch — the point being that nothing looks broken while it waits.
+    }, 9000);
   };
 
   // ── Runtime Image readiness mutations (validation → preparation). ──────────
@@ -5566,14 +5480,6 @@ export default function Dashboard() {
     const inst = instances.find((i) => i.id === id);
     const shortId = midId(id);
     switch (action) {
-      // The token is fetched, not browsed: it is scoped to this Sandbox and
-      // dies with it. Daytona's preview token behaves the same way — it resets
-      // on restart and previously issued ones stop working — and its dashboard
-      // offers access as a row action rather than a tab.
-      case "credentials": {
-        setCredentialsFor(id);
-        return;
-      }
       case "suspend": {
         const cost = inst ? pausedCostMo(inst) : 4;
         setConfirm({
@@ -5796,10 +5702,6 @@ export default function Dashboard() {
               )}
           </div>
         </div>
-        <CredentialsDialog
-          inst={credentialsFor ? instances.find((i) => i.id === credentialsFor) ?? null : null}
-          onClose={() => setCredentialsFor(null)}
-        />
         <ConfirmDialog pending={confirm} onClose={() => setConfirm(null)} />
         <Toaster toasts={toasts} />
       </div>
@@ -6031,10 +5933,6 @@ export default function Dashboard() {
 
       {drawerInst && detailPaneFor(drawerInst, drawerAgent, "drawer")}
 
-      <CredentialsDialog
-        inst={credentialsFor ? instances.find((i) => i.id === credentialsFor) ?? null : null}
-        onClose={() => setCredentialsFor(null)}
-      />
       <ConfirmDialog pending={confirm} onClose={() => setConfirm(null)} />
 
       {/* v1.2 §D — Publish Status */}
