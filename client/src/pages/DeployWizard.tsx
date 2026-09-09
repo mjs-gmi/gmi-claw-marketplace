@@ -2818,7 +2818,9 @@ export default function DeployWizard() {
                       style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", cursor: "pointer", textAlign: "left" }}
                     >
                       <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        <span style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg }}>Advanced settings</span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg }}>
+                          Advanced settings <V2Badge title="Spec and Default IDC are new in V2 — both are in here" />
+                        </span>
                         <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Sandbox image · Infrastructure · Networking · Environment — using GMI defaults</span>
                       </span>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: advancedOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}><path d="m6 9 6 6 6-6" /></svg>

@@ -333,7 +333,11 @@ export default function ListClaw() {
             <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
 
               <SectionCard title="Link a Template" subtitle={`Each listing links to exactly one published ${agent.hostMode === "connect" ? "self-hosted" : "CE"} template`} required>
-                <Field label="Linked Template" required>
+                <Field
+                  label="Linked Template"
+                  required
+                  badge={<V2Badge title="Templates carrying private content are shown but cannot be listed — new in V2" />}
+                >
                   <Select
                     value={agent.id}
                     onChange={(id) => setLocation(`/list-claw?agentId=${encodeURIComponent(id)}`)}
@@ -436,6 +440,7 @@ export default function ListClaw() {
                 <Field
                   label={`Sample Output (${sampleOutputs.length}/${SAMPLE_MAX})`}
                   hint="PNG or JPG."
+                  badge={<V2Badge title="Up to five images — new in V2" />}
                 >
                   <SampleGallery
                     values={sampleOutputs}
@@ -729,13 +734,15 @@ function Row({ children }: { children: React.ReactNode }) {
 
 // ─── Field wrapper ──────────────────────────────────────────────────────────
 function Field({
-  label, required, error, hint, hintAlign, children,
+  label, required, error, hint, hintAlign, badge, children,
 }: {
   label: string;
   required?: boolean;
   error?: string;
   hint?: string;
   hintAlign?: "left" | "right";
+  /** Sits beside the label — for the V2 marker, not for content. */
+  badge?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -743,6 +750,7 @@ function Field({
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
         <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg }}>{label}</span>
         {required && <span style={{ color: C.err, fontSize: 11, lineHeight: 1 }}>*</span>}
+        {badge}
       </div>
       {children}
       {(hint || error) && (
