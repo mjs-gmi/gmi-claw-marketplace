@@ -2218,7 +2218,7 @@ function ConfirmDialog({
 
 // ─── Provision modal — per-task overrides (env + lifecycle) ─────────────
 function ProvisionModal({
-  open, agentName, agentVersion, image, endpoints, savedConfig, idcDefault, onCancel, onSubmit,
+  open, agentName, agentVersion, image, endpoints, idcDefault, onCancel, onSubmit,
 }: {
   open: boolean;
   agentName: string;
@@ -2227,7 +2227,6 @@ function ProvisionModal({
   agentVersion: string;
   image?: string;
   endpoints: AgentEndpoint[];
-  savedConfig: SavedLaunchConfig;
   onCancel: () => void;
   onSubmit: (cfg: InstanceConfig) => void;
 }) {
@@ -2256,12 +2255,12 @@ function ProvisionModal({
   // .env import — parse KEY=VALUE lines into override rows
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
-  const modelBlocked = savedConfig.status === "action_required";
   // Re-seed the model field from the launcher's saved default each time the modal
   // opens, so switching Agents can't carry a stale selection across.
   useEffect(() => {
-    if (open) setModel(savedConfig.status === "ok" ? savedConfig.model : "");
-  }, [open, savedConfig.model, savedConfig.status]);
+    // Model is a per-sandbox choice now; open on the featured one.
+    if (open) setModel(FEATURED_MODEL.id);
+  }, [open]);
 
   // Reset on close
   if (!open) return null;
@@ -2297,7 +2296,7 @@ function ProvisionModal({
     setMaxLifetime(TEMPLATE_DEFAULT_CONFIG.maxLifetime);
     setIdleTimeout(TEMPLATE_DEFAULT_CONFIG.idleTimeout);
     setEndpointActivity(true);
-    setModel(savedConfig.status === "ok" ? savedConfig.model : "");
+    setModel(FEATURED_MODEL.id);
     setMeta([]);
     setShowLifecycle(false);
     setImportOpen(false);
@@ -2340,8 +2339,7 @@ function ProvisionModal({
     meta.some((m) => m.key.trim() || m.value.trim()) ||
     maxLifetime !== TEMPLATE_DEFAULT_CONFIG.maxLifetime ||
     idleTimeout !== TEMPLATE_DEFAULT_CONFIG.idleTimeout ||
-    (savedConfig.status === "ok" && model !== savedConfig.model) ||
-    (savedConfig.status === "action_required" && model !== "");
+    model !== FEATURED_MODEL.id;
 
   return (
     <>
@@ -2428,26 +2426,13 @@ function ProvisionModal({
               <ReleaseBadge r="IND" />
               <PlanBadge />
             </div>
-            {modelBlocked && (
-              <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.35)", borderRadius: 8, padding: "9px 11px" }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.err} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M12 9v4M12 17h.01" /><circle cx="12" cy="12" r="10" /></svg>
-                <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "17px" }}>
-                  <span style={{ fontWeight: 600 }}>Action required</span> — the model saved for this Agent
-                  (<span style={{ fontFamily: MONO }}>{savedConfig.model}</span>) is no longer offered to your Organization.
-                  Your saved configuration is kept, but no Sandbox is created until you confirm another model.
-                  Nothing is substituted for you.
-                </span>
-              </div>
-            )}
             <select
               value={model}
               onChange={(e) => { const v = e.target.value; if (!v || isStandardModel(v)) setModel(v); else setPendingModel(v); }}
               style={{
                 ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "pointer",
-                borderColor: modelBlocked && !model ? "rgba(248,113,113,0.55)" : C.border,
               }}
             >
-              {modelBlocked && <option value="">Select a model to continue</option>}
               <optgroup label="Standard · included (FUP)">
                 {STANDARD_MODELS.map((m) => (
                   <option key={m.id} value={m.id}>{m.name}</option>
@@ -2484,10 +2469,7 @@ function ProvisionModal({
               );
             })()}
             <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-              {savedConfig.status === "ok"
-                ? <>Saved default for this Agent: <span style={{ color: C.fg }}>{modelDisplayName(savedConfig.model)}</span>. </>
-                : null}
-              Injected as locked <span style={{ fontFamily: MONO }}>GMI_MODEL_ID</span> · applies only to Sandboxes created after this change; running Sandboxes are unaffected.
+              Chosen per sandbox and injected as locked <span style={{ fontFamily: MONO }}>GMI_MODEL_ID</span> · applies only to Sandboxes created after this change; running Sandboxes are unaffected.
             </span>
             {/* Threshold nudge — how this run bills, based on the launcher's subscription */}
             {(() => {
@@ -4192,33 +4174,29 @@ function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instan
 
 // ─── Right detail pane ────────────────────────────────────────────────────
 function AgentDetailPane({
-  agent, instances, snapshots, image, savedConfig, onProvision, onAction, onOpenDetail, activeInstanceId,
+  agent, instances, snapshots, image, onProvision, onAction, onOpenDetail, activeInstanceId,
   onPublishListing, onUnpublishListing,
-  onSaveModel, onRevalidate, onRetryPrep, onReplaceImage, canConvert = false,
+  onRetryPrep, canConvert = false,
 }: {
   agent: MyAgent;
   instances: Instance[];
   snapshots: Snapshot[];
   image?: RuntimeImage;
-  savedConfig: SavedLaunchConfig;
   onPublishListing: (agentId: string) => void;
   onUnpublishListing: (agentId: string) => void;
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
   onOpenDetail: (id: string, tab?: DrawerTab) => void;
   activeInstanceId: string | null;
-  onSaveModel: (agentId: string, model: string) => void;
-  onRevalidate: (agentId: string) => void;
   onRetryPrep: (agentId: string) => void;
-  onReplaceImage: (agentId: string) => void;
   canConvert?: boolean;
 }) {
   const [tab, setTab] = useState<"monitor" | "integration" | "analytics">("monitor");
-  // F-01 launch gate: the Template must be Ready. F-08 rule 4 adds a second gate —
-  // an action_required saved model blocks creation until the launcher confirms one.
+  // Launch gate: the Template must be Ready. That is the only gate now — the
+  // saved-launch-configuration surface is gone, so a "confirm a model" block
+  // would have had nowhere to send anyone.
   const templateReady = isLaunchable(image);
-  const modelBlocked = savedConfig.status === "action_required";
-  const launchable = templateReady && !modelBlocked;
+  const launchable = templateReady;
   // + Sandbox + Listing ▼ now share the top-right of the agent header.
   // Provisioning is the highest-frequency action so it gets the lime fill;
   // listing actions sit behind a single dropdown next to it.
@@ -4228,8 +4206,8 @@ function AgentDetailPane({
         onClick={() => launchable && onProvision(agent.id)}
         disabled={!launchable}
         title={
-          launchable ? "Launch a new sandbox"
-            : modelBlocked ? "Blocked — confirm a model in the saved launch configuration below, then launch"
+          launchable
+            ? "Launch a new sandbox"
             : "Launch is available once the Sandbox Template is validated and prepared"
         }
         style={{
@@ -4399,66 +4377,12 @@ function AgentDetailPane({
               {(image.preparation === "failed" || image.preparation === "stale") && (
                 <button onClick={() => onRetryPrep(agent.id)} style={{ fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.limeText, background: C.lime, border: "none", padding: "5px 12px", borderRadius: 7, cursor: "pointer" }}>Retry preparation</button>
               )}
-              <button onClick={() => onRevalidate(agent.id)} style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg, background: "transparent", border: `1px solid ${C.border}`, padding: "5px 12px", borderRadius: 7, cursor: "pointer" }}>Revalidate</button>
-              <button onClick={() => onReplaceImage(agent.id)} style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg, background: "transparent", border: `1px solid ${C.border}`, padding: "5px 12px", borderRadius: 7, cursor: "pointer" }}>Replace Image</button>
             </div>
           </section>
         );
       })()}
 
-      {/* F-08 Saved Launch Configuration — launcher-owned, one model default per
-          Agent. Changing it never rebuilds a Template, mutates a Snapshot, or
-          alters the shared Agent for other launchers. */}
-      <section style={{ border: `1px solid ${modelBlocked ? "rgba(248,113,113,0.4)" : C.border}`, background: modelBlocked ? "rgba(248,113,113,0.04)" : "transparent", borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <h3 style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg, margin: 0 }}>Saved launch configuration</h3>
-          <ReleaseBadge r="IND" />
-          <span style={{ marginLeft: "auto", fontFamily: FONT, fontSize: 11, color: C.muted }}>yours — not the Agent's</span>
-        </div>
 
-        {modelBlocked ? (
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.err} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M12 9v4M12 17h.01" /><circle cx="12" cy="12" r="10" /></svg>
-            <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "17px" }}>
-              <span style={{ fontWeight: 600 }}>Action required</span> — <span style={{ fontFamily: MONO }}>{savedConfig.model}</span> is
-              no longer offered to your Organization. Your configuration is kept as-is, and new Sandboxes are blocked until you confirm a
-              replacement. Nothing is substituted automatically.
-            </span>
-          </div>
-        ) : null}
-
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted, minWidth: 92 }}>Default model</span>
-          <select
-            value={modelBlocked ? "" : savedConfig.model}
-            onChange={(e) => e.target.value && onSaveModel(agent.id, e.target.value)}
-            style={{
-              flex: 1, minWidth: 220, maxWidth: 340,
-              background: C.pillBg, border: `1px solid ${modelBlocked ? "rgba(248,113,113,0.55)" : C.border}`,
-              color: C.fg, fontFamily: FONT, fontSize: 13, padding: "6px 10px", borderRadius: 6, cursor: "pointer", outline: "none",
-            }}
-          >
-            {modelBlocked && <option value="">Select a replacement model</option>}
-            <optgroup label="Standard · included (FUP)">
-              {STANDARD_MODELS.map((m) => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
-            </optgroup>
-            <optgroup label="Premium · burns credits">
-              {ALL_MODELS.filter((m) => m.lane === "premium").map((m) => (
-                <option key={m.id} value={m.id}>{m.name} — {m.burnBlended} cr/1M</option>
-              ))}
-            </optgroup>
-          </select>
-          <PlanBadge />
-        </div>
-
-        <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-          Applies only to Sandboxes created after the change — running Sandboxes keep the model they started with, and there is no
-          hot-switching (delete and create instead). Resolved as: per-Sandbox override → this default → the Agent Version's Featured model,
-          then injected as locked <span style={{ fontFamily: MONO }}>GMI_MODEL_ID</span>. The Agent must read that variable or switching is a silent no-op.
-        </span>
-      </section>
 
       {/* Tabs */}
       <PillSegmented
@@ -5102,13 +5026,6 @@ export default function Dashboard() {
     setLocation(sandboxHref(id, tab));
   };
   // F-08 — launcher-owned Saved Launch Configurations, keyed by Agent.
-  const [savedConfigs, setSavedConfigs] = useState<Record<string, SavedLaunchConfig>>(INITIAL_SAVED_CONFIGS);
-  const savedConfigFor = (agentId?: string): SavedLaunchConfig =>
-    resolveSavedConfig(agentId ? savedConfigs[agentId] : undefined);
-  const saveModel = (agentId: string, model: string) => {
-    setSavedConfigs((prev) => ({ ...prev, [agentId]: { model, status: "ok" } }));
-    pushToast("success", `Saved default model — applies to Sandboxes created from now on`);
-  };
   // Operation feedback toasts (PRD §4.2 — Accepted → in-progress → resolved)
   const [toasts, setToasts] = useState<ToastMsg[]>([]);
   const toastSeq = useRef(0);
@@ -5229,18 +5146,6 @@ export default function Dashboard() {
   const patchImage = (agentId: string, patch: Partial<RuntimeImage>) =>
     setRuntimeImages((prev) => ({ ...prev, [agentId]: { ...prev[agentId], ...patch } }));
   // Validate → prepare cycle: validating → valid → preparing → ready.
-  const runReadiness = (agentId: string, kind: "revalidate" | "replace") => {
-    const t = pushToast("progress", kind === "replace" ? "Validating new image…" : "Revalidating image…");
-    patchImage(agentId, { validation: "validating", preparation: "not_started", compatibilityIssue: undefined });
-    setTimeout(() => {
-      patchImage(agentId, { validation: "valid", preparation: "preparing", lastValidated: fmtNow() });
-      settleToast(t, "progress", "Preparing template…");
-      setTimeout(() => {
-        patchImage(agentId, { preparation: "ready" });
-        settleToast(t, "success", "Template ready — Launch enabled");
-      }, 1600);
-    }, 1400);
-  };
   const retryPreparation = (agentId: string) => {
     const t = pushToast("progress", "Preparing template…");
     patchImage(agentId, { preparation: "preparing" });
@@ -5460,18 +5365,12 @@ export default function Dashboard() {
     setRestoreSnapshot(null);
     setTopTab("deployments");
     setSelectedId(targetAgentId);
-    // F-08 rule 4 applies to every create path, including launch-from-Snapshot:
-    // with an action_required saved model, nothing is created and nothing is
-    // substituted. The Snapshot stays Ready and unchanged.
-    const cfg = savedConfigFor(targetAgentId);
-    if (cfg.status === "action_required") {
-      pushToast("error", "Blocked — confirm a model in this Agent's saved launch configuration first");
-      return;
-    }
+    // Model is a per-sandbox choice, so a snapshot launch takes the featured
+    // one rather than consulting a stored default that no longer exists.
     actuallyProvision(targetAgentId, {
       ...TEMPLATE_DEFAULT_CONFIG,
       name: `from-${snapshotLabel(snapshot).replace(/^snap_/, "").slice(0, 18)}`,
-      model: cfg.model,
+      model: FEATURED_MODEL.id,
       metadata: snapshot.metadata ?? [],
     });
     pushToast("success", `Launching a new sandbox from this Snapshot on ${version} — see My Agents`);
@@ -5714,17 +5613,13 @@ export default function Dashboard() {
               instances={instances}
               snapshots={snapshots}
               image={runtimeImages[selected.id]}
-              savedConfig={savedConfigFor(selected.id)}
               onPublishListing={openListingForm}
               onUnpublishListing={requestUnpublish}
               onProvision={handleProvision}
               onAction={handleAction}
               onOpenDetail={openDetail}
               activeInstanceId={drawer?.id ?? null}
-              onSaveModel={saveModel}
-              onRevalidate={(id) => runReadiness(id, "revalidate")}
               onRetryPrep={retryPreparation}
-              onReplaceImage={(id) => runReadiness(id, "replace")}
               canConvert
             />
           ) : allAgents.length === 0 ? (
@@ -5776,7 +5671,6 @@ export default function Dashboard() {
         agentVersion={agentVersionName(provisionForAgentId ?? "", allAgents.find((a) => a.id === provisionForAgentId)?.name)}
         image={(allAgents.find((a) => a.id === provisionForAgentId) as any)?.dockerImage}
         endpoints={endpointsForAgent(allAgents.find((a) => a.id === provisionForAgentId))}
-        savedConfig={savedConfigFor(provisionForAgentId ?? undefined)}
         idcDefault={allAgents.find((a) => a.id === provisionForAgentId)?.region}
         onCancel={() => setProvisionForAgentId(null)}
         onSubmit={(cfg) => {
