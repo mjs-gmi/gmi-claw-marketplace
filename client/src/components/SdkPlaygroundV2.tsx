@@ -15,7 +15,7 @@
 //
 // Every operation says which plane it is on and whether the swagger covers it,
 // so nobody copies a snippet for an endpoint that does not exist.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { C, FONT, MONO } from "@/lib/tokens";
 import V2Badge from "@/components/V2Badge";
 import NoApiBadge from "@/components/NoApiBadge";
@@ -224,10 +224,11 @@ export default function SdkPlaygroundV2({
   const all = useMemo(() => ops(templateId), [templateId]);
   const [opId, setOpId] = useState(all[0].id);
   const [lang, setLang] = useState<Lang>("python");
-  const [values, setValues] = useState<Record<string, Record<string, string>>>(() =>
-    Object.fromEntries(all.map((o) => [o.id, Object.fromEntries(o.params.map((p) => [p.key, p.value]))])),
-  );
+  const seed = () =>
+    Object.fromEntries(all.map((o) => [o.id, Object.fromEntries(o.params.map((p) => [p.key, p.value]))]));
+  const [values, setValues] = useState<Record<string, Record<string, string>>>(seed);
   const [ran, setRan] = useState<string | null>(null);
+  useEffect(() => { setValues(seed()); setRan(null); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [templateId]);
 
   const op = all.find((o) => o.id === opId) ?? all[0];
   const v = values[op.id] ?? {};

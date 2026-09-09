@@ -243,18 +243,20 @@ export default function ListClaw() {
     [allAgents],
   );
 
-  // v1.2 §B6 — anything typed beyond the prefilled name/publisher counts as
-  // work worth warning about before the back link discards it.
+  // v1.2 §B6 — dirty means "changed on *this* visit". Comparing against a
+  // loaded draft instead of against non-empty fields is the whole point: a
+  // listing saved yesterday arrives with every field filled, so the old check
+  // fired on arrival and Leave then deleted work the user never touched.
+  const initialSnapshot = useRef<string | null>(null);
+  useEffect(() => {
+    if (initialSnapshot.current === null && draft.agentId) {
+      initialSnapshot.current = JSON.stringify({ ...draft, updatedAt: "" });
+    }
+  }, [draft]);
   const isDirty =
-    draft.shortDesc.trim() !== "" ||
-    draft.fullDesc.trim() !== "" ||
-    draft.tags.length > 0 ||
-    draft.logoDataUrl !== "" ||
-    (draft.sampleOutputs?.length ?? 0) > 0 ||
-    draft.sampleOutputDataUrl !== "" ||
-    draft.demoVideoUrl.trim() !== "" ||
-    draft.docsUrl.trim() !== "" ||
-    draft.publicUrl.trim() !== "";
+    initialSnapshot.current !== null &&
+    JSON.stringify({ ...draft, updatedAt: "" }) !== initialSnapshot.current;
+
 
   // v1.2 §C8 — gallery list, back-filled from the pre-v1.2 single-image field.
   const sampleOutputs = useMemo(() => {

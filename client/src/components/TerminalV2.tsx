@@ -110,6 +110,7 @@ export default function TerminalV2({
   useEffect(() => { sizeRef.current = size; }, [size]);
 
   // ── connect ────────────────────────────────────────────────────────────
+  const openTimer = useRef<number | null>(null);
   const open = () => {
     setConn("connecting");
     setLines([]);
@@ -125,12 +126,23 @@ export default function TerminalV2({
         { text: "Interactive TTY. Ctrl-C interrupts, Ctrl-D or `exit` closes.", kind: "sys" },
       ]);
     }, 900);
+    openTimer.current = t;
     timers.current.push(t);
   };
 
   useEffect(() => {
-    if (!canConnect) { setConn("closed"); return; }
+    if (!canConnect) {
+      // A pause mid-connect used to leave the 900ms timer running, so `conn`
+      // became "connected" behind the blocked banner and every later control
+      // keyed off a lie.
+      if (openTimer.current !== null) { window.clearTimeout(openTimer.current); openTimer.current = null; }
+      setConn("closed");
+      return;
+    }
     open();
+    return () => {
+      if (openTimer.current !== null) { window.clearTimeout(openTimer.current); openTimer.current = null; }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canConnect, sandboxId]);
 
@@ -148,9 +160,16 @@ export default function TerminalV2({
 
   // Every size change goes down the control channel. §C: if this is only a CSS
   // change, programs inside the sandbox lay out at the wrong width.
+  // Only a real size *change* is a resize. Firing on the connect transition
+  // printed a control message for a size the banner had just announced.
+  const reportedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (conn !== "connected") return;
+    if (conn !== "connected") { reportedRef.current = null; return; }
+    const key = `${size.cols}x${size.rows}`;
     setLastResize(size);
+    if (reportedRef.current === null) { reportedRef.current = key; return; }
+    if (reportedRef.current === key) return;
+    reportedRef.current = key;
     const t = window.setTimeout(() => {
       setLines((l) => [...l, { text: `[control] resize → ${size.cols}×${size.rows}`, kind: "sys" }]);
     }, 60);

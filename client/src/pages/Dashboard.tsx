@@ -96,6 +96,9 @@ interface MyAgent {
 
 // Mirrors the localStorage key written by DeployWizard's Connect-flow Submit
 const REGISTERED_AGENTS_KEY = "gmi:registered-agents";
+// Seed agents are static module data, so a listing state change has to live
+// somewhere that survives leaving the page.
+const LISTING_OVERRIDES_KEY = "gmi:listing-overrides";
 
 function loadRegisteredAgents(): MyAgent[] {
   if (typeof window === "undefined") return [];
@@ -1669,8 +1672,22 @@ function ShellPane({
     return () => window.clearInterval(iv);
   }, [live]);
 
-  // Never leave a pending settle behind when the drawer closes.
-  useEffect(() => () => { timers.current.forEach(window.clearTimeout); }, []);
+  // Deliberately no unmount cleanup: `history` is owned by the page, so a
+  // settle timer that fires after this pane closes writes to a live parent and
+  // is exactly what we want. Clearing them left executions pinned at "running"
+  // forever, which disabled the input with no way out but cancelling a command
+  // that had already finished.
+  useEffect(() => {
+    // Anything still marked running from a previous mount can never settle —
+    // its timer belonged to that mount. Resolve it rather than deadlock.
+    setHistory((prev) => prev.map((e) => (
+      e.status === "running" || e.status === "cancelling"
+        ? { ...e, status: "failed" as ExecStatus, exitCode: null, elapsedMs: e.elapsedMs || Date.now() - e.startedAt,
+            terminationReason: "Result unknown — the page reloaded while this was running. Re-run to get a fresh result." }
+        : e
+    )));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const settle = (id: string, patch: Partial<Execution>) => {
     setHistory((h) => h.map((e) => (
@@ -2125,10 +2142,13 @@ function ExpiresCell({
   const color = urgent ? C.err : warn ? C.warn : C.fg;
 
   return (
-    <div ref={ref} style={{ position: "relative", display: "flex", flexDirection: "column", gap: 3, minWidth: 0, overflow: "hidden" }}>
+    // No overflow:hidden here — this element is the popover's containing
+    // block, and clipping it made the whole Extend flow invisible and
+    // unclickable. Truncation belongs on the text, which already has it.
+    <div ref={ref} style={{ position: "relative", display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
         <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: urgent ? 600 : 500, color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          Expires in {remainingShort(clock.leftMins)}
+          {clock.leftMins <= 0 ? "Expired" : `Expires in ${remainingShort(clock.leftMins)}`}
         </span>
         <button
           onClick={(e) => { e.stopPropagation(); setDraft(String(clock.totalMins)); setOpen((o) => !o); }}
@@ -2152,6 +2172,10 @@ function ExpiresCell({
       {open && (
         <div
           onClick={(e) => e.stopPropagation()}
+          // The row is a role="button" with its own Enter/Space handler, and
+          // keydown bubbles: typing a number and pressing Enter navigated to
+          // the sandbox instead of setting the expiry.
+          onKeyDown={(e) => e.stopPropagation()}
           style={{
             position: "absolute", top: "calc(100% + 5px)", left: 0, zIndex: 40, width: 226,
             background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 8, padding: "11px 12px",
@@ -2170,8 +2194,8 @@ function ExpiresCell({
             <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>minutes total, from creation</span>
           </label>
           <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted, lineHeight: "14px" }}>
-            Currently {durationLabel(inst.maxActive)}, {remainingShort(clock.usedMins)} used. A new expiry
-            can only move later.
+            Currently {durationLabel(inst.maxActive)}, {clock.usedMins < 1 ? "under a minute" : remainingShort(clock.usedMins)} used.
+            A new expiry can only move later.
           </span>
           <button
             onClick={() => {
@@ -2424,9 +2448,10 @@ function ProvisionModal({
     { id: "e0", key: "", value: "" },
   ]);
   const [maxLifetime, setMaxLifetime] = useState(TEMPLATE_DEFAULT_CONFIG.maxLifetime);
-  const [idleTimeout, setIdleTimeout] = useState(TEMPLATE_DEFAULT_CONFIG.idleTimeout);
+  // No control sets this any more, and create does not accept an idle
+  // policy; it stays as the payload default so InstanceConfig is unchanged.
+  const idleTimeout = TEMPLATE_DEFAULT_CONFIG.idleTimeout;
   // P-02 — declared-Endpoint traffic counts as activity by default (D-05 opt-out).
-  const [endpointActivity, setEndpointActivity] = useState(true);
   // F-08 — starts from the Saved Launch Configuration; this field is the optional
   // per-Runtime override. Empty means the saved model is action_required and the
   // launcher has to confirm one before create is allowed (rule 4).
@@ -2443,9 +2468,14 @@ function ProvisionModal({
   // Re-seed the model field from the launcher's saved default each time the modal
   // opens, so switching Agents can't carry a stale selection across.
   useEffect(() => {
+    if (!open) return;
     // Model is a per-sandbox choice now; open on the featured one.
-    if (open) setModel(FEATURED_MODEL.id);
-  }, [open]);
+    setModel(FEATURED_MODEL.id);
+    // And re-seed the IDC: this modal mounts once and stays mounted, so the
+    // initializer ran while no agent was selected and idcDefault was undefined.
+    // Without this, launching a Frankfurt agent silently records IOWA.
+    setIdc(idcDefault ?? "us-ia-iowa-1");
+  }, [open, idcDefault]);
 
   // Reset on close
   if (!open) return null;
@@ -2479,8 +2509,6 @@ function ProvisionModal({
     setName("");
     setEnv([{ id: "e0", key: "", value: "" }]);
     setMaxLifetime(TEMPLATE_DEFAULT_CONFIG.maxLifetime);
-    setIdleTimeout(TEMPLATE_DEFAULT_CONFIG.idleTimeout);
-    setEndpointActivity(true);
     setModel(FEATURED_MODEL.id);
     setMeta([]);
     setShowLifecycle(false);
@@ -2499,7 +2527,6 @@ function ProvisionModal({
       envOverrides: env.filter((e) => e.key.trim().length > 0),
       maxLifetime,
       idleTimeout,
-      endpointActivity,
       model,
       metadata: meta.filter((m) => m.key.trim().length > 0),
     });
@@ -2523,7 +2550,6 @@ function ProvisionModal({
     env.some((e) => e.key.trim() || e.value.trim()) ||
     meta.some((m) => m.key.trim() || m.value.trim()) ||
     maxLifetime !== TEMPLATE_DEFAULT_CONFIG.maxLifetime ||
-    idleTimeout !== TEMPLATE_DEFAULT_CONFIG.idleTimeout ||
     model !== FEATURED_MODEL.id;
 
   return (
@@ -2729,8 +2755,7 @@ function ProvisionModal({
               /* Collapsed — one-line summary + Customize (defaults-first) */
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                 <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "16px" }}>
-                  {durationLabel(maxLifetime)} active · pause &amp; keep disk · storage billing continues
-                  {" · deleted at the limit"}
+                  {durationLabel(maxLifetime)} from creation · deleted with its files at the limit
                   <span style={{ color: C.borderSoft }}> · </span>Organization default
                 </span>
                 <button
@@ -2778,33 +2803,11 @@ function ProvisionModal({
                     No idle policy in the R1 API. A sandbox runs on one wall-clock
                     <span style={{ fontFamily: MONO }}> timeout</span> and activity does not extend it.
                   </NoApiNote>
-                  {idleTimeout !== "off" && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingLeft: 23 }}>
-                      <select value={idleTimeout} onChange={(e) => setIdleTimeout(e.target.value)} style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "pointer" }}>
-                        <option value="15min">15 min</option>
-                        <option value="30min">30 min</option>
-                        <option value="1h">1 hour</option>
-                      </select>
-                      {/* P-02 activity definition — exec and file I/O always reset the
-                          timer; declared-Endpoint traffic counts by default (D-05). */}
-                      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
-                        <input
-                          type="checkbox"
-                          checked={endpointActivity}
-                          onChange={(e) => setEndpointActivity(e.target.checked)}
-                          style={{ accentColor: C.lime, width: 14, height: 14, marginTop: 2, cursor: "pointer" }}
-                        />
-                        <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.fg, lineHeight: "16px" }}>
-                          Count traffic to declared Endpoints as activity
-                          <span style={{ color: C.muted }}> · on by default</span>
-                        </span>
-                      </label>
-                      <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-                        Run Command and file transfer always reset the timer. Health checks, probes, rejected requests, and platform traffic never do.
-                        This policy only pauses a Sandbox — it never deletes one.
-                      </span>
-                    </div>
-                  )}
+                  {/* The idle sub-controls used to live here. With the checkbox
+                      hard-disabled — there is no idle policy in the API — they
+                      were unreachable, and leaving them in would have quietly
+                      restored a live idle editor beside a NO API notice if the
+                      organisation default ever changed. */}
                 </div>
 
                 {/* Read-only policy row — action at the active limit (never deletes) */}
@@ -2829,7 +2832,7 @@ function ProvisionModal({
                 </div>
 
                 <button
-                  onClick={() => { setShowLifecycle(false); setMaxLifetime(TEMPLATE_DEFAULT_CONFIG.maxLifetime); setIdleTimeout(TEMPLATE_DEFAULT_CONFIG.idleTimeout); }}
+                  onClick={() => { setShowLifecycle(false); setMaxLifetime(TEMPLATE_DEFAULT_CONFIG.maxLifetime); }}
                   style={{ alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: 4, fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted, background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
                 >
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m18 15-6-6-6 6" /></svg>
@@ -3733,7 +3736,7 @@ function InstanceDrawer({
               <DetailRow label="Maximum active time" value={durationLabel(inst.maxActive)} />
               <DetailRow label="Active time used" value={totalMins ? `${usedMins} min` : "—"} />
               <DetailRow label="Remaining" value={totalMins ? remainingLabel(totalMins - usedMins) : "No automatic limit"} />
-              <DetailRow label="At the limit" value="Pause & keep disk" />
+              <DetailRow label="At the limit" value="Deleted — the Sandbox and its files go" accent={C.err} />
               <DetailRow label="Inactivity policy" value={inst.config?.idleTimeout && inst.config.idleTimeout !== "off" ? `Pause after ${durationLabel(inst.config.idleTimeout)}` : "Off"} />
             </div>
 
@@ -3745,7 +3748,7 @@ function InstanceDrawer({
                 value={inst.status === "suspended" ? `Paused · charges continue (≈$${pausedCostMo(inst)}/mo)` : "Active (running)"}
                 accent={inst.status === "suspended" ? "#60a5fa" : undefined}
               />
-              <DetailRow label="Auto-deletion" value="Never — kept until you Resume or Delete" />
+              <DetailRow label="Clock" value="Wall-clock from creation · using the Sandbox does not extend it" />
               <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px", marginTop: 2 }}>
                 Starting, pausing, and resuming time is not billed. Compute metering starts when Running is confirmed and stops on a
                 confirmed Pause or release. Resume is a fresh boot of the same disk: the ID and files are kept, memory, processes, and
@@ -3938,7 +3941,6 @@ function MonitorPane({
         <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, margin: "0 0 12px" }}>
           Create returns a Sandbox ID immediately in Pending — Running is reported only once readiness passes.
           Filter by customer metadata with <span style={{ fontFamily: MONO }}>key=value</span>.
-          Snapshotting a paused sandbox means Resume → Snapshot → Pause: three explicit steps, never a silent resume.
         </p>
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
@@ -4014,7 +4016,7 @@ function MonitorPane({
                 justifySelf: "start",
               }}
             >
-              Launched
+              Created
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.9, transform: sortDir === "asc" ? "rotate(180deg)" : "none", transition: "transform .15s" }}>
                 <path d="m6 9 6 6 6-6" />
               </svg>
@@ -5225,9 +5227,21 @@ export default function Dashboard() {
   // data, so Unpublish / Repost record the new state here and it is layered on
   // top when the list is built. Registered agents keep their own copy too, so
   // the override is the single read path either way.
-  const [listingOverrides, setListingOverrides] = useState<Record<string, ListingState>>({});
+  const [listingOverrides, setListingOverrides] = useState<Record<string, ListingState>>(
+    () => {
+      try { return JSON.parse(localStorage.getItem(LISTING_OVERRIDES_KEY) || "{}"); }
+      catch { return {}; }
+    },
+  );
   const setListingState = (agentId: string, state: ListingState) => {
-    setListingOverrides((m) => ({ ...m, [agentId]: state }));
+    // Persisted, not just in component state: every listing action navigates
+    // away (the listing form, the marketplace), and an Unpublish that comes
+    // back as Live is worse than no Unpublish at all.
+    setListingOverrides((m) => {
+      const next = { ...m, [agentId]: state };
+      try { localStorage.setItem(LISTING_OVERRIDES_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
     setRegistered((prev) => {
       if (!prev.some((a) => a.id === agentId)) return prev;
       const next = prev.map((a) => (a.id === agentId ? { ...a, listingState: state } : a));
