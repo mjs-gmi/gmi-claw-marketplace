@@ -16,6 +16,7 @@ import V2Badge from "@/components/V2Badge";
 import TerminalV2, { type TerminalMode } from "@/components/TerminalV2";
 import NoApiBadge, { NoApiNote, NO_API_REASON } from "@/components/NoApiBadge";
 import SdkPlaygroundV2 from "@/components/SdkPlaygroundV2";
+import OpenQuestionBadge from "@/components/OpenQuestionBadge";
 import {
   PublishStatusEntry, PublishStatusModal, UnpublishDialog,
   type PublishRow, type ReviewStatus, type ListingActionHandlers,
@@ -921,7 +922,7 @@ function MetricCard({ label, value, helper, accent }: {
 function PillSegmented<T extends string>({
   options, active, onChange,
 }: {
-  options: { value: T; label: string; noApi?: boolean }[];
+  options: { value: T; label: string; noApi?: boolean; question?: string }[];
   active: T;
   onChange: (v: T) => void;
 }) {
@@ -954,6 +955,7 @@ function PillSegmented<T extends string>({
           >
             {opt.label}
             {opt.noApi && <NoApiBadge style={{ marginLeft: 6 }} />}
+            {opt.question && <OpenQuestionBadge title={opt.question} style={{ marginLeft: 6 }} />}
           </button>
         );
       })}
@@ -3020,9 +3022,11 @@ function MetricsPane({ inst }: { inst: Instance }) {
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
         <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-          Metrics · last 60s · GET /tasks/{inst.id.slice(0, 12)}…/metrics/timeseries
+          Metrics · last 60s
         </span>
-        <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>live · 1 Hz</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 11, color: C.muted }}>
+          mock data · 1 Hz <NoApiBadge title="No metrics endpoint in the swagger. Daytona has Metrics and Traces tabs; ours are sparklines over generated data until there is something to read." />
+        </span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
         <Sparkline label="CPU"        current={String(cpu[cpu.length - 1])} suffix="%"   data={cpu} color="#7dd3fc" />
@@ -3435,12 +3439,20 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
 // tabs, and the endpoint confirmations are inline instead of a second modal.
 // "run" is kept as an alias so older links still resolve; it lands on the
 // Terminal in one-shot mode.
-type DrawerTab = "overview" | "access" | "files" | "run" | "terminal" | "logs" | "config";
+type DrawerTab = "overview" | "access" | "metrics" | "files" | "run" | "terminal" | "logs" | "config";
 const TAB_ALIAS: Partial<Record<DrawerTab, DrawerTab>> = { run: "terminal" };
-const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean; noApi?: boolean }[] = [
+const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean; noApi?: boolean; question?: string }[] = [
   { key: "overview", label: "Overview" },
   // Access / Files / Run are the V2.0 change set (sections D, G, B).
-  { key: "access",   label: "Access", v2: true },
+  // Nobody else has an Access tab: E2B keeps identity and spec in a persistent
+  // header, Daytona makes SSH credentials a row action. Flagged, not moved.
+  {
+    key: "access", label: "Access", v2: true,
+    question: "Should this be a tab? E2B keeps identity and spec in a persistent header; Daytona makes credentials a row action. No competitor has an Access tab.",
+  },
+  // Daytona has Metrics as its own tab. Ours was a block buried inside
+  // Overview, which is why nobody found it.
+  { key: "metrics",  label: "Metrics", runningOnly: true, v2: true, noApi: true },
   { key: "files",    label: "Files",  v2: true },
   // Terminal holds both modes — the TTY and one-shot exec. They are the same
   // data plane, so E2B's dashboard and Vercel's Connect tab both keep them in
@@ -3625,6 +3637,7 @@ function InstanceDrawer({
               {t.label}
               {t.v2 && <V2Badge />}
               {t.noApi && <NoApiBadge />}
+              {t.question && <OpenQuestionBadge title={t.question} />}
             </Tag>
           );
         })}
@@ -3669,20 +3682,16 @@ function InstanceDrawer({
               <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px", marginTop: 2 }}>
                 Starting, pausing, and resuming time is not billed. Compute metering starts when Running is confirmed and stops on a
                 confirmed Pause or release. Resume is a fresh boot of the same disk: the ID and files are kept, memory, processes, and
-                live connections are not. Exact charges live in Usage &amp; Billing.
+                live connections are not. Exact charges live in Spending.
               </div>
             </div>
 
-            {/* Resource usage — glanceable here instead of its own row panel */}
-            {running && (
-              <div style={{ marginTop: 18 }}>
-                <MetricsPane inst={inst} />
-              </div>
-            )}
+
           </>
         )}
 
         {activeTab === "access" && <AccessSection inst={inst} endpoints={endpoints} />}
+        {activeTab === "metrics" && <MetricsPane inst={inst} />}
         {activeTab === "files"  && <FilesSection inst={inst} />}
         {activeTab === "terminal" && (
           <TerminalV2
@@ -4438,8 +4447,17 @@ function AgentDetailPane({
         onChange={setTab}
         options={[
           { value: "monitor", label: "Sandboxes" },
-          { value: "integration", label: "SDK" },
-          { value: "analytics", label: "Usage", noApi: true },
+          {
+            value: "integration", label: "SDK",
+            // Daytona keeps exec in a Playground; E2B has no exec UI at all and
+            // leaves it to the SDK. Both are defensible; neither puts it on the
+            // Agent. Flagged rather than quietly settled.
+            question: "Does exec belong on the Agent at all? Daytona keeps it in a top-level Playground; E2B has no exec UI and leaves it to the SDK. Undecided.",
+          },
+          {
+            value: "analytics", label: "Spending", noApi: true,
+            question: "Agent-level or workspace-level? Daytona puts Spending per sandbox; Modal puts it at workspace level with a budget cap and pushes per-resource detail to the CLI.",
+          },
         ]}
       />
 
