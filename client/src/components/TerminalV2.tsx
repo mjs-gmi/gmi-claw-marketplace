@@ -12,10 +12,10 @@
 // render at the wrong width), and closing must really send close (otherwise the
 // session leaks while the UI just hid it).
 //
-// The shell, and only the shell. Running one command with an exit code is the
-// Run tab next door — two sibling tabs, each named for what it does. They were
-// one tab with a mode toggle, which is exactly how Run became unfindable:
-// nothing on screen said the word "Run" until you had already opened Terminal.
+// The session. Running one command with an exit code sits above it on the same
+// surface — Vercel's dashboard does this: one Connect tab holds the shell and
+// commands rather than a tab each, and neither E2B nor Daytona has a Run tab at
+// all. Both controls are visible at once, so neither hides behind the other.
 //
 // This is a prototype: the transport is simulated, but every state the real
 // stream produces has a rendering, and resize/close go through the same code
@@ -355,8 +355,8 @@ export default function TerminalV2({
             Ctrl-D or <span style={{ fontFamily: MONO }}>exit</span> closes. Drag the bottom edge to resize —
             the new size is sent as a <span style={{ fontFamily: MONO }}>resize</span> control message, so programs
             inside lay out correctly. <span style={{ color: C.fg }}>Close session really hangs up</span>; it does not
-            just hide this pane. For a single command with an exit code, use the
-            <span style={{ color: C.fg }}> Run</span> tab.
+            just hide this pane. For a single command with an exit code, use
+            <span style={{ color: C.fg }}> Run a command</span> above.
           </span>
         </>
       )}

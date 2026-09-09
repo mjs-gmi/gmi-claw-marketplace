@@ -1844,8 +1844,8 @@ function ShellPane({
 
       <span style={{ display: "block", marginTop: 8, fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
         One command at a time. <span style={{ color: C.fg }}>This is not a persistent terminal</span> — no stdin,
-        no retained <span style={{ fontFamily: MONO }}>cd</span>, no Ctrl-C. For interactive work use the
-        <span style={{ color: C.fg }}> Terminal</span> tab next door.
+        no retained <span style={{ fontFamily: MONO }}>cd</span>, no Ctrl-C. For anything interactive,
+        the session is right below.
         Closing this pane does not stop the command, and every result stays retrievable by
         <span style={{ fontFamily: MONO }}> execution_id</span> after the Sandbox is suspended, fails, or is deleted.
       </span>
@@ -3586,17 +3586,17 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
 // the sandbox restarts, and its dashboard exposes SSH access as a row action.
 // Ours is the same shape: POST /sandboxes/{id}/connect returns a token.
 type DrawerTab = "overview" | "metrics" | "files" | "run" | "terminal" | "logs" | "config";
-const TAB_ALIAS: Partial<Record<DrawerTab, DrawerTab>> = {};
+// "run" is not a tab. It resolves to the Terminal, which holds both the session
+// and running one command — Vercel's dashboard does exactly this with a single
+// Connect surface, and neither E2B nor Daytona has a Run tab at all. Keeping
+// the alias means existing links still land somewhere correct.
+const TAB_ALIAS: Partial<Record<DrawerTab, DrawerTab>> = { run: "terminal" };
 const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean; noApi?: boolean; question?: string }[] = [
   { key: "overview", label: "Overview" },
   // Access / Files / Run are the V2.0 change set (sections D, G, B).
   // Daytona has Metrics as its own tab. Ours was a block buried inside
   // Overview, which is why nobody found it.
   { key: "metrics",  label: "Metrics", runningOnly: true, v2: true, noApi: true },
-  // Run and Terminal are siblings, not two modes of one thing: one submits a
-  // command and reports an exit code, the other is a session. Both named, both
-  // visible — the mode toggle was what made Run impossible to find.
-  { key: "run",      label: "Run", runningOnly: true, v2: true },
   { key: "files",    label: "Files",  v2: true },
   // Terminal holds both modes — the TTY and one-shot exec. They are the same
   // data plane, so E2B's dashboard and Vercel's Connect tab both keep them in
@@ -3833,16 +3833,24 @@ function InstanceDrawer({
         )}
 
         {activeTab === "metrics" && <MetricsPane inst={inst} />}
-        {activeTab === "run"     && <ShellPane inst={inst} history={execHistory} setHistory={setExecHistory} />}
         {activeTab === "files"  && <FilesSection inst={inst} />}
         {activeTab === "terminal" && (
-          <TerminalV2
-            sandboxId={inst.id}
-            sandboxKey={midId(inst.id)}
-            domain="sandbox.gmi.cloud"
-            canConnect={running}
-            blockedReason={`A Terminal needs a Running Sandbox — this one is ${statusLabel(inst.status)}.`}
-          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+            {/* One command with an exit code sits above the session — not behind
+                a toggle, not in its own tab. It is a few rows tall, so both are
+                on screen the moment this opens, which is the whole point: Run
+                was unfindable when it took a second click to appear. */}
+            <ShellPane inst={inst} history={execHistory} setHistory={setExecHistory} />
+            <div style={{ borderTop: `1px solid ${C.borderSoft}`, paddingTop: 16 }}>
+              <TerminalV2
+                sandboxId={inst.id}
+                sandboxKey={midId(inst.id)}
+                domain="sandbox.gmi.cloud"
+                canConnect={running}
+                blockedReason={`A session needs a Running Sandbox — this one is ${statusLabel(inst.status)}.`}
+              />
+            </div>
+          </div>
         )}
         {activeTab === "logs"   && <LogsPane inst={inst} />}
 
@@ -4279,8 +4287,8 @@ function MonitorPane({
                     >
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
                         {([
-                          { tab: "run"      as DrawerTab, label: "Run a command",  icon: <IconPlay />,     hint: "One command, exit code and duration · POST /executions", on: inst.status === "running" },
-                          { tab: "terminal" as DrawerTab, label: "Terminal",       icon: <IconTerminal />, hint: "A persistent shell with stdin and Ctrl-C", on: inst.status === "running" },
+                          { tab: "terminal" as DrawerTab, label: "Run a command",  icon: <IconPlay />,     hint: "One command, exit code and duration · POST /executions", on: inst.status === "running" },
+                          { tab: "terminal" as DrawerTab, label: "Terminal",       icon: <IconTerminal />, hint: "A persistent shell with stdin and Ctrl-C — same surface as Run", on: inst.status === "running" },
                           { tab: "files"    as DrawerTab, label: "Upload / download", icon: <IconFile />,  hint: "One file by absolute path · /files?path=", on: inst.status === "running" },
                           { tab: "metrics"  as DrawerTab, label: "Metrics",        icon: <IconNetwork />,  hint: "CPU, memory and requests", on: inst.status === "running" },
                           { tab: "logs"     as DrawerTab, label: "Logs",           icon: <IconConfig />,   hint: "Container output", on: true },
