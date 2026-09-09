@@ -2231,8 +2231,7 @@ function InstanceRowMenu({
   // F-04 / §4.2 — Delete is available from every non-terminal state, confirmed or
   // not, and is never rejected as a lifecycle conflict. Deleting is an idempotent
   // no-op, so the entry drops once release is already under way.
-  // Daytona puts SSH access in the row menu: rarely used, sensitive, and
-  // fetched rather than browsed. Same shape for the token /connect returns.
+  // Daytona has SSH Access in the row menu and no Access tab; ours matches.
   if (inst.status === "running") {
     lifecycle.push({
       action: "credentials", label: "Access credentials", icon: <IconNetwork />,
@@ -3609,23 +3608,30 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
 // list so the list stays visible and the next instance is one click away.
 // Everything that used to be stacked in one scrolling popup is grouped into
 // tabs, and the endpoint confirmations are inline instead of a second modal.
-// §六.B names the tabs: Overview | Work | Files | Access. Work holds both ways
-// of running something, because §五.2 says the job is to make the two
-// *purposes* legible, not to give each its own tab. Metrics moved to the
-// Agent's Analytics tab, Logs to a row action (the console's own View Log /
-// Download Log), and Config folded into Overview — none of the three is in the
-// spec's list, and all three had somewhere with evidence to go.
-type DrawerTab = "overview" | "work" | "files" | "access" | "run" | "terminal" | "metrics" | "logs" | "config";
+// Tabs are the intersection of what E2B and Daytona actually ship.
+//
+//   E2B      /sandboxes/[id]/{monitoring,logs,terminal,filesystem} + index
+//   Daytona  Overview · Logs · Traces · Metrics · Spending · Terminal ·
+//            Filesystem · VNC
+//   Vercel   one Connect surface: shell, files, commands, ports
+//
+// So: Overview, Metrics, Logs, Terminal, Filesystem. Two names the spec asked
+// for are not in any of them and are gone — "Work" exists nowhere, and neither
+// does an "Access" tab; Daytona reaches credentials through a row action, which
+// is where ours went. Running one command lives inside Terminal, which is
+// Vercel's Connect shape.
+type DrawerTab = "overview" | "metrics" | "logs" | "terminal" | "files" | "work" | "access" | "run" | "config";
 // Old links keep resolving.
 const TAB_ALIAS: Partial<Record<DrawerTab, DrawerTab>> = {
-  run: "work", terminal: "work", metrics: "overview", logs: "overview", config: "overview",
+  run: "terminal", work: "terminal", access: "overview", config: "overview",
 };
 const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean; noApi?: boolean; question?: string }[] = [
   { key: "overview", label: "Overview" },
-  { key: "work",     label: "Work", runningOnly: true, v2: true },
-  // Access / Files / Run are the V2.0 change set (sections D, G, B).
-  { key: "files",    label: "Files",  v2: true },
-  { key: "access",   label: "Access", v2: true },
+  { key: "metrics",  label: "Metrics", runningOnly: true },
+  { key: "logs",     label: "Logs" },
+  { key: "terminal", label: "Terminal", runningOnly: true, v2: true },
+  // Both E2B and Daytona call it Filesystem.
+  { key: "files",    label: "Filesystem", v2: true },
 ];
 const DRAWER_WIDTH = 560;
 
@@ -3855,8 +3861,9 @@ function InstanceDrawer({
 
 
         {activeTab === "files"  && <FilesSection inst={inst} />}
-        {activeTab === "access" && <AccessSection inst={inst} endpoints={endpoints} />}
-        {activeTab === "work" && (
+        {activeTab === "metrics" && <MetricsPane inst={inst} />}
+        {activeTab === "logs"    && <LogsPane inst={inst} />}
+        {activeTab === "terminal" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             {/* §五.2 — the job is not to explain HTTP versus WebSocket, it is to
                 make the two purposes legible. These two lines are the spec's
@@ -3885,12 +3892,6 @@ function InstanceDrawer({
           </div>
         )}
 
-
-        {/* Metrics and Logs are not in §六.B's tab list either. Metrics belongs to
-            the Agent's Analytics tab now; the console reaches logs through row
-            actions (View Log / Download Log). Both stay glanceable here. */}
-        {activeTab === "overview" && running && <MetricsPane inst={inst} />}
-        {activeTab === "overview" && <LogsPane inst={inst} />}
 
         {/* §六.B does not name a Config tab; "what this sandbox was created with" is
             Overview material, so it renders there. */}
@@ -4331,11 +4332,10 @@ function MonitorPane({
                     >
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
                         {([
-                          { tab: "terminal" as DrawerTab, label: "Run a command",  icon: <IconPlay />,     hint: "One command, exit code and duration · POST /executions", on: inst.status === "running" },
-                          { tab: "terminal" as DrawerTab, label: "Terminal",       icon: <IconTerminal />, hint: "A persistent shell with stdin and Ctrl-C — same surface as Run", on: inst.status === "running" },
-                          { tab: "files"    as DrawerTab, label: "Upload / download", icon: <IconFile />,  hint: "One file by absolute path · /files?path=", on: inst.status === "running" },
-                          { tab: "metrics"  as DrawerTab, label: "Metrics",        icon: <IconNetwork />,  hint: "CPU, memory and requests", on: inst.status === "running" },
-                          { tab: "logs"     as DrawerTab, label: "Logs",           icon: <IconConfig />,   hint: "Container output", on: true },
+                          { tab: "terminal" as DrawerTab, label: "Terminal",   icon: <IconTerminal />, hint: "Run one command, or open an interactive shell", on: inst.status === "running" },
+                          { tab: "files"    as DrawerTab, label: "Filesystem", icon: <IconFile />,     hint: "Upload or download one file by absolute path", on: inst.status === "running" },
+                          { tab: "metrics"  as DrawerTab, label: "Metrics",    icon: <IconNetwork />,  hint: "CPU, memory and requests", on: inst.status === "running" },
+                          { tab: "logs"     as DrawerTab, label: "Logs",       icon: <IconConfig />,   hint: "Container output", on: true },
                         ]).map((a) => (
                           <button
                             key={a.tab}
@@ -4672,88 +4672,59 @@ function AgentDetailPane({
         {headerActions}
       </div>
 
-      <AgentEndpoints agent={agent} />
-
-      {/* Sandbox Template — built from this Agent Version's config at register
-          time; image pull and dependency install happen here, never at create.
-          A Snapshot is the other thing entirely: captured from a live instance's
-          disk (F-07). Image-based builds always belong to this track. */}
+      {/* Nobody ships a Template panel. E2B carries `template-id` and
+          `spec-items` as fields in the sandbox header; Daytona has `Image` as a
+          column in the list. So this is a strip of identity fields, not a card,
+          and the build state sits with it because §E wants a status label on
+          the Agent header telling you whether a Sandbox can start. */}
       {image && (() => {
-        const notReady = !templateReady;
-        const fields: [string, React.ReactNode][] = [
-          ["Image", <span style={{ fontFamily: MONO }}>{image.url}:{image.tag}</span>],
-          ["Digest", <span style={{ fontFamily: MONO, color: C.muted }}>{image.digest.slice(0, 26)}…</span>],
-          ["Registry", image.registry],
-          ["Architecture", image.architecture],
-          ["Last validated", agoLabel(image.lastValidated)],
-        ];
+        const ready = isLaunchable(image);
+        const state = ready
+          ? { label: "Ready", color: C.ok }
+          : image.validation === "incompatible" || image.preparation === "failed"
+            ? { label: image.validation === "incompatible" ? "Incompatible" : "Build failed", color: C.err }
+            : { label: image.preparation === "preparing" ? "Building" : VALIDATION_LABEL[image.validation], color: C.warn };
+        const field = (k: string, v: React.ReactNode) => (
+          <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
+            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>{k}</span>
+            <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</span>
+          </span>
+        );
         return (
-          <section style={{ border: `1px solid ${notReady ? "rgba(251,191,36,0.35)" : C.border}`, borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, background: notReady ? "rgba(251,191,36,0.04)" : "transparent" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-              <h3 style={{ display: "inline-flex", alignItems: "baseline", gap: 8, fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg, margin: 0 }}>
-                Sandbox Template
-                <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 500, color: C.muted }}>{agentVersionName(agent.id, agent.name)}</span>
-              </h3>
-              <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                {[
-                  { label: VALIDATION_LABEL[image.validation], color: validationColor(image.validation) },
-                  { label: PREP_LABEL[image.preparation], color: prepColor(image.preparation) },
-                ].map((s) => (
-                  <span key={s.label} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: FONT, fontSize: 11, fontWeight: 600, color: s.color, background: `${s.color}1f`, border: `1px solid ${s.color}55`, padding: "2px 8px", borderRadius: 6 }}>
-                    {(image.validation === "validating" || image.preparation === "preparing") && s.color === C.warn && (
-                      <span style={{ width: 6, height: 6, borderRadius: 999, background: s.color, animation: "pulse 1.2s ease-in-out infinite" }} />
-                    )}
-                    {s.label}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "6px 24px" }}>
-              {fields.map(([k, v]) => (
-                <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: FONT, fontSize: 12, lineHeight: "20px" }}>
-                  <span style={{ color: C.muted }}>{k}</span>
-                  <span style={{ color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</span>
-                </div>
-              ))}
-            </div>
-
-            {image.compatibilityIssue && (
-              <div style={{ display: "flex", gap: 8, alignItems: "flex-start", fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "17px", background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.3)", borderRadius: 8, padding: "8px 12px" }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.err} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10" /><path d="M15 9l-6 6M9 9l6 6" /></svg>
-                <span><span style={{ fontWeight: 600 }}>Compatibility issue</span> — {image.compatibilityIssue}</span>
-              </div>
-            )}
-
-            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-              Prepared once, at register time — creating a Sandbox from a Ready Template pulls no image and installs no dependencies.
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12, alignItems: "center", padding: "9px 0", borderTop: `1px solid ${C.borderSoft}`, borderBottom: `1px solid ${C.borderSoft}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", minWidth: 0 }}>
+            <span
+              title={image.compatibilityIssue ?? (ready ? "Sandboxes can start from this Template" : "Sandboxes cannot start until the Template is ready")}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0,
+                fontFamily: FONT, fontSize: 11, fontWeight: 600, letterSpacing: "0.04em",
+                color: state.color, background: `${state.color}1f`, border: `1px solid ${state.color}55`,
+                padding: "1px 8px", borderRadius: 5,
+              }}
+            >
+              {!ready && image.preparation === "preparing" && (
+                <span style={{ width: 6, height: 6, borderRadius: 999, background: state.color, animation: "pulse 1.2s ease-in-out infinite" }} />
+              )}
+              {state.label}
             </span>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              {notReady && (
-                <span style={{ flex: 1, minWidth: 180, fontFamily: FONT, fontSize: 11.5, color: C.warn, lineHeight: "16px" }}>
-                  {image.validation === "incompatible" ? "Resolve the compatibility issue to enable Launch."
-                    : image.preparation === "failed" ? "Preparation failed — retry to enable Launch."
-                    : image.preparation === "stale" ? "Revalidation required before Launch."
-                    : "Launch will be available once validation and preparation complete."}
-                </span>
-              )}
+            {field("Template", agentVersionName(agent.id, agent.name))}
+            {field("Image", `${image.url}:${image.tag}`)}
+            {field("Spec", productForTier(agent.tier))}
+            {field("IDC", regionLabel(agent.region))}
+            </div>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
               {(image.preparation === "failed" || image.preparation === "stale") && (
-                <button onClick={() => onRetryPrep(agent.id)} style={{ fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.limeText, background: C.lime, border: "none", padding: "5px 12px", borderRadius: 7, cursor: "pointer" }}>Retry preparation</button>
+                <button onClick={() => onRetryPrep(agent.id)} style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 600, color: C.limeText, background: C.lime, border: "none", padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}>Retry build</button>
               )}
-              {/* Image and Spec are Template properties, so this is where they
-                  change. Without it the card had no route to editing at all
-                  and Edit Template was reachable only from the list's ⋮. */}
               <button
                 onClick={() => onEditTemplate(agent)}
                 title="Change the image, Spec or default IDC — every future Sandbox picks them up"
-                style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg, background: "transparent", border: `1px solid ${C.border}`, padding: "5px 12px", borderRadius: 7, cursor: "pointer" }}
+                style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 500, color: C.fg, background: "transparent", border: `1px solid ${C.border}`, padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}
               >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
                 Edit Template
               </button>
             </div>
-          </section>
+          </div>
         );
       })()}
 
