@@ -2169,7 +2169,7 @@ function LifecycleCell({
 // through this menu alone.
 // §4.8 — for 2.0 instances the old "Terminate" control IS F-04 Delete: same path,
 // same semantics, and no surface may offer a terminate that leaves storage behind.
-type RowAction = "suspend" | "resume" | "keep" | "delete" | "snapshot" | "convert" | "retry";
+type RowAction = "suspend" | "resume" | "keep" | "delete" | "snapshot" | "convert" | "retry" | "credentials";
 
 function InstanceRowMenu({
   inst, onAction, onOpenDetail, canConvert = false, dropUp = false,
@@ -2205,6 +2205,14 @@ function InstanceRowMenu({
   // F-04 / §4.2 — Delete is available from every non-terminal state, confirmed or
   // not, and is never rejected as a lifecycle conflict. Deleting is an idempotent
   // no-op, so the entry drops once release is already under way.
+  // Daytona puts SSH access in the row menu: rarely used, sensitive, and
+  // fetched rather than browsed. Same shape for the token /connect returns.
+  if (inst.status === "running") {
+    lifecycle.push({
+      action: "credentials", label: "Access credentials", icon: <IconNetwork />,
+      title: "Fetch the token this Sandbox needs — POST /sandboxes/{id}/connect. It dies with the Sandbox.",
+    });
+  }
   if (inst.status !== "deleted" && inst.status !== "deleting") {
     lifecycle.push({
       action: "delete", label: "Delete Sandbox", icon: <IconTrash />, danger: true,
@@ -2279,6 +2287,99 @@ function InstanceRowMenu({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Access credentials ───────────────────────────────────────────────────
+// A fetch, not a page. The token is scoped to one Sandbox and dies with it, so
+// there is nothing durable to browse — Daytona's preview token behaves the same
+// way and its dashboard offers it as a row action rather than a tab.
+function CredentialsDialog({ inst, onClose }: { inst: Instance | null; onClose: () => void }) {
+  const [token, setToken] = useState<string | null>(null);
+  const [fetching, setFetching] = useState(false);
+
+  useEffect(() => {
+    if (!inst) { setToken(null); setFetching(false); }
+  }, [inst]);
+
+  useEffect(() => {
+    if (!inst) return;
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+  }, [inst, onClose]);
+
+  if (!inst) return null;
+  const host = `${midId(inst.id)}.sandbox.gmi.cloud`;
+
+  const fetchToken = () => {
+    setFetching(true);
+    window.setTimeout(() => {
+      setToken(`sbx_${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`);
+      setFetching(false);
+    }, 700);
+  };
+
+  const row = (label: string, value: React.ReactNode) => (
+    <div style={{ display: "grid", gridTemplateColumns: "112px 1fr", gap: 10, alignItems: "center", padding: "8px 0", borderTop: `1px solid ${C.borderSoft}` }}>
+      <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>{label}</span>
+      <span style={{ fontFamily: MONO, fontSize: 12, color: C.fg, wordBreak: "break-all" }}>{value}</span>
+    </div>
+  );
+
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Access credentials"
+        style={{ width: 520, maxWidth: "100%", background: "#111111", border: `1px solid ${C.border}`, borderRadius: 10, padding: "18px 20px 16px", boxShadow: "0 20px 48px rgba(0,0,0,0.6)" }}
+      >
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+          <h3 style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>
+            Access credentials <V2Badge />
+          </h3>
+          <button onClick={onClose} aria-label="Close" style={{ background: "transparent", border: "none", color: C.muted, cursor: "pointer", display: "flex", padding: 0 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+          </button>
+        </div>
+        <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "8px 0 4px", lineHeight: "18px" }}>
+          This Sandbox is not reachable by URL alone. The token below is scoped to it and
+          dies with it — there is nothing to keep.
+        </p>
+        {row("Host", host)}
+        {row("Exchange", <span style={{ color: C.lime }}>POST /sandboxes/{midId(inst.id)}/connect</span>)}
+        {row("Header", "X-Access-Token: <token>")}
+        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          {token ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#000", border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 12px" }}>
+              <span style={{ flex: 1, minWidth: 0, fontFamily: MONO, fontSize: 12, color: C.fg, overflowX: "auto" }}>{token}</span>
+              <CopyButton value={token} />
+            </div>
+          ) : (
+            <button
+              onClick={fetchToken}
+              disabled={fetching}
+              style={{
+                alignSelf: "flex-start",
+                fontFamily: FONT, fontSize: 13, fontWeight: 600,
+                background: fetching ? "#3a3a1f" : C.lime, color: fetching ? "#6b6b52" : C.limeText,
+                border: "none", borderRadius: 8, padding: "7px 15px", cursor: fetching ? "wait" : "pointer",
+              }}
+            >
+              {fetching ? "Exchanging…" : "Get a token"}
+            </button>
+          )}
+          <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+            Shown once. Deleting or restarting the Sandbox invalidates it — fetch again rather
+            than storing it. The SDK does this exchange for you.
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3479,17 +3580,16 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
 // list so the list stays visible and the next instance is one click away.
 // Everything that used to be stacked in one scrolling popup is grouped into
 // tabs, and the endpoint confirmations are inline instead of a second modal.
-type DrawerTab = "overview" | "access" | "metrics" | "files" | "run" | "terminal" | "logs" | "config";
+// No "access" tab. Endpoints are declared on the Agent at Register and
+// versioned with it, so they belong on the Agent — and credentials are fetched,
+// not browsed: Daytona's preview token comes from the SDK/CLI and resets when
+// the sandbox restarts, and its dashboard exposes SSH access as a row action.
+// Ours is the same shape: POST /sandboxes/{id}/connect returns a token.
+type DrawerTab = "overview" | "metrics" | "files" | "run" | "terminal" | "logs" | "config";
 const TAB_ALIAS: Partial<Record<DrawerTab, DrawerTab>> = {};
 const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean; noApi?: boolean; question?: string }[] = [
   { key: "overview", label: "Overview" },
   // Access / Files / Run are the V2.0 change set (sections D, G, B).
-  // Nobody else has an Access tab: E2B keeps identity and spec in a persistent
-  // header, Daytona makes SSH credentials a row action. Flagged, not moved.
-  {
-    key: "access", label: "Access", v2: true,
-    question: "Should this be a tab? E2B keeps identity and spec in a persistent header; Daytona makes credentials a row action. No competitor has an Access tab.",
-  },
   // Daytona has Metrics as its own tab. Ours was a block buried inside
   // Overview, which is why nobody found it.
   { key: "metrics",  label: "Metrics", runningOnly: true, v2: true, noApi: true },
@@ -3732,7 +3832,6 @@ function InstanceDrawer({
           </>
         )}
 
-        {activeTab === "access" && <AccessSection inst={inst} endpoints={endpoints} />}
         {activeTab === "metrics" && <MetricsPane inst={inst} />}
         {activeTab === "run"     && <ShellPane inst={inst} history={execHistory} setHistory={setExecHistory} />}
         {activeTab === "files"  && <FilesSection inst={inst} />}
@@ -4184,7 +4283,6 @@ function MonitorPane({
                           { tab: "terminal" as DrawerTab, label: "Terminal",       icon: <IconTerminal />, hint: "A persistent shell with stdin and Ctrl-C", on: inst.status === "running" },
                           { tab: "files"    as DrawerTab, label: "Upload / download", icon: <IconFile />,  hint: "One file by absolute path · /files?path=", on: inst.status === "running" },
                           { tab: "metrics"  as DrawerTab, label: "Metrics",        icon: <IconNetwork />,  hint: "CPU, memory and requests", on: inst.status === "running" },
-                          { tab: "access"   as DrawerTab, label: "Access",         icon: <IconExternalLink size={11} />, hint: "Endpoints and credentials", on: true },
                           { tab: "logs"     as DrawerTab, label: "Logs",           icon: <IconConfig />,   hint: "Container output", on: true },
                         ]).map((a) => (
                           <button
@@ -4221,6 +4319,58 @@ function MonitorPane({
       </section>
 
     </div>
+  );
+}
+
+// ─── Agent endpoints ──────────────────────────────────────────────────────
+// Endpoints are declared once at Register → Networking and versioned with the
+// Agent, so every Sandbox it launches has the same ones. That makes this Agent
+// information, not per-sandbox information — which is why it used to sit in the
+// wrong place. E2B keeps this kind of identity in a header; Daytona has no
+// equivalent tab at all.
+function AgentEndpoints({ agent }: { agent: MyAgent }) {
+  const endpoints = endpointsForAgent(agent);
+  if (endpoints.length === 0) return null;
+  return (
+    <section style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <h3 style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg, margin: 0 }}>
+          Endpoints <V2Badge />
+        </h3>
+        <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>
+          declared at Register · the same on every Sandbox this Agent launches
+        </span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 1, background: C.borderSoft, border: `1px solid ${C.borderSoft}`, borderRadius: 8, overflow: "hidden" }}>
+        {endpoints.map((ep) => (
+          <div key={ep.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 96px 84px 92px", gap: 10, alignItems: "center", background: C.cardSolid, padding: "9px 12px" }}>
+            <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ep.name}</span>
+            <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.muted }}>:{ep.internalPort}</span>
+            <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.muted }}>{ep.protocol}</span>
+            <span
+              title={ep.visibility === "public"
+                ? "Reachable from outside once a Sandbox is Running"
+                : "Only reachable with the token /connect returns"}
+              style={{
+                justifySelf: "start",
+                fontFamily: FONT, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase",
+                color: ep.visibility === "public" ? C.warn : C.muted,
+                background: ep.visibility === "public" ? "rgba(251,191,36,0.12)" : "rgba(255,255,255,0.05)",
+                border: `1px solid ${ep.visibility === "public" ? "rgba(251,191,36,0.45)" : C.border}`,
+                padding: "1px 7px", borderRadius: 4,
+              }}
+            >
+              {ep.visibility}
+            </span>
+          </div>
+        ))}
+      </div>
+      <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+        A Sandbox's live URL is not reachable on its own — access needs the token
+        <span style={{ fontFamily: MONO }}> POST /sandboxes/&#123;id&#125;/connect</span> returns, and that token dies
+        with the Sandbox. Fetch it per sandbox from its row, or from the SDK.
+      </span>
+    </section>
   );
 }
 
@@ -4466,6 +4616,8 @@ function AgentDetailPane({
 
         {headerActions}
       </div>
+
+      <AgentEndpoints agent={agent} />
 
       {/* Sandbox Template — built from this Agent Version's config at register
           time; image pull and dependency install happen here, never at create.
@@ -5230,6 +5382,7 @@ export default function Dashboard() {
   // Run history per sandbox. Lives here so it survives closing the tab or the
   // drawer — the pane promises results stay retrievable by execution_id.
   const [execHistory, setExecHistory] = useState<Record<string, Execution[]>>({});
+  const [credentialsFor, setCredentialsFor] = useState<string | null>(null);
   const [publishStatusOpen, setPublishStatusOpen] = useState(false);
   const [unpublishRow, setUnpublishRow] = useState<PublishRow | null>(null);
 
@@ -5412,6 +5565,14 @@ export default function Dashboard() {
     const inst = instances.find((i) => i.id === id);
     const shortId = midId(id);
     switch (action) {
+      // The token is fetched, not browsed: it is scoped to this Sandbox and
+      // dies with it. Daytona's preview token behaves the same way — it resets
+      // on restart and previously issued ones stop working — and its dashboard
+      // offers access as a row action rather than a tab.
+      case "credentials": {
+        setCredentialsFor(id);
+        return;
+      }
       case "suspend": {
         const cost = inst ? pausedCostMo(inst) : 4;
         setConfirm({
@@ -5634,6 +5795,10 @@ export default function Dashboard() {
               )}
           </div>
         </div>
+        <CredentialsDialog
+          inst={credentialsFor ? instances.find((i) => i.id === credentialsFor) ?? null : null}
+          onClose={() => setCredentialsFor(null)}
+        />
         <ConfirmDialog pending={confirm} onClose={() => setConfirm(null)} />
         <Toaster toasts={toasts} />
       </div>
@@ -5865,6 +6030,10 @@ export default function Dashboard() {
 
       {drawerInst && detailPaneFor(drawerInst, drawerAgent, "drawer")}
 
+      <CredentialsDialog
+        inst={credentialsFor ? instances.find((i) => i.id === credentialsFor) ?? null : null}
+        onClose={() => setCredentialsFor(null)}
+      />
       <ConfirmDialog pending={confirm} onClose={() => setConfirm(null)} />
 
       {/* v1.2 §D — Publish Status */}
