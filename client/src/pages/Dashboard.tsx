@@ -2271,26 +2271,9 @@ function InstanceRowMenu({
           {lifecycle.length > 0 && (
             <div style={{ height: 1, background: C.borderSoft, margin: "4px 6px" }} />
           )}
-          {/* Confluence §B/§C — Run and Terminal were three clicks deep. They
-              open the drawer straight onto their own tab. Running only, since
-              neither has anything to talk to otherwise. */}
-          {inst.status === "running" && (
-            <>
-              <button onClick={() => { setOpen(false); onOpenDetail(inst.id, "run"); }} style={itemStyle(false)}>
-                <IconPlay />
-                <span style={{ flex: 1 }}>Run</span>
-                <V2Badge />
-              </button>
-              <button onClick={() => { setOpen(false); onOpenDetail(inst.id, "terminal"); }} style={itemStyle(false)}>
-                <IconTerminal />
-                <span style={{ flex: 1 }}>Terminal</span>
-                <V2Badge />
-              </button>
-              <div style={{ height: 1, background: C.borderSoft, margin: "4px 6px" }} />
-            </>
-          )}
-          {/* Kept as a fallback path to the drawer for keyboard/menu users —
-              the row itself is the primary way in. */}
+          {/* Run / Terminal / Files used to live here. The row's disclosure now
+              lists every operation by name, so this menu is back to what a ⋮ is
+              for: the rarely-used and the destructive. */}
           <button onClick={() => { setOpen(false); onOpenDetail(inst.id); }} style={itemStyle(false)}>
             <IconConfig /> Open detail
           </button>
@@ -3834,6 +3817,9 @@ function MonitorPane({
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "running" | "paused" | "inprogress" | "error">("all");
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc"); // Launched column sort
+  // Expand a row to see everything it can do, named, without opening a menu or
+  // navigating first. Nobody discovers an action they cannot see.
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   const agg = useMemo(() => aggregateFor(instances, agent.id), [instances, agent.id]);
   const mine = useMemo(() => instances.filter((i) => i.agentId === agent.id), [instances, agent.id]);
@@ -3951,7 +3937,7 @@ function MonitorPane({
             style={{
               display: "grid",
               // Header must track the row grid below.
-              gridTemplateColumns: "1.1fr 1.3fr 0.85fr 1.7fr 0.65fr 1.4fr",
+              gridTemplateColumns: "26px 1.1fr 1.3fr 0.85fr 1.7fr 0.65fr 1.4fr",
               padding: "10px 16px",
               borderBottom: `1px solid ${C.border}`,
               background: "rgba(255,255,255,0.02)",
@@ -3959,6 +3945,7 @@ function MonitorPane({
               alignItems: "center",
             }}
           >
+            <div />
             <div>Sandbox</div>
             <div>Access URL</div>
             <div>Status</div>
@@ -4005,7 +3992,7 @@ function MonitorPane({
                       display: "grid",
                       // Lifecycle carries a countdown, a bar and Extend now, so it
                       // takes the width Launched no longer needs.
-                      gridTemplateColumns: "1.1fr 1.3fr 0.85fr 1.7fr 0.65fr 1.4fr",
+                      gridTemplateColumns: "26px 1.1fr 1.3fr 0.85fr 1.7fr 0.65fr 1.4fr",
                       padding: "10px 16px",
                       borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`,
                       borderLeft: `2px solid ${active ? C.lime : "transparent"}`,
@@ -4016,6 +4003,24 @@ function MonitorPane({
                       animation: "row-fade-in 220ms ease-out",
                     }}
                   >
+                    {/* Disclosure — the row was clickable with nothing saying so,
+                        which is why people went hunting in the ⋮ instead. */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setExpanded((x) => (x === inst.id ? null : inst.id)); }}
+                      aria-expanded={expanded === inst.id}
+                      aria-label={expanded === inst.id ? "Hide what this sandbox can do" : "Show what this sandbox can do"}
+                      title={expanded === inst.id ? "Hide actions" : "Show everything this sandbox can do"}
+                      style={{
+                        width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                        background: "transparent", color: expanded === inst.id ? C.fg : C.muted,
+                        border: "none", borderRadius: 5, cursor: "pointer", padding: 0,
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
+                           style={{ transform: expanded === inst.id ? "rotate(90deg)" : "none", transition: "transform .15s" }}>
+                        <path d="m9 18 6-6-6-6" />
+                      </svg>
+                    </button>
                     <div style={{ minWidth: 0 }}>
                       <div
                         title={inst.config?.name || inst.id}
@@ -4159,6 +4164,55 @@ function MonitorPane({
                       />
                     </div>
                   </div>
+
+                  {/* Everything this sandbox can do, named and on screen. The
+                      operations were reachable only through the ⋮ or by knowing
+                      the row was clickable — an action nobody can see is an
+                      action nobody uses. */}
+                  {expanded === inst.id && (
+                    <div
+                      style={{
+                        display: "flex", flexDirection: "column", gap: 10,
+                        padding: "12px 16px 14px 42px",
+                        borderTop: `1px solid ${C.borderSoft}`,
+                        background: "rgba(255,255,255,0.015)",
+                      }}
+                    >
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                        {([
+                          { tab: "run"      as DrawerTab, label: "Run a command",  icon: <IconPlay />,     hint: "One command, exit code and duration · POST /executions", on: inst.status === "running" },
+                          { tab: "terminal" as DrawerTab, label: "Terminal",       icon: <IconTerminal />, hint: "A persistent shell with stdin and Ctrl-C", on: inst.status === "running" },
+                          { tab: "files"    as DrawerTab, label: "Upload / download", icon: <IconFile />,  hint: "One file by absolute path · /files?path=", on: inst.status === "running" },
+                          { tab: "metrics"  as DrawerTab, label: "Metrics",        icon: <IconNetwork />,  hint: "CPU, memory and requests", on: inst.status === "running" },
+                          { tab: "access"   as DrawerTab, label: "Access",         icon: <IconExternalLink size={11} />, hint: "Endpoints and credentials", on: true },
+                          { tab: "logs"     as DrawerTab, label: "Logs",           icon: <IconConfig />,   hint: "Container output", on: true },
+                        ]).map((a) => (
+                          <button
+                            key={a.tab}
+                            disabled={!a.on}
+                            onClick={(e) => { e.stopPropagation(); if (a.on) onOpenDetail(inst.id, a.tab); }}
+                            title={a.on ? a.hint : `Available once the Sandbox is Running (this one is ${statusLabel(inst.status)})`}
+                            style={{
+                              display: "inline-flex", alignItems: "center", gap: 6,
+                              fontFamily: FONT, fontSize: 12.5, fontWeight: 500,
+                              color: a.on ? C.fg : "#5a5a5a",
+                              background: "transparent",
+                              border: `1px solid ${C.border}`,
+                              borderRadius: 7, padding: "5px 11px",
+                              cursor: a.on ? "pointer" : "not-allowed",
+                            }}
+                          >
+                            {a.icon} {a.label}
+                          </button>
+                        ))}
+                      </div>
+                      <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+                        Each one opens this Sandbox at that tab — the URL is
+                        <span style={{ fontFamily: MONO }}> /dashboard/sandbox/{midId(inst.id)}/…</span>, so it can be
+                        shared. Lifecycle verbs stay on the row: Extend, Pause and Delete.
+                      </span>
+                    </div>
+                  )}
                 </div>
               );
             })
