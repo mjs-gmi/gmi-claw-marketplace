@@ -2132,7 +2132,7 @@ function ExpiresCell({
         </span>
         <button
           onClick={(e) => { e.stopPropagation(); setDraft(String(clock.totalMins)); setOpen((o) => !o); }}
-          title="Set a new expiry for this sandbox"
+          title="Set a new expiry for this sandbox — new in V2"
           style={{
             fontFamily: FONT, fontSize: 10.5, fontWeight: 600,
             color: C.fg, background: "transparent", border: `1px solid ${C.border}`,
@@ -2231,13 +2231,6 @@ function InstanceRowMenu({
   // F-04 / §4.2 — Delete is available from every non-terminal state, confirmed or
   // not, and is never rejected as a lifecycle conflict. Deleting is an idempotent
   // no-op, so the entry drops once release is already under way.
-  // Daytona has SSH Access in the row menu and no Access tab; ours matches.
-  if (inst.status === "running") {
-    lifecycle.push({
-      action: "credentials", label: "Access credentials", icon: <IconNetwork />,
-      title: "Fetch the token this Sandbox needs — POST /sandboxes/{id}/connect. It dies with the Sandbox.",
-    });
-  }
   if (inst.status !== "deleted" && inst.status !== "deleting") {
     lifecycle.push({
       action: "delete", label: "Delete Sandbox", icon: <IconTrash />, danger: true,
@@ -2304,12 +2297,10 @@ function InstanceRowMenu({
           {lifecycle.length > 0 && (
             <div style={{ height: 1, background: C.borderSoft, margin: "4px 6px" }} />
           )}
-          {/* Run / Terminal / Files used to live here. The row's disclosure now
-              lists every operation by name, so this menu is back to what a ⋮ is
-              for: the rarely-used and the destructive. */}
-          <button onClick={() => { setOpen(false); onOpenDetail(inst.id); }} style={itemStyle(false)}>
-            <IconConfig /> Open detail
-          </button>
+          {/* "Open detail" was a third way to do what clicking the row already
+              does, and what the disclosure spells out by name. Gone. The ⋮ is
+              down to the rarely-used and the destructive, which is all a kebab
+              should ever hold. */}
         </div>
       )}
     </div>
@@ -4281,7 +4272,7 @@ function MonitorPane({
                             title="Upload or download one file by path"
                             style={rowBtnGhost}
                           >
-                            <IconFile /> Files
+                            <IconFile /> Filesystem
                           </button>
                         </>
                       )}
@@ -4356,11 +4347,43 @@ function MonitorPane({
                           </button>
                         ))}
                       </div>
-                      <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-                        Each one opens this Sandbox at that tab — the URL is
-                        <span style={{ fontFamily: MONO }}> /dashboard/sandbox/{midId(inst.id)}/…</span>, so it can be
-                        shared. Lifecycle verbs stay on the row: Extend, Pause and Delete.
-                      </span>
+                      {/* The facts, not only the links. Half the reason people
+                          were opening the detail at all was to read four
+                          fields, so the four fields are here. */}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 22px" }}>
+                        {([
+                          ["Host",     `${midId(inst.id)}.sandbox.gmi.cloud`],
+                          ["Spec",     productForTier(agent.tier)],
+                          ["IDC",      regionLabel(inst.config?.idc ?? agent.region)],
+                          ["Template", agentVersionName(agent.id, agent.name)],
+                        ] as [string, string][]).map(([k, v]) => (
+                          <span key={k} style={{ display: "inline-flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
+                            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>{k}</span>
+                            <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</span>
+                          </span>
+                        ))}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                        {inst.status === "running" && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onAction(inst.id, "credentials"); }}
+                            title="This Sandbox is not reachable by URL alone — fetch the token POST /sandboxes/{id}/connect returns"
+                            style={{
+                              display: "inline-flex", alignItems: "center", gap: 6,
+                              fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg,
+                              background: "transparent", border: `1px solid ${C.border}`,
+                              borderRadius: 7, padding: "4px 10px", cursor: "pointer",
+                            }}
+                          >
+                            <IconNetwork /> Get access credentials <V2Badge />
+                          </button>
+                        )}
+                        <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+                          Each destination has its own URL —
+                          <span style={{ fontFamily: MONO }}> /dashboard/sandbox/{midId(inst.id)}/…</span> — so it can be
+                          shared. Expires, Pause and Delete stay on the row itself.
+                        </span>
+                      </div>
                     </div>
                   )}
                 </div>

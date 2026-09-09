@@ -6,11 +6,14 @@
 // Source: "Agentbox V2.0 Interface Changes: New Flow and Features Overview"
 // (Confluence, space IE) — sections A–I.
 //
-// Deliberately distinct from Dashboard's lime `NEW` pill: `NEW` flags
-// Runtime 2.0 additions, this flags the V2.0 change set. Both can sit side by
-// side on the same label.
+// This one ships. It answers a question the reader does have — "what changed
+// in V2?" — which is why it is on by default while NO API, the open-question
+// "?" and the R0/R1/IND release tags stay behind review mode. Those three
+// stacked on top of this is what turned every tab label into noise.
+//
+// Rule for using it: only on something V2 actually introduced (Confluence
+// §A–§I). Not on a surface that merely got touched.
 import { C, FONT } from "@/lib/tokens";
-import { REVIEW_MODE } from "@/lib/reviewMode";
 
 export default function V2Badge({
   title = "New in Agentbox V2.0",
@@ -19,8 +22,6 @@ export default function V2Badge({
   title?: string;
   style?: React.CSSProperties;
 }) {
-  // Annotation, not product UI — see lib/reviewMode.
-  if (!REVIEW_MODE) return null;
   return (
     <span
       title={title}

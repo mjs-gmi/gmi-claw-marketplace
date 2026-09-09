@@ -9,6 +9,7 @@ import { C as baseC, FONT, MONO } from "@/lib/tokens";
 import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
 import { isPlanEligibleModel, discountPriceString, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
 import { ALL_MODELS, isStandardModel, getModel, paygUsdPer1M, type CatalogModel } from "@/lib/pricingModel";
+import V2Badge from "@/components/V2Badge";
 
 // ─── Tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const C = {
@@ -1115,7 +1116,7 @@ function StepInfrastructure({
 
         {/* Data Center — searchable combobox */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <FieldLabel required>Default IDC</FieldLabel>
+          <FieldLabel required>Default IDC <V2Badge /></FieldLabel>
           <RegionSelect value={region} onChange={setRegion} options={REGIONS} />
           <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>
             The default for this Agent. <span style={{ color: C.fg }}>Each Sandbox picks its own IDC at Launch</span> —
@@ -1126,7 +1127,7 @@ function StepInfrastructure({
         {/* Spec — the Template's `resources`. Not a create parameter, so it can
             only be changed here; Launch shows it read-only. */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <FieldLabel required>Spec</FieldLabel>
+          <FieldLabel required>Spec <V2Badge /></FieldLabel>
           <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>
             Fixed on this Agent's Template (<span style={{ fontFamily: MONO }}>resources</span>) and the same for
             every Sandbox it launches. <span style={{ color: C.fg }}>Launch cannot override it</span> — to change the
