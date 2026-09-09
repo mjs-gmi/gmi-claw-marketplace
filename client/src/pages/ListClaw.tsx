@@ -67,7 +67,13 @@ interface ListingDraft {
 }
 
 const SHORT_DESC_MAX = 120;
-const FULL_DESC_MAX  = 300;   // v1.2 §C7 — counter shown under the field
+// The card's short description is length-critical (120, always counted). This
+// one is the detail-page body and only needs a sane upper bound — for
+// comparison, the Chrome Web Store allows 16,000 here.
+const FULL_DESC_MAX  = 4000;
+// Counting from the first keystroke turns a helpful field into a budget. The
+// counter appears only once it is worth knowing about.
+const FULL_DESC_COUNT_FROM = Math.floor(FULL_DESC_MAX * 0.75);
 const TAG_MAX        = 5;
 
 // ─── localStorage helpers ───────────────────────────────────────────────────
@@ -272,9 +278,10 @@ export default function ListClaw() {
     if (!draft.category)                  e.category  = "Pick a category";
     if (!draft.shortDesc.trim())          e.shortDesc = "Add a short description for the card";
     if (draft.shortDesc.length > SHORT_DESC_MAX) e.shortDesc = `Max ${SHORT_DESC_MAX} characters`;
-    // The Full Description counter shows a limit, so the limit has to bite —
-    // otherwise an over-length body sails through to review.
-    if (draft.fullDesc.length > FULL_DESC_MAX) e.fullDesc = `Max ${FULL_DESC_MAX} characters`;
+    // A stated limit still has to bite, or an over-length body reaches review.
+    if (draft.fullDesc.length > FULL_DESC_MAX) {
+      e.fullDesc = `${(draft.fullDesc.length - FULL_DESC_MAX).toLocaleString()} characters over — trim to ${FULL_DESC_MAX.toLocaleString()} to publish.`;
+    }
     // Full description is now optional — if blank, the detail page falls back
     // to the short description plus auto-generated source info. Power users
     // can expand "Add more details" and provide markdown.
@@ -416,8 +423,12 @@ export default function ListClaw() {
                 <Field
                   label="Full Description (Markdown)"
                   required
-                  hint={`${draft.fullDesc.length} / ${FULL_DESC_MAX} characters`}
-                  hintAlign="right"
+                  hint={
+                    draft.fullDesc.length >= FULL_DESC_COUNT_FROM
+                      ? `${draft.fullDesc.length.toLocaleString()} / ${FULL_DESC_MAX.toLocaleString()} characters`
+                      : "Markdown supported. Use ## What it does and ## How it works."
+                  }
+                  hintAlign={draft.fullDesc.length >= FULL_DESC_COUNT_FROM ? "right" : "left"}
                   error={errors.fullDesc}
                 >
                   <TextArea value={draft.fullDesc} onChange={(v) => update("fullDesc", v)} placeholder={"## What it does\nContract Review Agent ingests PDF or DOCX contracts and produces a clause-by-clause risk report.\n\n## How it works\nCombines deterministic clause extraction with semantic risk classification."} rows={6} monospace />
