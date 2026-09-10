@@ -10,6 +10,10 @@ import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
 import { isPlanEligibleModel, discountPriceString, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
 import { ALL_MODELS, isStandardModel, getModel, paygUsdPer1M, type CatalogModel } from "@/lib/pricingModel";
 import V2Badge from "@/components/V2Badge";
+import {
+  CostNotice, InsufficientCredits, TopUpCredits, RedeemCoupon, LeaveRegistration,
+  hasAcknowledged, acknowledge,
+} from "@/components/BillingDialogs";
 
 // ─── Tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const C = {
@@ -19,23 +23,6 @@ const C = {
   selectedYelB: "rgba(221,234,77,0.55)",
 };
 
-const STEPS = [
-  { id: 1, title: "Basics & Template" },
-  { id: 2, title: "Infrastructure" },
-  { id: 3, title: "Networking" },
-  { id: 4, title: "Env Variables" },
-  { id: 5, title: "Review & Register" },
-] as const;
-
-// Connect-your-agent flow: a different 4-section path (no infra/networking/env — the user runs it themselves)
-const CONNECT_STEPS = [
-  { id: 1, title: "Basic" },
-  { id: 2, title: "GMI Models key" },
-  { id: 3, title: "Endpoint" },
-  { id: 4, title: "Review & Submit" },
-] as const;
-
-type StepId = (typeof STEPS)[number]["id"];
 type HostMode = "gmi" | "connect";
 
 // Shared between Connect submit + Dashboard read (My Agents shows the synced MaaS key).
@@ -58,6 +45,13 @@ export interface RegisteredAgent {
   endpoints?: { id: string; name: string; internalPort: string; protocol: string; visibility: "private" | "public" }[];
   region?: string;  // Infrastructure step — region id
   tier?: string;    // Infrastructure step — compute tier id
+  /**
+   * The image this template was registered with. My Agents needs it to build a
+   * Template record — without it a newly registered agent arrives with no
+   * template at all: no build state, no Ready badge, and a permanently disabled
+   * "+ Sandbox". Registration used to drop it on the floor.
+   */
+  dockerImage?: string;
 }
 
 function genMaasKey(): string {
@@ -242,6 +236,18 @@ const IconX = ({ size = 14, color = C.muted }: { size?: number; color?: string }
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <path d="M18 6 6 18M6 6l12 12" />
   </svg>
+);
+const IconDoc = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5M9 13h6M9 17h4" /></svg>
+);
+const IconChip = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 9h4v4H7z" /><path d="M14 9h3M14 13h3M7 17h10" /></svg>
+);
+const IconKey = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="14" r="4" /><path d="m11 11 8-8M17 5l2 2M14 8l2 2" /></svg>
+);
+const IconLink = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1" /><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" /></svg>
 );
 const IconGlobe = ({ size = 14 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -621,259 +627,9 @@ function HostModeCard({
   );
 }
 
-// ─── Stepper row (accordion-style) ────────────────────────────────────────
-function StepperRow({
-  step, title, state, onClick,
-}: {
-  step: StepId;
-  title: string;
-  state: "active" | "done" | "pending";
-  onClick: () => void;
-}) {
-  const numberBg = state === "active" ? C.lime : "transparent";
-  const numberFg = state === "active" ? C.limeText : C.muted;
-  const numberBorder = state === "active" ? "transparent" : C.border;
-  const titleColor = state === "active" ? C.fg : state === "done" ? C.muted : C.muted;
-  const titleWeight: number = state === "active" ? 600 : 500;
 
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        display: "flex", alignItems: "center", gap: 12,
-        background: "transparent", border: "none",
-        padding: "10px 0",
-        cursor: "pointer",
-        textAlign: "left",
-        width: "100%",
-      }}
-    >
-      <span
-        style={{
-          width: 22, height: 22,
-          borderRadius: 4,
-          background: numberBg,
-          color: numberFg,
-          border: `1px solid ${numberBorder}`,
-          display: "inline-flex", alignItems: "center", justifyContent: "center",
-          fontFamily: FONT, fontSize: 12, fontWeight: 600, lineHeight: "16px",
-          flexShrink: 0,
-        }}
-      >
-        {state === "done" ? <IconCheck size={12} /> : step}
-      </span>
-      <span style={{ fontFamily: FONT, fontSize: 15, fontWeight: titleWeight, lineHeight: "20px", color: titleColor }}>
-        {title}
-      </span>
-    </button>
-  );
-}
 
-// ─── Live Cost Estimate sticky panel ──────────────────────────────────────
-function LiveCostPanel({
-  computeRate, tip, onBack, onContinue, continueLabel = "Continue", continueDisabled,
-}: {
-  computeRate: number; // $/hr
-  tip?: string;
-  onBack: () => void;
-  onContinue: () => void;
-  continueLabel?: string;
-  continueDisabled?: boolean;
-}) {
-  return (
-    <aside style={{ display: "flex", flexDirection: "column", gap: 12, position: "sticky", top: 56 }}>
-      <div
-        style={{
-          background: C.card,
-          border: `1px solid ${C.border}`,
-          borderRadius: 10,
-          padding: "18px 20px",
-          display: "flex", flexDirection: "column", gap: 6,
-        }}
-      >
-        <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Live Cost Estimate</div>
-        <div style={{ fontFamily: FONT, fontSize: 30, fontWeight: 700, lineHeight: "36px", color: C.fg, letterSpacing: "-0.02em" }}>
-          ${computeRate.toFixed(4)}<span style={{ fontSize: 16, fontWeight: 500, color: C.muted }}>/hr</span>
-        </div>
-        <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>
-          {computeRate === 0 ? "Select a compute tier · per active sandbox" : "Compute size · per active sandbox"}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, paddingTop: 10, borderTop: `1px solid ${C.borderSoft}` }}>
-          <span style={{ width: 6, height: 6, background: C.muted, borderRadius: 2 }} />
-          <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted }}>MaaS: pay per token used</span>
-        </div>
-      </div>
 
-      {tip && (
-        <div
-          style={{
-            background: C.cardSolid,
-            border: `1px solid ${C.border}`,
-            borderRadius: 10,
-            padding: "12px 14px",
-            fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px",
-            display: "flex", gap: 8, alignItems: "flex-start",
-          }}
-        >
-          <span style={{ color: C.muted, marginTop: 1 }}><IconInfo size={12} /></span>
-          <span>{tip}</span>
-        </div>
-      )}
-
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-        <button
-          onClick={onBack}
-          style={{
-            fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
-            background: "transparent", color: C.fg,
-            border: `1px solid ${C.border}`,
-            padding: "8px 18px", borderRadius: 8, cursor: "pointer",
-          }}
-        >
-          Back
-        </button>
-        <button
-          onClick={onContinue}
-          disabled={continueDisabled}
-          style={{
-            fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
-            background: continueDisabled ? "#3a3a1f" : C.lime,
-            color: continueDisabled ? "#666" : C.limeText,
-            border: "none",
-            padding: "8px 18px", borderRadius: 8,
-            cursor: continueDisabled ? "not-allowed" : "pointer",
-          }}
-        >
-          {continueLabel}
-        </button>
-      </div>
-    </aside>
-  );
-}
-
-// ─── Section header for single-page wizard layout ─────────────────────────
-function SectionHeader({
-  number, title,
-}: { number: number; title: string; subtitle?: string | null }) {
-  // "Pre-configured" subtitle pill was removed — the collapsed chip-row + Customize link
-  // inside the section already communicate "default applied"; keep the header clean.
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-      <span
-        style={{
-          width: 22, height: 22,
-          borderRadius: 6,
-          background: "transparent",
-          color: C.lime,
-          border: `1px solid ${C.lime}`,
-          display: "inline-flex", alignItems: "center", justifyContent: "center",
-          fontFamily: FONT, fontSize: 12, fontWeight: 700, lineHeight: "16px",
-          flexShrink: 0,
-        }}
-      >
-        {number}
-      </span>
-      <h2 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "22px", color: C.fg, margin: 0 }}>
-        {title}
-      </h2>
-    </div>
-  );
-}
-
-// ─── Right sticky panel — cost + Register CTA (single-page mode) ──────────
-function RegisterPanel({
-  computeRate, canRegister, onCancel, onRegister, ctaLabel = "Register", hideComputeCost = false,
-}: {
-  computeRate: number;
-  canRegister: boolean;
-  onCancel: () => void;
-  onRegister: () => void;
-  ctaLabel?: string;
-  hideComputeCost?: boolean;
-}) {
-  return (
-    <aside style={{ display: "flex", flexDirection: "column", gap: 12, position: "sticky", top: 56 }}>
-      {/* Live Cost Estimate */}
-      <div
-        style={{
-          background: C.card,
-          border: `1px solid ${C.border}`,
-          borderRadius: 10,
-          padding: "18px 20px",
-          display: "flex", flexDirection: "column", gap: 6,
-        }}
-      >
-        <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Live Cost Estimate</div>
-        {hideComputeCost ? (
-          <>
-            <div style={{ fontFamily: FONT, fontSize: 22, fontWeight: 700, lineHeight: "28px", color: C.fg, letterSpacing: "-0.02em" }}>You own compute</div>
-            <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>GMI hosts nothing — you run the Agent on your own infrastructure.</div>
-          </>
-        ) : (
-          <>
-            <div style={{ fontFamily: FONT, fontSize: 30, fontWeight: 700, lineHeight: "36px", color: C.fg, letterSpacing: "-0.02em" }}>
-              ${computeRate.toFixed(4)}<span style={{ fontSize: 16, fontWeight: 500, color: C.muted }}>/hr</span>
-            </div>
-            <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px" }}>Container tier · per active sandbox</div>
-          </>
-        )}
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, paddingTop: 10, borderTop: `1px solid ${C.borderSoft}` }}>
-          <span style={{ width: 6, height: 6, background: C.muted, borderRadius: 2 }} />
-          <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted }}>MaaS: pay per token used</span>
-        </div>
-      </div>
-
-      {/* Tip */}
-      <div
-        style={{
-          background: C.cardSolid,
-          border: `1px solid ${C.border}`,
-          borderRadius: 10,
-          padding: "12px 14px",
-          fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px",
-          display: "flex", gap: 8, alignItems: "flex-start",
-        }}
-      >
-        <span style={{ color: C.muted, marginTop: 1, flexShrink: 0 }}><IconInfo size={12} /></span>
-        <span>
-          {hideComputeCost
-            ? <><span style={{ color: C.fg, fontWeight: 600 }}>Connect with GMI</span> — GMI auto-checks your access URL + key, then lists it. You own uptime.</>
-            : <><span style={{ color: C.fg, fontWeight: 600 }}>Tip</span> — Standard tier covers most production agents. Bump to Performance only if you regularly hit CPU saturation or need 25 Gbps egress.</>
-          }
-        </span>
-      </div>
-
-      {/* Cancel + Register */}
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-        <button
-          onClick={onCancel}
-          style={{
-            fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
-            background: "transparent", color: C.fg,
-            border: `1px solid ${C.border}`,
-            padding: "8px 18px", borderRadius: 8, cursor: "pointer",
-          }}
-        >
-          Cancel
-        </button>
-        <button
-          onClick={onRegister}
-          disabled={!canRegister}
-          style={{
-            fontFamily: FONT, fontSize: 14, fontWeight: 600, lineHeight: "20px",
-            background: canRegister ? C.lime : "#3a3a1f",
-            color: canRegister ? C.limeText : "#666",
-            border: "none",
-            padding: "8px 18px", borderRadius: 8,
-            cursor: canRegister ? "pointer" : "not-allowed",
-          }}
-        >
-          {ctaLabel}
-        </button>
-      </div>
-    </aside>
-  );
-}
 
 // ─── Step 1: Basics & Template ───────────────────────────────────────────
 function StepBasics({
@@ -944,388 +700,7 @@ function StepBasics({
   );
 }
 
-// ─── Step 2: Infrastructure ───────────────────────────────────────────────
-function StepInfrastructure({
-  dockerSource, setDockerSource,
-  dockerImage, setDockerImage,
-  enableCreds, setEnableCreds,
-  region, setRegion,
-  computeTier, setComputeTier,
-  maxLifetime, setMaxLifetime,
-  idleTimeout, setIdleTimeout,
-  addModels, setAddModels,
-  selectedModel, setSelectedModel,
-  forkedFromTemplate = false,
-}: {
-  dockerSource: "registry" | "upload";
-  setDockerSource: (v: "registry" | "upload") => void;
-  dockerImage: string;
-  setDockerImage: (v: string) => void;
-  enableCreds: boolean;
-  setEnableCreds: (v: boolean) => void;
-  region: string;
-  setRegion: (v: string) => void;
-  computeTier: string;
-  setComputeTier: (v: string) => void;
-  maxLifetime: string;
-  setMaxLifetime: (v: string) => void;
-  idleTimeout: string;
-  setIdleTimeout: (v: string) => void;
-  addModels: boolean;
-  setAddModels: (v: boolean) => void;
-  selectedModel: string;
-  setSelectedModel: (v: string) => void;
-  forkedFromTemplate?: boolean;
-}) {
-  // Collapse step when *infrastructure* defaults hold. Docker image is allowed
-  // to be blank — it's surfaced as the first chip in the strip with a clear
-  // "Set image →" prompt so the user can edit inline without expanding everything.
-  const allDefault =
-    dockerSource  === "registry" &&
-    enableCreds   === false &&
-    region        === "us-ia-iowa-1" &&
-    computeTier   === "container" &&
-    maxLifetime   === "1h" &&
-    idleTimeout   === "5min" &&
-    addModels     === true &&
-    selectedModel === "deepseek-v4-flash";
-  const [userExpanded, setUserExpanded] = useState(false);
-  // Switching to a GMI model NOT covered by the Coding Plan is high-friction —
-  // it requires an explicit acknowledgement (full token price, no discount).
-  const [planOptIn, setPlanOptIn] = useState(false); // promotional Coding Agent Plan enrolment
-  // Selecting a model excluded from the Coding Plan (Premium) pops a confirm modal.
-  const [pendingModel, setPendingModel] = useState<string | null>(null);
-  const pickModel = (id: string) => {
-    if (isStandardModel(id)) { setSelectedModel(id); return; }
-    setPendingModel(id); // excluded / Premium → confirm before switching
-  };
-  const collapsed = !userExpanded && (allDefault || forkedFromTemplate);
 
-  if (collapsed) {
-    const tier = COMPUTE_TIERS.find((t) => t.id === computeTier);
-    const reg = REGIONS.find((r) => r.id === region);
-    const model = MODELS.find((m) => m.id === selectedModel);
-    return (
-      <CollapsedRow onCustomize={() => setUserExpanded(true)}>
-        {forkedFromTemplate ? (
-          <SpecChip label="Template" value="Pre-filled" />
-        ) : (
-          <>
-            <SpecChip label="Docker Image" value={dockerImage.trim() || "Not set"} mono={!!dockerImage.trim()} />
-            <SpecChip label="Registry Credentials" value={enableCreds ? "Configured" : "Public image"} />
-            <SpecChip label="Spec" value={tier ? `${tier.name} · ${tier.cpu} · ${tier.ram} · ${tier.storage}` : "—"} />
-            <SpecChip label="Default IDC" value={reg ? `${reg.name} · ${reg.sub}` : "—"} />
-            <SpecChip label="MaaS" value={addModels ? (model ? model.name : "Not selected") : "Off"} />
-          </>
-        )}
-      </CollapsedRow>
-    );
-  }
-
-  const resetToDefaults = () => {
-    setDockerSource("registry");
-    setDockerImage("");
-    setEnableCreds(false);
-    setRegion("us-ia-iowa-1");
-    setComputeTier("container");
-    setMaxLifetime("1h");
-    setIdleTimeout("5min");
-    setAddModels(true);
-    setSelectedModel("deepseek-v4-flash");
-    setUserExpanded(false);
-  };
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* Collapse-back link — only when nothing has drifted from default */}
-      {allDefault && (
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button
-            onClick={() => setUserExpanded(false)}
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 4,
-              fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
-              background: "transparent", color: C.muted,
-              border: "none", padding: 0, cursor: "pointer",
-            }}
-          >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="m18 15-6-6-6 6" />
-            </svg>
-            Collapse · use GMI defaults
-          </button>
-        </div>
-      )}
-      {!allDefault && (
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button
-            onClick={resetToDefaults}
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 4,
-              fontFamily: FONT, fontSize: 12, fontWeight: 500, lineHeight: "16px",
-              background: "transparent", color: C.muted,
-              border: "none", padding: 0, cursor: "pointer",
-            }}
-          >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" />
-            </svg>
-            Reset to GMI defaults
-          </button>
-        </div>
-      )}
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
-      {/* Top section */}
-      <div
-        style={{
-          background: C.card,
-          border: `1px solid ${C.border}`,
-          borderRadius: 10,
-          padding: "16px 20px",
-          display: "flex", flexDirection: "column", gap: 12,
-        }}
-      >
-        {/* Docker Image Source — registry URL text box; helper folded into an info tooltip */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <FieldLabel required>Docker Image Source</FieldLabel>
-            <InfoHint text="Pull from any registry — Docker Hub, GHCR, ECR. Upload-image flow coming later." />
-          </div>
-          <TextInput value={dockerImage} onChange={setDockerImage} placeholder="Registry URL" mono />
-        </div>
-
-        {/* Enable Credentials */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, lineHeight: "20px", color: C.fg }}>
-              Enable Credentials
-            </div>
-            <div style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, marginTop: 2 }}>
-              Enable credentials if your Docker registry requires authentication for pulling images.
-            </div>
-            {enableCreds && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
-                <TextInput value="" onChange={() => {}} placeholder="Registry username" />
-                <TextInput value="" onChange={() => {}} placeholder="Registry password / token" />
-              </div>
-            )}
-          </div>
-          <Toggle on={enableCreds} onChange={setEnableCreds} />
-        </div>
-
-        {/* Data Center — searchable combobox */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <FieldLabel required>Default IDC <V2Badge /></FieldLabel>
-          <RegionSelect value={region} onChange={setRegion} options={REGIONS} />
-          <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>
-            The default for this Agent. <span style={{ color: C.fg }}>Each Sandbox picks its own IDC at Launch</span> —
-            it is a create parameter (<span style={{ fontFamily: MONO }}>idc_name</span>).
-          </span>
-        </div>
-
-        {/* Spec — the Template's `resources`. Not a create parameter, so it can
-            only be changed here; Launch shows it read-only. */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <FieldLabel required>Spec <V2Badge /></FieldLabel>
-          <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>
-            Fixed on this Agent's Template (<span style={{ fontFamily: MONO }}>resources</span>) and the same for
-            every Sandbox it launches. <span style={{ color: C.fg }}>Launch cannot override it</span> — to change the
-            size later, change the Template.
-          </span>
-          {!region ? (
-            <div
-              style={{
-                fontFamily: FONT, fontSize: 13, fontWeight: 400, color: C.muted,
-                background: C.cardSolid,
-                border: `1px solid ${C.border}`,
-                borderRadius: 8,
-                padding: "12px 14px",
-              }}
-            >
-              Select an IDC first — Specs are listed per IDC
-            </div>
-          ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8 }}>
-              {COMPUTE_TIERS.map((t) => {
-                const isActive = computeTier === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    onClick={() => setComputeTier(t.id)}
-                    style={{
-                      background: isActive ? C.selectedYel : C.cardSolid,
-                      border: `1px solid ${isActive ? C.selectedYelB : C.border}`,
-                      borderRadius: 8,
-                      padding: "12px 14px",
-                      textAlign: "left",
-                      display: "flex", flexDirection: "column", gap: 4,
-                      cursor: "pointer",
-                      fontFamily: FONT,
-                    }}
-                  >
-                    <div style={{ fontSize: 13, fontWeight: 600, color: C.fg, lineHeight: "18px" }}>{t.name}</div>
-                    <div style={{ fontSize: 11, fontWeight: 400, color: C.muted, lineHeight: "14px" }}>{t.cpu} · {t.ram}</div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: C.lime, marginTop: 4 }}>${t.pricePerHr.toFixed(4)}/hr</div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-      </div>
-
-      {/* Add GMI Models */}
-      <div
-        style={{
-          background: C.card,
-          border: `1px solid ${C.border}`,
-          borderRadius: 10,
-          padding: "16px 20px",
-          display: "flex", flexDirection: "column", gap: 16,
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
-          <div>
-            <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "24px", color: C.fg, margin: 0 }}>
-              Add GMI Models
-            </h3>
-            <p style={{ fontFamily: FONT, fontSize: 13, fontWeight: 400, lineHeight: "20px", color: C.muted, margin: "4px 0 0" }}>
-              Access 200+ frontier models from inside your container.
-            </p>
-          </div>
-          <Toggle on={addModels} onChange={setAddModels} />
-        </div>
-
-        {addModels && (
-          <>
-            {/* Coding Agent Plan — promotional opt-in right where the model is chosen */}
-            <label style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", cursor: "pointer", background: planOptIn ? "rgba(221,234,77,0.08)" : "rgba(221,234,77,0.05)", border: `1px solid ${planOptIn ? "rgba(221,234,77,0.55)" : "rgba(221,234,77,0.30)"}`, borderRadius: 8, padding: "10px 12px" }}>
-              <input type="checkbox" checked={planOptIn} onChange={(e) => setPlanOptIn(e.target.checked)} style={{ accentColor: C.lime, width: 15, height: 15 }} />
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="#DDEA4D"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z" /></svg>
-                <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Enroll in the Coding Agent Plan</span>
-              </span>
-              <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 160 }}>
-                Standard models nearly unlimited + monthly Premium Credits · from $9.99/mo
-              </span>
-              <Link href="/plans" onClick={(e: React.MouseEvent) => e.stopPropagation()} style={{ flexShrink: 0, fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.lime, textDecoration: "none" }}>See plans →</Link>
-            </label>
-
-            <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px", margin: 0 }}>
-              <span style={{ color: C.fg, fontWeight: 600 }}>Standard</span> models are included on every plan (nearly unlimited under fair-use). <span style={{ color: C.fg, fontWeight: 600 }}>Premium</span> models draw down the user's monthly Premium Credits at published rates.
-            </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <FieldLabel>Select Model</FieldLabel>
-              <Select
-                value={selectedModel}
-                onChange={pickModel}
-                placeholder="Select an option"
-                options={ALL_MODELS.map((m) => ({ value: m.id, label: `${m.name} — ${m.lane === "standard" ? "Standard · included" : `Premium · ${m.burnBlended} cr/1M`}` }))}
-              />
-            </div>
-            {/* Selected model — single summary card (the full list stays in the dropdown) */}
-            {(() => {
-              const m = getModel(selectedModel);
-              if (!m) return null;
-              const std = m.lane === "standard";
-              return (
-                <div style={{ background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>{m.name}</span>
-                    <span style={{ fontFamily: FONT, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", color: std ? "#34d399" : "#c7a7ff", background: std ? "rgba(52,211,153,0.14)" : "rgba(199,167,255,0.14)", border: `1px solid ${std ? "rgba(52,211,153,0.45)" : "rgba(199,167,255,0.45)"}`, padding: "1px 6px", borderRadius: 4 }}>{std ? "STANDARD" : "PREMIUM"}</span>
-                  </div>
-                  {std ? (
-                    <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>PAYG <span style={{ fontFamily: MONO, color: C.fg }}>{m.listPrice}</span> · <span style={{ color: "#34d399", fontWeight: 600 }}>Included</span> with a plan · FUP</span>
-                  ) : (
-                    <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>PAYG <span style={{ fontFamily: MONO, color: C.fg }}>${paygUsdPer1M(m)?.toFixed(2)}/1M</span> · <span style={{ color: C.fg, fontWeight: 600 }}>{m.burnBlended} cr</span>/1M with a plan</span>
-                  )}
-                </div>
-              );
-            })()}
-
-            {!isStandardModel(selectedModel) && (
-              <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 12, color: "#fbbf24" }}>
-                <span style={{ fontWeight: 700 }}>⚠ Premium default</span>
-                <span style={{ color: C.muted }}>· excluded from the {CODING_AGENT_PLAN.name} · burns {getModel(selectedModel)?.burnBlended} cr/1M</span>
-              </div>
-            )}
-
-            {/* Confirm modal — selecting a model excluded from the Coding Plan */}
-            {pendingModel && (() => {
-              const m = getModel(pendingModel);
-              const payg = m ? paygUsdPer1M(m) : null;
-              return (
-                <div onClick={() => setPendingModel(null)} style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(0,0,0,0.78)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-                  <div onClick={(e) => e.stopPropagation()} style={{ width: 460, maxWidth: "100%", background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 12 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ width: 26, height: 26, borderRadius: 999, background: "rgba(251,191,36,0.16)", border: "1px solid rgba(251,191,36,0.5)", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#fbbf24" }}>
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /></svg>
-                      </span>
-                      <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>Use a Premium model?</h3>
-                    </div>
-                    <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "19px", margin: 0 }}>
-                      <span style={{ color: C.fg, fontWeight: 600 }}>{m?.name}</span> is excluded from the {CODING_AGENT_PLAN.name}. Each run draws down the user's Premium Credits at <span style={{ color: C.fg }}>{m?.burnBlended} credits / 1M tokens</span>{payg != null && <> (pay-as-you-go <span style={{ color: C.fg }}>${payg.toFixed(2)}/1M</span> without a plan)</>}. Standard models run nearly unlimited and free on any plan.
-                    </p>
-                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
-                      <button onClick={() => setPendingModel(null)} style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, background: "transparent", color: C.muted, border: `1px solid ${C.border}`, padding: "7px 14px", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
-                      <button onClick={() => { setSelectedModel(pendingModel); setPendingModel(null); }} style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, background: "#fbbf24", color: "#0a0a0a", border: "none", padding: "7px 14px", borderRadius: 8, cursor: "pointer" }}>Use {m?.name}</button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-          </>
-        )}
-      </div>
-      </div>
-    </div>
-  );
-}
-
-function SourceCard({
-  selected, disabled, title, description, icon, onClick,
-}: {
-  selected: boolean;
-  disabled?: boolean;
-  title: string;
-  description: string;
-  icon: React.ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={disabled ? undefined : onClick}
-      disabled={disabled}
-      style={{
-        background: selected ? C.selectedYel : C.cardSolid,
-        border: `1px solid ${selected ? C.selectedYelB : C.border}`,
-        borderRadius: 10,
-        padding: "14px 16px",
-        textAlign: "left",
-        display: "flex", flexDirection: "column", gap: 4,
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.6 : 1,
-        fontFamily: FONT,
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <span
-          style={{
-            width: 14, height: 14, borderRadius: 999,
-            border: `1.5px solid ${selected ? C.lime : C.border}`,
-            background: selected ? C.lime : "transparent",
-            flexShrink: 0,
-          }}
-        />
-        <span style={{ color: selected ? C.lime : C.muted, display: "inline-flex" }}>{icon}</span>
-        <span style={{ fontSize: 14, fontWeight: 600, color: C.fg, lineHeight: "20px" }}>{title}</span>
-      </div>
-      <div style={{ fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "16px", marginLeft: 30 }}>{description}</div>
-    </button>
-  );
-}
 
 // ─── Step 3: Networking — endpoint definitions (optional) ──────────────────
 // Declares which HTTP services this Agent exposes. Each endpoint is a card:
@@ -1822,20 +1197,7 @@ function StepMaasKey({
   };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Card */}
-      <div
-        style={{
-          background: C.card,
-          border: `1px solid ${C.border}`,
-          borderRadius: 10,
-          padding: "16px 20px",
-          display: "flex", flexDirection: "column", gap: 14,
-        }}
-      >
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, lineHeight: "22px" }}>
-            GMI MaaS API Key
-          </div>
           <p style={{ fontFamily: FONT, fontSize: 13, fontWeight: 400, lineHeight: "20px", color: C.muted, margin: 0 }}>
             Provide a MaaS API key. GMI uses it to validate your account, meter usage, and enable the Powered-by badge. If you leave this blank, the system will auto-issue one for your Agent.
           </p>
@@ -1849,7 +1211,6 @@ function StepMaasKey({
             Find your key in <a href="/dashboard" style={{ color: C.link, textDecoration: "none" }}>My Agents → Analytics</a> on any existing agent
           </p>
         </div>
-      </div>
 
       {/* Footer explainer */}
       <div
@@ -1890,15 +1251,7 @@ function StepEndpoint({
   setAccessUrl: (v: string) => void;
 }) {
   return (
-    <div
-      style={{
-        background: C.card,
-        border: `1px solid ${C.border}`,
-        borderRadius: 10,
-        padding: "16px 20px",
-        display: "flex", flexDirection: "column", gap: 18,
-      }}
-    >
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <FieldLabel required>Access URL</FieldLabel>
         <TextInput value={accessUrl} onChange={setAccessUrl} placeholder="https://your-agent.yourdomain.com" mono />
@@ -1912,103 +1265,6 @@ function StepEndpoint({
   );
 }
 
-// ─── Connect-your-agent flow: Review & Submit step ───────────────────────
-function StepConnectReview({
-  projectName, maasKey, accessUrl,
-}: {
-  projectName: string;
-  maasKey: string;
-  accessUrl: string;
-}) {
-  const rows = [
-    { label: "Project Name", value: projectName || "—" },
-    { label: "Deployment Type", value: "Connect with GMI" },
-    { label: "GMI Models key", value: maasKey ? `${maasKey.slice(0, 6)}…${maasKey.slice(-4)}` : "Auto-issued at deploy time" },
-    { label: "Access URL", value: accessUrl || "—" },
-    { label: "Badge", value: "POWERED BY GMI MODELS", badge: true as const },
-  ];
-
-  return (
-    <div
-      style={{
-        background: C.card,
-        border: `1px solid ${C.border}`,
-        borderRadius: 10,
-        padding: "16px 20px",
-        display: "flex", flexDirection: "column", gap: 16,
-      }}
-    >
-      <section
-        style={{
-          background: C.cardSolid,
-          border: `1px solid ${C.border}`,
-          borderRadius: 10,
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            padding: "16px 20px",
-            fontFamily: FONT, fontSize: 12, fontWeight: 600,
-            color: C.muted, letterSpacing: "0.08em", textTransform: "uppercase",
-            borderBottom: `1px solid ${C.borderSoft}`,
-          }}
-        >
-          Configuration Summary
-        </div>
-        {rows.map((row, i) => (
-          <div
-            key={row.label}
-            style={{
-              display: "grid", gridTemplateColumns: "200px 1fr",
-              padding: "16px 20px",
-              borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`,
-              alignItems: "center",
-            }}
-          >
-            <div style={{ fontFamily: FONT, fontSize: 13, fontWeight: 400, color: C.muted }}>{row.label}</div>
-            <div>
-              {row.badge ? (
-                <span
-                  style={{
-                    fontFamily: FONT, fontSize: 11, fontWeight: 600,
-                    color: C.fg,
-                    background: "rgba(255,255,255,0.06)",
-                    border: `1px solid ${C.border}`,
-                    padding: "2px 8px",
-                    borderRadius: 4,
-                    letterSpacing: "0.04em",
-                  }}
-                >
-                  {row.value}
-                </span>
-              ) : (
-                <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>{row.value}</span>
-              )}
-            </div>
-          </div>
-        ))}
-      </section>
-
-      <div
-        style={{
-          background: "rgba(255,255,255,0.02)",
-          border: `1px solid ${C.borderSoft}`,
-          borderRadius: 10,
-          padding: "16px 20px",
-          fontFamily: FONT, fontSize: 12, fontWeight: 400, color: C.muted, lineHeight: "18px",
-          display: "flex", gap: 8, alignItems: "flex-start",
-        }}
-      >
-        <span style={{ color: C.muted, marginTop: 2 }}><IconInfo size={13} /></span>
-        <span>
-          <span style={{ color: C.fg, fontWeight: 600 }}>Auto-approval on submit</span>
-          {" "}— GMI probes your Access URL and, if a MaaS key was provided, re-runs the key check. If all checks pass, your listing goes live immediately.
-        </span>
-      </div>
-    </div>
-  );
-}
 
 // ─── Build panel — explicit Template build (Building → Ready → Failed) ──────
 // Build once: pull image, install deps, prep environment → a ready Template. Tasks
@@ -2528,6 +1784,406 @@ function EditCostPanel({
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────
+// ─── v1.3 Register layout ───────────────────────────────────────────────────
+// Design v1.3 §E2/§E3 (re-confirming v1.2 §B2/§B4): the registration form is
+// one page of plain titled cards — `Basics & Template` / `Runtime` /
+// `Public Access (Optional)` — with a Summary rail on the right and a sticky
+// action bar at the bottom. It replaces the numbered stepper and the Live Cost
+// Estimate panel.
+//
+// The Runtime card is visible by default. Folding the image URL — a required
+// field — behind an "Advanced settings" disclosure labelled "using GMI
+// defaults" is exactly what turned the greyed-out Register button into a dead
+// end; the section that holds the requirement has to be on screen.
+
+function SectionCard({
+  icon, title, optional, subtitle, action, complete, children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  optional?: boolean;
+  subtitle?: string;
+  action?: React.ReactNode;
+  /** v1.2 §B2 — a completed section is ticked in the header. */
+  complete?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10 }}>
+      <div style={{ padding: "16px 20px 0", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+        <h2 style={{ display: "flex", alignItems: "center", gap: 9, fontFamily: FONT, fontSize: 16, fontWeight: 600, lineHeight: "22px", color: C.fg, margin: 0 }}>
+          <span style={{ color: C.lime, display: "inline-flex", flexShrink: 0 }}>{icon}</span>
+          {title}
+          {optional && <span style={{ fontSize: 13, fontWeight: 400, color: C.muted }}>(Optional)</span>}
+          {complete && (
+            <span
+              title="Section complete"
+              style={{ display: "inline-flex", alignItems: "center", color: C.ok, flexShrink: 0 }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="m20 6-11 11-5-5" />
+              </svg>
+            </span>
+          )}
+        </h2>
+        {action}
+      </div>
+      {subtitle && (
+        <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "6px 20px 0", lineHeight: "18px" }}>{subtitle}</p>
+      )}
+      <div style={{ height: 1, background: C.borderSoft, margin: "14px 20px 0" }} />
+      <div style={{ padding: "16px 20px 20px", display: "flex", flexDirection: "column", gap: 16 }}>{children}</div>
+    </section>
+  );
+}
+
+/** Small ⓘ hint line under a field. */
+function Hint({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "flex-start", fontFamily: FONT, fontSize: 12, lineHeight: "17px", color: C.muted }}>
+      <span style={{ flexShrink: 0, marginTop: 2, display: "inline-flex", color: C.muted }}><IconInfo size={12} /></span>
+      <span>{children}</span>
+    </div>
+  );
+}
+
+function Field({ label, hint, required, children }: { label: string; hint?: React.ReactNode; required?: boolean; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+      <div>
+        <FieldLabel required={required}>{label}</FieldLabel>
+        {hint && <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, marginTop: 2, lineHeight: "17px" }}>{hint}</div>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ToggleRow({ label, hint, on, onChange }: { label: string; hint: string; on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 20 }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, lineHeight: "20px", color: C.fg }}>{label}</div>
+        <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, marginTop: 2, lineHeight: "16px" }}>{hint}</div>
+      </div>
+      <Toggle on={on} onChange={onChange} />
+    </div>
+  );
+}
+
+// ─── Summary rail (v1.3 §E3) ────────────────────────────────────────────────
+// Replaces the Live Cost Estimate panel. Per-hour price still shows on the Spec
+// tiles inside Runtime, where the choice that sets it is made.
+function SummaryRail({ rows }: { rows: { label: string; value: React.ReactNode }[] }) {
+  return (
+    <aside style={{ borderLeft: `1px solid ${C.border}`, alignSelf: "stretch" }}>
+      <div style={{ position: "sticky", top: 56, padding: "20px 22px" }}>
+      <h2 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: "0 0 16px" }}>Summary</h2>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {rows.map((r) => (
+          <div key={r.label} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 14 }}>
+            <span style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, whiteSpace: "nowrap", flexShrink: 0 }}>{r.label}</span>
+            <span style={{ fontFamily: FONT, fontSize: 12.5, color: C.fg, textAlign: "right", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+              {r.value}
+            </span>
+          </div>
+        ))}
+      </div>
+      </div>
+    </aside>
+  );
+}
+
+// ─── Sticky action bar ──────────────────────────────────────────────────────
+// Carries the blocked reason with it. A greyed CTA that does not say what is
+// missing is a dead end, and the reason has to travel with the button.
+function ActionBar({
+  onCancel, onSubmit, canSubmit, ctaLabel, blockedReason,
+}: {
+  onCancel: () => void;
+  onSubmit: () => void;
+  canSubmit: boolean;
+  ctaLabel: string;
+  blockedReason?: string;
+}) {
+  return (
+    <div
+      style={{
+        position: "sticky", bottom: 0, zIndex: 20,
+        borderTop: `1px solid ${C.border}`,
+        background: "rgba(10,10,10,0.94)",
+        backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
+        padding: "12px 24px",
+        display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, flexWrap: "wrap",
+      }}
+    >
+      {!canSubmit && blockedReason && (
+        <div
+          role="status"
+          style={{
+            marginRight: "auto", display: "flex", alignItems: "flex-start", gap: 7,
+            background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.32)",
+            borderRadius: 8, padding: "7px 11px", maxWidth: 620,
+            fontFamily: FONT, fontSize: 12, lineHeight: "17px", color: C.fg,
+          }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.warn} strokeWidth="2" strokeLinecap="round" aria-hidden="true" style={{ flexShrink: 0, marginTop: 2 }}>
+            <circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" />
+          </svg>
+          {blockedReason}
+        </div>
+      )}
+      <button
+        onClick={onCancel}
+        style={{ fontFamily: FONT, fontSize: 14, fontWeight: 500, background: "transparent", color: C.fg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 18px", cursor: "pointer" }}
+      >
+        Cancel
+      </button>
+      <button
+        onClick={onSubmit}
+        disabled={!canSubmit}
+        title={canSubmit ? undefined : blockedReason}
+        style={{
+          fontFamily: FONT, fontSize: 14, fontWeight: 600,
+          background: canSubmit ? C.lime : "#3a3a1f",
+          color: canSubmit ? C.limeText : "#666",
+          border: "none", borderRadius: 8,
+          padding: "8px 22px", cursor: canSubmit ? "pointer" : "not-allowed",
+        }}
+      >
+        {ctaLabel}
+      </button>
+    </div>
+  );
+}
+
+// ─── Runtime section body (v1.3) ────────────────────────────────────────────
+// The same fields the old step-2 accordion held — image, registry credentials,
+// default IDC, Spec, GMI Models — rendered flat inside the Runtime card. The
+// collapse / "Customize" / "Reset to GMI defaults" machinery is gone with the
+// stepper: these fields are the section, and one of them is required.
+function RuntimeSection({
+  dockerImage, setDockerImage,
+  enableCreds, setEnableCreds,
+  registryUser, setRegistryUser,
+  registryToken, setRegistryToken,
+  region, setRegion,
+  computeTier, setComputeTier,
+  addModels, setAddModels,
+  selectedModel, setSelectedModel,
+}: {
+  dockerImage: string;
+  setDockerImage: (v: string) => void;
+  enableCreds: boolean;
+  setEnableCreds: (v: boolean) => void;
+  registryUser: string;
+  setRegistryUser: (v: string) => void;
+  registryToken: string;
+  setRegistryToken: (v: string) => void;
+  region: string;
+  setRegion: (v: string) => void;
+  computeTier: string;
+  setComputeTier: (v: string) => void;
+  addModels: boolean;
+  setAddModels: (v: boolean) => void;
+  selectedModel: string;
+  setSelectedModel: (v: string) => void;
+}) {
+  // Switching to a GMI model NOT covered by the Coding Plan is high-friction —
+  // it requires an explicit acknowledgement (full token price, no discount).
+  const [planOptIn, setPlanOptIn] = useState(false);
+  const [pendingModel, setPendingModel] = useState<string | null>(null);
+  const pickModel = (id: string) => {
+    if (isStandardModel(id)) { setSelectedModel(id); return; }
+    setPendingModel(id); // excluded / Premium → confirm before switching
+  };
+
+  return (
+    <>
+      <Field
+        label="Image URL"
+        required
+        hint="Supports Docker Hub, GHCR, ECR and other OCI-compatible registries."
+      >
+        <TextInput value={dockerImage} onChange={setDockerImage} placeholder="docker.io/acme/agent:1.0.0" mono />
+      </Field>
+
+      <ToggleRow
+        label="Requires sign-in"
+        hint="Turn this on if your image is private. You'll need a registry username and access token."
+        on={enableCreds}
+        onChange={setEnableCreds}
+      />
+      {enableCreds && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <Field label="Registry username">
+            <TextInput value={registryUser} onChange={setRegistryUser} placeholder="acme-ci" />
+          </Field>
+          <Field label="Access token">
+            <TextInput value={registryToken} onChange={setRegistryToken} placeholder="ghp_…" mono />
+          </Field>
+        </div>
+      )}
+
+      {/* Region — the Template's default IDC. Launch overrides it per sandbox. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        <FieldLabel required>Region <V2Badge /></FieldLabel>
+        <RegionSelect value={region} onChange={setRegion} options={REGIONS} />
+        <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>
+          The default for this Agent. <span style={{ color: C.fg }}>Each Sandbox picks its own IDC at Launch</span> —
+          it is a create parameter (<span style={{ fontFamily: MONO }}>idc_name</span>).
+        </span>
+      </div>
+
+      {/* Spec — the Template's `resources`. Not a create parameter, so it can
+          only be changed here; Launch shows it read-only. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        <FieldLabel required>Spec <V2Badge /></FieldLabel>
+        <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>
+          Fixed on this Agent's Template (<span style={{ fontFamily: MONO }}>resources</span>) and the same for
+          every Sandbox it launches. <span style={{ color: C.fg }}>Launch cannot override it</span> — to change the
+          size later, change the Template.
+        </span>
+        {!region ? (
+          <div style={{ fontFamily: FONT, fontSize: 13, color: C.muted, background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px" }}>
+            Select an IDC first — Specs are listed per IDC
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8 }}>
+            {COMPUTE_TIERS.map((t) => {
+              const isActive = computeTier === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setComputeTier(t.id)}
+                  style={{
+                    background: isActive ? C.selectedYel : C.cardSolid,
+                    border: `1px solid ${isActive ? C.selectedYelB : C.border}`,
+                    borderRadius: 8, padding: "12px 14px", textAlign: "left",
+                    display: "flex", flexDirection: "column", gap: 4,
+                    cursor: "pointer", fontFamily: FONT,
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.fg, lineHeight: "18px" }}>{t.name}</div>
+                  <div style={{ fontSize: 11, fontWeight: 400, color: C.muted, lineHeight: "14px" }}>{t.cpu} · {t.ram}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.lime, marginTop: 4 }}>${t.pricePerHr.toFixed(4)}/hr</div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* R1 decision: Register does NOT set runtime lifecycle — it's configured
+          per sandbox at Launch (org default prefilled). */}
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "9px 12px" }}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ color: C.muted, flexShrink: 0, marginTop: 1 }}>
+          <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
+        </svg>
+        <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "18px" }}>
+          <span style={{ color: C.fg, fontWeight: 600 }}>Sandbox lifecycle is configured per sandbox at Launch</span> — maximum active time, inactivity, and disk retention use your Organization default and can be customized when you launch a sandbox (not here).{" "}
+          <span style={{ color: C.muted }}>Register defines how the Agent runs; Launch defines how long each sandbox runs.</span>
+        </span>
+      </div>
+
+      <div style={{ height: 1, background: C.borderSoft }} />
+
+      {/* ── GMI Models ────────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+        <div>
+          <h3 style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, lineHeight: "22px", color: C.fg, margin: 0 }}>
+            Add GMI Models
+          </h3>
+          <p style={{ fontFamily: FONT, fontSize: 12.5, fontWeight: 400, lineHeight: "18px", color: C.muted, margin: "3px 0 0" }}>
+            Access 200+ frontier models from inside your container.
+          </p>
+        </div>
+        <Toggle on={addModels} onChange={setAddModels} />
+      </div>
+
+      {addModels && (
+        <>
+          {/* Coding Agent Plan — promotional opt-in right where the model is chosen */}
+          <label style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", cursor: "pointer", background: planOptIn ? "rgba(221,234,77,0.08)" : "rgba(221,234,77,0.05)", border: `1px solid ${planOptIn ? "rgba(221,234,77,0.55)" : "rgba(221,234,77,0.30)"}`, borderRadius: 8, padding: "10px 12px" }}>
+            <input type="checkbox" checked={planOptIn} onChange={(e) => setPlanOptIn(e.target.checked)} style={{ accentColor: C.lime, width: 15, height: 15 }} />
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="#DDEA4D"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z" /></svg>
+              <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Enroll in the Coding Agent Plan</span>
+            </span>
+            <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 160 }}>
+              Standard models nearly unlimited + monthly Premium Credits · from $9.99/mo
+            </span>
+            <Link href="/plans" onClick={(e: React.MouseEvent) => e.stopPropagation()} style={{ flexShrink: 0, fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.lime, textDecoration: "none" }}>See plans →</Link>
+          </label>
+
+          <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px", margin: 0 }}>
+            <span style={{ color: C.fg, fontWeight: 600 }}>Standard</span> models are included on every plan (nearly unlimited under fair-use). <span style={{ color: C.fg, fontWeight: 600 }}>Premium</span> models draw down the user's monthly Premium Credits at published rates.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <FieldLabel>Select Model</FieldLabel>
+            <Select
+              value={selectedModel}
+              onChange={pickModel}
+              placeholder="Select an option"
+              options={ALL_MODELS.map((m) => ({ value: m.id, label: `${m.name} — ${m.lane === "standard" ? "Standard · included" : `Premium · ${m.burnBlended} cr/1M`}` }))}
+            />
+          </div>
+          {(() => {
+            const m = getModel(selectedModel);
+            if (!m) return null;
+            const std = m.lane === "standard";
+            return (
+              <div style={{ background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>{m.name}</span>
+                  <span style={{ fontFamily: FONT, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", color: std ? "#34d399" : "#c7a7ff", background: std ? "rgba(52,211,153,0.14)" : "rgba(199,167,255,0.14)", border: `1px solid ${std ? "rgba(52,211,153,0.45)" : "rgba(199,167,255,0.45)"}`, padding: "1px 6px", borderRadius: 4 }}>{std ? "STANDARD" : "PREMIUM"}</span>
+                </div>
+                {std ? (
+                  <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>PAYG <span style={{ fontFamily: MONO, color: C.fg }}>{m.listPrice}</span> · <span style={{ color: "#34d399", fontWeight: 600 }}>Included</span> with a plan · FUP</span>
+                ) : (
+                  <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>PAYG <span style={{ fontFamily: MONO, color: C.fg }}>${paygUsdPer1M(m)?.toFixed(2)}/1M</span> · <span style={{ color: C.fg, fontWeight: 600 }}>{m.burnBlended} cr</span>/1M with a plan</span>
+                )}
+              </div>
+            );
+          })()}
+
+          {!isStandardModel(selectedModel) && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 12, color: "#fbbf24" }}>
+              <span style={{ fontWeight: 700 }}>⚠ Premium default</span>
+              <span style={{ color: C.muted }}>· excluded from the {CODING_AGENT_PLAN.name} · burns {getModel(selectedModel)?.burnBlended} cr/1M</span>
+            </div>
+          )}
+
+          {/* Confirm modal — selecting a model excluded from the Coding Plan */}
+          {pendingModel && (() => {
+            const m = getModel(pendingModel);
+            const payg = m ? paygUsdPer1M(m) : null;
+            return (
+              <div onClick={() => setPendingModel(null)} style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(0,0,0,0.78)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+                <div onClick={(e) => e.stopPropagation()} style={{ width: 460, maxWidth: "100%", background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ width: 26, height: 26, borderRadius: 999, background: "rgba(251,191,36,0.16)", border: "1px solid rgba(251,191,36,0.5)", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#fbbf24" }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /></svg>
+                    </span>
+                    <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>Use a Premium model?</h3>
+                  </div>
+                  <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "19px", margin: 0 }}>
+                    <span style={{ color: C.fg, fontWeight: 600 }}>{m?.name}</span> is excluded from the {CODING_AGENT_PLAN.name}. Each run draws down the user's Premium Credits at <span style={{ color: C.fg }}>{m?.burnBlended} credits / 1M tokens</span>{payg != null && <> (pay-as-you-go <span style={{ color: C.fg }}>${payg.toFixed(2)}/1M</span> without a plan)</>}. Standard models run nearly unlimited and free on any plan.
+                  </p>
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+                    <button onClick={() => setPendingModel(null)} style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, background: "transparent", color: C.muted, border: `1px solid ${C.border}`, padding: "7px 14px", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
+                    <button onClick={() => { setSelectedModel(pendingModel); setPendingModel(null); }} style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, background: "#fbbf24", color: "#0a0a0a", border: "none", padding: "7px 14px", borderRadius: 8, cursor: "pointer" }}>Use {m?.name}</button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </>
+      )}
+    </>
+  );
+}
+
 export default function DeployWizard() {
   const [, setLocation] = useLocation();
   const [hostMode, setHostMode] = useState<HostMode>("gmi");
@@ -2536,17 +2192,15 @@ export default function DeployWizard() {
   const [projectName, setProjectName] = useState("");
 
   // Step 2 — PRD F-06: starter image + region/tier defaulted
-  const [dockerSource, setDockerSource] = useState<"registry" | "upload">("registry");
   const [dockerImage, setDockerImage] = useState("");
   const [enableCreds, setEnableCreds] = useState(false);
+  // Private-registry credentials, revealed by the "Requires sign-in" toggle.
+  const [registryUser, setRegistryUser] = useState("");
+  const [registryToken, setRegistryToken] = useState("");
   const [region, setRegion] = useState("us-ia-iowa-1");
   const [computeTier, setComputeTier] = useState("container");
   const [addModels, setAddModels] = useState(true);
   const [selectedModel, setSelectedModel] = useState("deepseek-v4-flash");
-
-  // Step 2 — PRD F-09: lifecycle TTL (template default; per-task override via SDK)
-  const [maxLifetime, setMaxLifetime] = useState("1h");
-  const [idleTimeout, setIdleTimeout] = useState("5min");
 
   // Step 3
   const [ports, setPorts] = useState<PortMap[]>(DEFAULT_PORTS);
@@ -2558,9 +2212,15 @@ export default function DeployWizard() {
   const [maasKey, setMaasKey] = useState("");
   const [accessUrl, setAccessUrl] = useState("");
   const [submitted, setSubmitted] = useState(false);
-  // Publish fast-path: Basics is required; Runtime/Networking/Env collapse into
-  // Advanced settings (off by default) so common publishes stay one screen.
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  // v1.3 §E1 — registering creates an Agent, which costs a little. Say so once.
+  const [showNotice, setShowNotice] = useState(() => !hasAcknowledged("register"));
+  // v1.3 §E4 / §D — the credit gate. No balance endpoint exists yet.
+  const [hasCredits, setHasCredits] = useState(true);
+  const [showInsufficient, setShowInsufficient] = useState(false);
+  const [showTopUp, setShowTopUp] = useState(false);
+  const [showCoupon, setShowCoupon] = useState(false);
+  // v1.2 §B6 — leaving mid-registration discards what was typed; confirm first.
+  const [showLeave, setShowLeave] = useState(false);
 
   // ?use=<id> — Use-this-agent fork. Wizard is pre-filled from a marketplace
   // template; user lands on a collapsed view and expands to customize.
@@ -2579,7 +2239,6 @@ export default function DeployWizard() {
     setHostMode("gmi");
     setForkedFrom(found.name);
     setProjectName(`${useId}-copy`);
-    setDockerSource("registry");
     setDockerImage(found.template.image);
     setRegion(found.template.region);
     setComputeTier(found.template.tier);
@@ -2593,7 +2252,6 @@ export default function DeployWizard() {
     if (!params.has("edit")) return;
     setHostMode("gmi");
     setProjectName(params.get("name") || "Openclaw test");
-    setDockerSource("registry");
     setDockerImage("ghcr.io/mjs-gmi/openclaw-gmi:v5-mode-none");
     setRegion("us-ia-iowa-1");
     setComputeTier("container");
@@ -2632,26 +2290,91 @@ export default function DeployWizard() {
         { label: "Custom Env Vars", value: customEnvs.length > 0 ? `${customEnvs.length} configured` : "—" },
       ],
     },
-  ], [projectName, dockerImage, enableCreds, tierInfo, regionInfo, maxLifetime, idleTimeout, ports, modelInfo, customEnvs]);
+  ], [projectName, dockerImage, enableCreds, tierInfo, regionInfo, ports, modelInfo, customEnvs]);
 
   // "Pre-configured" subtitle in the section header — flips off the moment user customizes.
-  const step2AllDefault =
-    dockerSource === "registry" &&
-    !enableCreds &&
-    region === "us-ia-iowa-1" &&
-    computeTier === "container" &&
-    maxLifetime === "1h" &&
-    idleTimeout === "5min" &&
-    addModels && selectedModel === "deepseek-v4-flash";
+  // ── Validity, and why the CTA is off ─────────────────────────────────────
+  // M6.4: block registration when the image is known-missing (404). Private
+  // (401/403) and public both pass — the review gate handles those.
+  const canRegister =
+    hostMode === "gmi"
+      ? projectName.trim().length > 1 && dockerImage.trim().length > 0 && probePublishImage(dockerImage) !== "missing"
+      : projectName.trim().length > 1 && /^https:\/\//i.test(accessUrl.trim());
 
-  const step3AllDefault =
-    ports.length === 1 &&
-    ports[0].name === "web" &&
-    ports[0].internalPort === "8080" &&
-    ports[0].protocol === "HTTP" &&
-    ports[0].visibility === "private";
+  const blockedReason =
+    hostMode === "gmi"
+      ? projectName.trim().length <= 1
+        ? "Give the agent an internal project name to continue."
+        : dockerImage.trim().length === 0
+          ? "An image is required — add the Image URL under Runtime."
+          : probePublishImage(dockerImage) === "missing"
+            ? "That image cannot be pulled (404). Check the registry, repository and tag."
+            : undefined
+      : projectName.trim().length <= 1
+        ? "Give the agent an internal project name to continue."
+        : "Add the HTTPS access URL where your agent is reachable.";
 
-  const step4AllDefault = customEnvs.length === 0;
+  // v1.3 §E3 — the Summary rail's rows, per tab (v1.2 §B4).
+  const summaryRows: { label: string; value: React.ReactNode }[] =
+    hostMode === "gmi"
+      ? [
+          { label: "Project Name", value: projectName.trim() || "—" },
+          { label: "Runtime", value: dockerImage.trim() || "—" },
+          { label: "Requires sign-in", value: enableCreds ? "Private registry" : "Public image" },
+          { label: "Region", value: regionInfo ? `${regionInfo.name} · ${regionInfo.sub}` : "—" },
+          {
+            label: "Port Mappings",
+            value: ports.length
+              ? ports.map((p) => `${p.protocol} :${p.internalPort || "?"} (${p.name || "web"})`).join(", ")
+              : "—",
+          },
+          { label: "Custom Env Vars", value: customEnvs.length ? `${customEnvs.length} configured` : "—" },
+        ]
+      : [
+          { label: "Project Name", value: projectName.trim() || "—" },
+          { label: "Deployment Type", value: "Self-hosted + GMI MaaS" },
+          { label: "Model API Key", value: maasKey.trim() ? "Provided" : "Auto-issued at deploy time" },
+          { label: "Access URL", value: accessUrl.trim() || "—" },
+          {
+            label: "Badge",
+            value: (
+              <span style={{ display: "inline-block", background: "#fafafa", color: "#0a0a0a", fontFamily: FONT, fontSize: 10, fontWeight: 700, letterSpacing: "0.03em", padding: "2px 7px", borderRadius: 3 }}>
+                POWERED BY GMI MODELS
+              </span>
+            ),
+          },
+        ];
+
+  const submitRegistration = () => {
+    // v1.3 §E4 — registering spends credits; surface the shortfall instead of a
+    // submit that would fail.
+    if (!hasCredits) { setShowInsufficient(true); return; }
+    // Auto-issue a key if the user left it blank (PRD: "system auto-issues").
+    const effectiveKey = maasKey || genMaasKey();
+    if (!maasKey) setMaasKey(effectiveKey);
+    persistRegisteredAgent({
+      id: `ag_${Date.now().toString(36)}`,
+      name: projectName.trim() || (hostMode === "gmi" ? "hosted-agent" : "self-hosted-agent"),
+      templateId: `tpl_${Date.now().toString(36)}`,
+      hostMode,
+      maasKey: effectiveKey,
+      accessUrl: hostMode === "connect" ? accessUrl.trim() : "",
+      category: "Code & Dev Tools",
+      registeredAt: new Date().toISOString(),
+      listingState: "draft",
+      // Carry the template's infra choices into the record so Access / Launch
+      // show this agent's real endpoints, region, spec and image.
+      ...(hostMode === "gmi"
+        ? {
+            endpoints: ports.map((p) => ({ id: p.id, name: p.name, internalPort: p.internalPort, protocol: p.protocol, visibility: p.visibility })),
+            region,
+            tier: computeTier,
+            dockerImage: dockerImage.trim(),
+          }
+        : {}),
+    });
+    setSubmitted(true);
+  };
 
   // ── Edit-template view — focused review of the template config ────────────
   if (editMode) {
@@ -2792,186 +2515,130 @@ export default function DeployWizard() {
           <section
             style={{
               display: "grid",
-              gridTemplateColumns: "minmax(0, 1fr) 300px",
-              gap: 16,
-              padding: "8px 24px 16px",
+              gridTemplateColumns: "minmax(0, 1fr) 320px",
               alignItems: "start",
             }}
           >
-            <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
-              {hostMode === "gmi" ? (
-                <>
-                  {/* Basics — required to publish */}
-                  <div id="step-1">
-                    <SectionHeader number={1} title="Basics & Template" subtitle={forkedFrom ? "Pre-filled — expand to customize" : null} />
-                    <div style={{ marginTop: 12 }}>
-                      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 20px" }}>
-                        <StepBasics projectName={projectName} setProjectName={setProjectName} />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Advanced settings — Runtime / Networking / Env, collapsed by default */}
-                  <div>
-                    <button
-                      onClick={() => setAdvancedOpen((o) => !o)}
-                      style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", cursor: "pointer", textAlign: "left" }}
+            <div style={{ minWidth: 0, display: "flex", flexDirection: "column", minHeight: "calc(100vh - 140px)" }}>
+              <div style={{ flex: 1, padding: "8px 24px 20px", display: "flex", flexDirection: "column", gap: 16 }}>
+                {hostMode === "gmi" ? (
+                  <>
+                    <SectionCard
+                      icon={<IconDoc size={16} />}
+                      title="Basics & Template"
+                      complete={projectName.trim().length > 1}
                     >
-                      <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg }}>
-                          Advanced settings <V2Badge title="Spec and Default IDC are new in V2 — both are in here" />
-                        </span>
-                        <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Sandbox image · Infrastructure · Networking · Environment — using GMI defaults</span>
-                      </span>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: advancedOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}><path d="m6 9 6 6 6-6" /></svg>
-                    </button>
+                      <StepBasics projectName={projectName} setProjectName={setProjectName} />
+                    </SectionCard>
 
-                    {advancedOpen && (
-                      <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 20 }}>
-                        <div id="step-2">
-                          <SectionHeader number={2} title="Infrastructure" subtitle={forkedFrom ? "Pre-filled — expand to customize" : step2AllDefault ? "Pre-configured with GMI defaults" : null} />
-                          <div style={{ marginTop: 12 }}>
-                            <StepInfrastructure
-                              dockerSource={dockerSource} setDockerSource={setDockerSource}
-                              dockerImage={dockerImage} setDockerImage={setDockerImage}
-                              enableCreds={enableCreds} setEnableCreds={setEnableCreds}
-                              region={region} setRegion={setRegion}
-                              computeTier={computeTier} setComputeTier={setComputeTier}
-                              maxLifetime={maxLifetime} setMaxLifetime={setMaxLifetime}
-                              idleTimeout={idleTimeout} setIdleTimeout={setIdleTimeout}
-                              addModels={addModels} setAddModels={setAddModels}
-                              selectedModel={selectedModel} setSelectedModel={setSelectedModel}
-                              forkedFromTemplate={!!forkedFrom}
-                            />
-                            {/* R1 decision: Register does NOT set runtime lifecycle — it's
-                                configured per instance at Launch (org default prefilled). */}
-                            <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "flex-start", background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "9px 12px" }}>
-                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ color: C.muted, flexShrink: 0, marginTop: 1 }}>
-                                <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
-                              </svg>
-                              <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "18px" }}>
-                                <span style={{ color: C.fg, fontWeight: 600 }}>Sandbox lifecycle is configured per sandbox at Launch</span> — maximum active time, inactivity, and disk retention use your Organization default and can be customized when you launch a sandbox (not here).{" "}
-                                <span style={{ color: C.muted }}>Register defines how the Agent runs; Launch defines how long each sandbox runs.</span>
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                        <div id="step-3">
-                          <SectionHeader number={3} title="Networking" subtitle={forkedFrom ? "Pre-filled — expand to customize" : step3AllDefault ? "Pre-configured with GMI defaults" : null} />
-                          <div style={{ marginTop: 12 }}>
-                            <StepNetworking ports={ports} setPorts={setPorts} forkedFromTemplate={!!forkedFrom} />
-                          </div>
-                        </div>
-                        <div id="step-4">
-                          <SectionHeader number={4} title="Env Variables" subtitle={forkedFrom ? "Pre-filled — expand to customize" : step4AllDefault ? "Pre-configured with GMI defaults" : null} />
-                          <div style={{ marginTop: 12 }}>
-                            <StepEnvVars customEnvs={customEnvs} setCustomEnvs={setCustomEnvs} forkedFromTemplate={!!forkedFrom} />
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                    <SectionCard
+                      icon={<IconChip size={16} />}
+                      title="Runtime"
+                      subtitle="Configure the environment used to run your agent."
+                      complete={dockerImage.trim().length > 0 && probePublishImage(dockerImage) !== "missing"}
+                    >
+                      <RuntimeSection
+                        dockerImage={dockerImage} setDockerImage={setDockerImage}
+                        enableCreds={enableCreds} setEnableCreds={setEnableCreds}
+                        registryUser={registryUser} setRegistryUser={setRegistryUser}
+                        registryToken={registryToken} setRegistryToken={setRegistryToken}
+                        region={region} setRegion={setRegion}
+                        computeTier={computeTier} setComputeTier={setComputeTier}
+                        addModels={addModels} setAddModels={setAddModels}
+                        selectedModel={selectedModel} setSelectedModel={setSelectedModel}
+                      />
+                    </SectionCard>
 
-                  {/* Review & Register */}
-                  <div id="step-5">
-                    <SectionHeader number={5} title="Review & Register" subtitle={null} />
-                    <div style={{ marginTop: 12 }}>
-                      <StepReview summary={summary} computeRate={computeRate} modelInfo={modelInfo} dockerImage={dockerImage} />
-                    </div>
-                  </div>
-                </>
-              ) : (
-                // Connect-your-agent flow — 4 sections
-                CONNECT_STEPS.map((s) => (
-                  <div key={s.id} id={`connect-step-${s.id}`}>
-                    <SectionHeader number={s.id} title={s.title} subtitle={null} />
-                    <div style={{ marginTop: 12 }}>
-                      {s.id === 1 && (
-                        <div style={{
-                          background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
-                          padding: "16px 20px",
-                        }}>
-                          <StepBasics
-                            projectName={projectName} setProjectName={setProjectName}
-                            showEnvWarning={false}
-                          />
-                        </div>
-                      )}
-                      {s.id === 2 && <StepMaasKey maasKey={maasKey} setMaasKey={setMaasKey} />}
-                      {s.id === 3 && <StepEndpoint accessUrl={accessUrl} setAccessUrl={setAccessUrl} />}
-                      {s.id === 4 && (
-                        <StepConnectReview
-                          projectName={projectName}
-                          maasKey={maasKey}
-                          accessUrl={accessUrl}
-                        />
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
+                    <SectionCard
+                      icon={<IconGlobe size={16} />}
+                      title="Public Access"
+                      optional
+                      subtitle="Allow users and external services to reach your agent, and declare the environment it needs."
+                    >
+                      <StepNetworking ports={ports} setPorts={setPorts} forkedFromTemplate={!!forkedFrom} />
+                      <StepEnvVars customEnvs={customEnvs} setCustomEnvs={setCustomEnvs} forkedFromTemplate={!!forkedFrom} />
+                    </SectionCard>
+                  </>
+                ) : (
+                  // Connect-your-agent — v1.2 §B3: Basic / Model API Key / Endpoint.
+                  // The old fourth "Review" step is gone; the Summary rail is the review.
+                  <>
+                    <SectionCard
+                      icon={<IconDoc size={16} />}
+                      title="Basic"
+                      complete={projectName.trim().length > 1}
+                    >
+                      <StepBasics projectName={projectName} setProjectName={setProjectName} showEnvWarning={false} />
+                    </SectionCard>
+
+                    <SectionCard
+                      icon={<IconKey size={16} />}
+                      title="Model API Key"
+                      optional
+                      subtitle="Give your agent access to GMI's full catalog of models with a single key. Leave it blank and one is auto-issued at deploy time."
+                      complete={maasKey.trim().length > 0}
+                    >
+                      <StepMaasKey maasKey={maasKey} setMaasKey={setMaasKey} />
+                    </SectionCard>
+
+                    <SectionCard
+                      icon={<IconLink size={16} />}
+                      title="Endpoint"
+                      subtitle="This link points at your agent. Use its landing page or documentation URL."
+                      complete={/^https:\/\//i.test(accessUrl.trim())}
+                    >
+                      <StepEndpoint accessUrl={accessUrl} setAccessUrl={setAccessUrl} />
+                    </SectionCard>
+                  </>
+                )}
+              </div>
+
+              <ActionBar
+                canSubmit={canRegister}
+                blockedReason={blockedReason}
+                ctaLabel={hostMode === "connect" ? "Submit" : "Register"}
+                onCancel={() => setShowLeave(true)}
+                onSubmit={submitRegistration}
+              />
             </div>
 
-            {/* Right: sticky cost + Register/Submit CTA */}
-            <RegisterPanel
-              computeRate={computeRate}
-              hideComputeCost={hostMode === "connect"}
-              canRegister={
-                // M6.4: block publish when the image is known-missing (404).
-                // Private (401/403) and public both allowed — review gate handles them.
-                hostMode === "gmi"
-                  ? projectName.trim().length > 1 && probePublishImage(dockerImage) !== "missing" && dockerImage.trim().length > 0
-                  : projectName.trim().length > 1 && /^https:\/\//i.test(accessUrl.trim())
-              }
-              ctaLabel={hostMode === "connect" ? "Submit" : "Register"}
-              onCancel={() => setLocation("/marketplace")}
-              onRegister={() => {
-                if (hostMode === "connect") {
-                  // Auto-issue a key if user left it blank (matches PRD: "system auto-issues")
-                  const effectiveKey = maasKey || genMaasKey();
-                  if (!maasKey) setMaasKey(effectiveKey);
-                  persistRegisteredAgent({
-                    id: `ag_${Date.now().toString(36)}`,
-                    name: projectName.trim() || "self-hosted-agent",
-                    templateId: `tpl_${Date.now().toString(36)}`,
-                    hostMode: "connect",
-                    maasKey: effectiveKey,
-                    accessUrl: accessUrl.trim(),
-                    category: "Code & Dev Tools",
-                    registeredAt: new Date().toISOString(),
-                    listingState: "draft",
-                  });
-                  setSubmitted(true);
-                } else {
-                  // Host on GMI: persist + show success view with 2 distinct CTAs
-                  // per PRD F-02 ("Register success → two distinct CTAs").
-                  const effectiveKey = maasKey || genMaasKey();
-                  if (!maasKey) setMaasKey(effectiveKey);
-                  persistRegisteredAgent({
-                    id: `ag_${Date.now().toString(36)}`,
-                    name: projectName.trim() || "hosted-agent",
-                    templateId: `tpl_${Date.now().toString(36)}`,
-                    hostMode: "gmi",
-                    maasKey: effectiveKey,
-                    accessUrl: "",
-                    category: "Code & Dev Tools",
-                    registeredAt: new Date().toISOString(),
-                    listingState: "draft",
-                    // Carry the template's infra choices into the record so Access /
-                    // Launch show this agent's real endpoints, region, and tier.
-                    endpoints: ports.map((p) => ({ id: p.id, name: p.name, internalPort: p.internalPort, protocol: p.protocol, visibility: p.visibility })),
-                    region,
-                    tier: computeTier,
-                  });
-                  setSubmitted(true);
-                }
-              }}
-            />
+            <SummaryRail rows={summaryRows} />
           </section>
         )}
 
         <Footer />
       </div>
+
+      {/* v1.3 §E1 — registration cost notice, acknowledged once per browser */}
+      {showNotice && (
+        <CostNotice
+          body="A small fee applies when you register and create an Agent. The amount is minimal, but we want to make sure you're aware before proceeding."
+          onAcknowledge={() => { acknowledge("register"); setShowNotice(false); }}
+        />
+      )}
+
+      {/* v1.3 §D — same credit gate My Agents uses */}
+      {showInsufficient && (
+        <InsufficientCredits
+          onDeposit={() => { setShowInsufficient(false); setShowTopUp(true); }}
+          onCoupon={() => { setShowInsufficient(false); setShowCoupon(true); }}
+          onClose={() => setShowInsufficient(false)}
+        />
+      )}
+      {showTopUp && (
+        <TopUpCredits onClose={() => setShowTopUp(false)} onContinue={() => { setShowTopUp(false); setHasCredits(true); }} />
+      )}
+      {showCoupon && (
+        <RedeemCoupon onClose={() => setShowCoupon(false)} onApply={() => { setShowCoupon(false); setHasCredits(true); }} />
+      )}
+
+      {/* v1.2 §B6 — Cancel discards everything typed so far, so confirm first */}
+      {showLeave && (
+        <LeaveRegistration
+          onLeave={() => setLocation("/marketplace")}
+          onContinue={() => setShowLeave(false)}
+        />
+      )}
     </div>
   );
 }
