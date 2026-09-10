@@ -11,7 +11,7 @@ import ListClaw from "./pages/ListClaw";
 import DeployWizard from "./pages/DeployWizard";
 import Plans from "./pages/Plans";
 // Task-first pages (RunTask / Tasks / TaskDetail) are parked — the product follows
-// the existing Console structure (Browse Agents / My Agents / Register & List).
+// the existing Console structure (Browse Agents / My Agents / Register Template).
 
 function Router() {
   return (

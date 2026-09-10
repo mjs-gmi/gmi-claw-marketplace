@@ -68,7 +68,7 @@ export interface Claw {
   // Retained data flag (agent runs on Claude models). No longer rendered in
   // the UI — kept for possible future use / filtering.
   builtWithAnthropic?: boolean;
-  // ── Optional listing fields, one-to-one with the Register & List form ──
+  // ── Optional listing fields, one-to-one with the List an Agent form ──
   logoUrl?: string;          // Logo (optional) — square ≥256px
   sampleImages?: string[];   // Sample Output (optional) — up to 5 PNG/JPG
   demoVideoUrl?: string;     // Demo Video URL (optional) — external
@@ -80,7 +80,72 @@ export interface Claw {
   //    as "Try demo". A clean, publishable template lists as "Deploy your own".
   templateHasSecrets?: boolean;      // template declares secret / env fields
   templateSecretRegistry?: boolean;  // template image lives in a private registry
+  // ── Browse-Agents detail drawer (1.3) ───────────────────────────────────
+  // The drawer shows more than the card: a chip line under the title, a one-line
+  // tagline, and a long-form "About this Agent" body. All optional — the
+  // helpers below derive a sensible default from the fields above when unset.
+  chips?: string[];        // "Discord · Agent · AI · LLM"
+  tagline?: string;        // one-liner under the header
+  about?: string;          // long-form markdown-ish body
+  defaultModel?: string;   // model shown on the card + drawer meta strip
 }
+
+// ─── Drawer helpers — derive display values so every agent renders a complete
+// drawer even when the optional listing fields above are unset.
+
+export const DEFAULT_MODEL = "DeepSeek-V4-Flash";
+
+export function isVerified(claw: Pick<Claw, "infrastructurePath">): boolean {
+  return claw.infrastructurePath === "gmi_ce_maas";
+}
+
+export function modelFor(claw: Pick<Claw, "defaultModel">): string {
+  return claw.defaultModel ?? DEFAULT_MODEL;
+}
+
+// Tags render as a chip line, so acronyms have to survive title-casing.
+const ACRONYMS = new Set(["ai", "llm", "api", "rag", "sdk", "seo", "geo", "pii", "phi", "etl", "sla", "ui", "cli"]);
+
+export function chipsFor(claw: Pick<Claw, "chips" | "tags">): string[] {
+  if (claw.chips?.length) return claw.chips;
+  return claw.tags.slice(0, 4).map((t) =>
+    t
+      .split("-")
+      .map((w) => (ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+      .join(" "),
+  );
+}
+
+export function taglineFor(claw: Pick<Claw, "tagline" | "description">): string {
+  if (claw.tagline) return claw.tagline;
+  // First sentence of the description reads as a tagline.
+  const first = claw.description.split(/(?<=\.)\s/)[0];
+  return first.length > 160 ? first.slice(0, 157) + "…" : first;
+}
+
+// Long-form body for the drawer's Overview tab. Publishers supply `about`;
+// otherwise we compose the same shape from the listing fields we do have.
+export function aboutFor(claw: Claw): string {
+  if (claw.about) return claw.about;
+  const model = modelFor(claw);
+  return [
+    claw.description,
+    "",
+    "What it does:",
+    ...claw.tags.slice(0, 3).map((t) => `• ${t.replace(/-/g, " ")}`),
+    `• Powered by ${model} via GMI MaaS`,
+    "",
+    "Agent Image URL:",
+    `ghcr.io/${claw.publisher.toLowerCase().replace(/[^a-z0-9]+/g, "-")}/${claw.id}:latest`,
+    "",
+    "---",
+    "",
+    "Before You Start",
+    "• GMI Cloud account: console.gmicloud.ai",
+    "• Credits on your account — instances bill while running",
+  ].join("\n");
+}
+
 
 export const ALL_CLAWS: Claw[] = [
   {

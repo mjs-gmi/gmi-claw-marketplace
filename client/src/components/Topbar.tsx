@@ -9,7 +9,7 @@ function usePageLabel(): string {
   if (location.startsWith("/marketplace/")) return "Agent Detail";
   if (location.startsWith("/marketplace")) return "Agent Marketplace";
   if (location.startsWith("/dashboard")) return "My Agents";
-  if (location.startsWith("/deploy")) return "Register & List";
+  if (location.startsWith("/deploy")) return "Register Template";
   if (location.startsWith("/list-claw")) return "List Agent";
   return "Home";
 }

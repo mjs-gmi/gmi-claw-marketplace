@@ -9,6 +9,7 @@ import { C as baseC, FONT, TYPE_COLOR } from "@/lib/tokens";
 import { PlanBadge } from "@/components/PlanUI";
 import { isPlanEligibleAgent, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
 import V2Badge from "@/components/V2Badge";
+import AgentDrawer from "@/components/AgentDrawer";
 
 // ─── Design tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const FONT_MONO = "'GeistMono', ui-monospace, 'SFMono-Regular', monospace";
@@ -23,9 +24,11 @@ const C = {
 // One real command: turns GMI Cloud into a provider inside an existing OpenClaw setup.
 const OPENCLAW_INSTALL_CMD = "openclaw plugins install clawhub:openclaw-gmicloud-provider";
 
-// "All" + the functional categories.
-type FilterKey = TypeLabel | "All";
-const ALL_TYPES: FilterKey[] = ["All", ...TYPE_LABELS];
+// v1.2 §A4 / v1.3 §A — "Recommended" leads (curation, verified first), the
+// functional categories follow, "All" closes the row. The README documented
+// this ordering; the code was still starting with "All".
+type FilterKey = "Recommended" | TypeLabel | "All";
+const ALL_TYPES: FilterKey[] = ["Recommended", ...TYPE_LABELS, "All"];
 
 // ─── Sort ───────────────────────────────────────────────────────────────────
 type SortKey = "featured" | "trending" | "mostused" | "updated" | "new";
@@ -50,6 +53,11 @@ function hashScore(id: string, salt: string): number {
 
 
 // ─── Icons (1.5-stroke lucide-style) ─────────────────────────────────────────
+const IconFlame = ({ size = 13 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 2c1.5 3.5-1 5-1 7a3 3 0 0 0 6 0c0-.7-.2-1.4-.5-2 2.2 1.6 3.5 4 3.5 6.5a8 8 0 1 1-16 0c0-4 2.5-7.5 6-9.5 1-.6 1.8-1.4 2-2z" />
+  </svg>
+);
 const IconSearch = ({ size = 14 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
@@ -188,7 +196,7 @@ function MiniAvatar({ publisher, color }: { publisher: string; color: string }) 
   );
 }
 
-function AgentCard({ claw }: { claw: Claw }) {
+function AgentCard({ claw, onOpen }: { claw: Claw; onOpen: (c: Claw) => void }) {
   const [, setLocation] = useLocation();
   const [hovered, setHovered] = useState(false);
   const typeColor = TYPE_COLOR[claw.typeLabel];
@@ -196,7 +204,13 @@ function AgentCard({ claw }: { claw: Claw }) {
 
   return (
     <div
-      onClick={() => setLocation(`/marketplace/${claw.id}`)}
+      // v1.3 §A1 — a card opens the detail drawer rather than navigating. The
+      // route still exists and still works; a modified click goes there so
+      // "open in a new tab" is not taken away.
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey) { setLocation(`/marketplace/${claw.id}`); return; }
+        onOpen(claw);
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -322,7 +336,7 @@ function PublisherHeroV2() {
             border: "none", padding: "10px 18px", borderRadius: 9, cursor: "pointer",
           }}
         >
-          Register an Agent <IconArrowRight />
+          Agent Registration <IconArrowRight />
         </button>
       </div>
     </div>
@@ -332,9 +346,24 @@ function PublisherHeroV2() {
 export default function Marketplace() {
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
-  const [activeType, setActiveType] = useState<FilterKey>("All");
+  // Lands on Recommended, matching the v1.3 shot — the curated view is the
+  // default entry, not the undifferentiated "All".
+  const [activeType, setActiveType] = useState<FilterKey>("Recommended");
   const [verifiedOnly, setVerifiedOnly] = useState(false);
   const [sortBy, setSortBy] = useState<SortKey>("featured");
+  // v1.3 §A — the card detail drawer. Null means closed.
+  const [openClaw, setOpenClaw] = useState<Claw | null>(null);
+
+  // v1.3 §A10 / §B2 — "Set up this Agent" hands the catalog entry to My Agents,
+  // which picks it up once and adds it as a private copy.
+  const setUpAgent = (claw: Claw) => {
+    try {
+      sessionStorage.setItem("gmi.setupAgent", JSON.stringify({ id: claw.id, name: claw.name }));
+    } catch {
+      /* storage unavailable — My Agents still opens, just without the handoff */
+    }
+    setLocation("/dashboard");
+  };
 
   const filtered = ALL_CLAWS
     .filter((c) => {
@@ -343,13 +372,17 @@ export default function Marketplace() {
         c.name.toLowerCase().includes(q) ||
         c.description.toLowerCase().includes(q) ||
         c.tags.some((t) => t.toLowerCase().includes(q));
+      // "Recommended" and "All" are not categories — they widen the set rather
+      // than narrow it. Recommended differs from All by ordering, below.
       const matchesType =
-        activeType === "All" || c.typeLabel === activeType;
+        activeType === "All" || activeType === "Recommended" || c.typeLabel === activeType;
       const matchesTrust = !verifiedOnly || c.infrastructurePath === "gmi_ce_maas";
       return matchesSearch && matchesType && matchesTrust;
     })
     .sort((a, b) => {
-      if (sortBy === "featured") {
+      // The Sort control is gone (v1.3 shot has no dropdown), so "Recommended"
+      // carries the curation: verified first, promoted pinned above it.
+      if (activeType === "Recommended" || sortBy === "featured") {
         // Promoted pinned first (clearly chipped), then verified, then organic.
         const ap = PROMOTED_IDS.has(a.id) ? 0 : 1;
         const bp = PROMOTED_IDS.has(b.id) ? 0 : 1;
@@ -371,84 +404,6 @@ export default function Marketplace() {
 
         {/* ── Publisher acquisition banner — v1.2 §A1 ──────────────────────── */}
         <PublisherHeroV2 />
-
-        {/* ── Hero ─────────────────────────────────────────────────────────── */}
-        <div style={{ padding: "24px 24px 0" }}>
-          <h1
-            style={{
-              fontFamily: FONT, fontSize: 34, fontWeight: 700, lineHeight: "40px",
-              color: C.fg, margin: 0, letterSpacing: "-0.02em",
-            }}
-          >
-            Browse Agents
-          </h1>
-          <p
-            style={{
-              fontFamily: FONT, fontSize: 14, fontWeight: 400, lineHeight: "20px",
-              color: C.muted, margin: "8px 0 0",
-            }}
-          >
-            AI Agents shipped by builders on GMI Cloud — install one, or register your own
-          </p>
-        </div>
-
-        {/* Coding Agent Plan — promotional strip (opt-in surface, not a nav destination) */}
-        <div style={{ padding: "16px 24px 0" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", background: "rgba(221,234,77,0.06)", border: "1px solid rgba(221,234,77,0.30)", borderRadius: 10, padding: "12px 16px" }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="#DDEA4D"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z" /></svg>
-              <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 700, color: C.fg }}>Coding Agent Plan</span>
-            </span>
-            <span style={{ fontFamily: FONT, fontSize: 13, color: C.muted, flex: "1 1 auto", minWidth: 200 }}>
-              Run agents on <span style={{ color: C.fg }}>Standard models nearly unlimited</span>, plus a monthly Premium Credits pool — from $9.99/mo.
-            </span>
-            <button onClick={() => setLocation("/plans")} style={{ flexShrink: 0, fontFamily: FONT, fontSize: 13, fontWeight: 700, color: "#0a0a0a", background: "#DDEA4D", border: "none", borderRadius: 8, padding: "8px 16px", cursor: "pointer" }}>
-              See plans →
-            </button>
-          </div>
-        </div>
-
-        {/* OpenClaw plugin banner — single horizontal row */}
-        <div style={{ padding: "20px 24px 0" }}>
-          <div
-            style={{
-              background: C.card,
-              border: `1px solid ${C.border}`,
-              borderRadius: 10,
-              padding: "10px 14px",
-              display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
-            }}
-          >
-            <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, color: C.fg, whiteSpace: "nowrap" }}>
-              On OpenClaw?
-            </span>
-            <code
-              style={{
-                fontFamily: FONT_MONO, fontSize: 13, color: C.fg,
-                background: "#0d0d0d",
-                border: `1px solid ${C.borderSoft}`,
-                padding: "6px 10px", borderRadius: 7,
-                whiteSpace: "nowrap", overflowX: "auto",
-                flex: "1 1 auto",
-                minWidth: 0,
-              }}
-            >
-              <span style={{ color: C.muted }}>$ </span>{OPENCLAW_INSTALL_CMD}
-            </code>
-            <CopyButton value={OPENCLAW_INSTALL_CMD} />
-            <button
-              onClick={() => setLocation("/deploy")}
-              style={{
-                fontFamily: FONT, fontSize: 13, fontWeight: 500,
-                background: "transparent", color: C.lime,
-                border: "none", padding: "2px 4px", cursor: "pointer",
-                whiteSpace: "nowrap",
-              }}
-            >
-              Not on OpenClaw? Register →
-            </button>
-          </div>
-        </div>
 
         {/* ── Catalog header ─────────────────────────────────────────────── */}
         <section id="catalog" style={{ padding: "28px 24px 8px" }}>
@@ -475,77 +430,34 @@ export default function Marketplace() {
               </p>
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
-                <span style={{ position: "absolute", left: 10, color: C.muted, display: "flex" }}>
-                  <IconSearch size={14} />
-                </span>
-                <input
-                  type="text"
-                  placeholder="Search Agents…"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  style={{
-                    width: 260,
-                    background: C.pillBg,
-                    border: `1px solid ${C.border}`,
-                    color: C.fg,
-                    fontFamily: FONT, fontSize: 14, fontWeight: 400, lineHeight: "20px",
-                    padding: "8px 32px 8px 32px",
-                    borderRadius: 8,
-                    outline: "none",
-                  }}
-                />
-                {search && (
-                  <button
-                    onClick={() => setSearch("")}
-                    style={{ position: "absolute", right: 8, color: C.muted, background: "none", border: "none", cursor: "pointer", display: "flex" }}
-                  >
-                    <IconX />
-                  </button>
-                )}
-              </div>
-              <button
-                onClick={() => setLocation("/deploy")}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
-                  background: C.lime, color: C.limeText,
-                  border: "none",
-                  padding: "8px 14px",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                }}
-              >
-                <IconPlus /> Register an Agent
-              </button>
-            </div>
           </div>
 
           {/* Category pills + Verified toggle */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {/* One tray, active tab reads as a darker pill — matches the v1.3 shot. */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 2, background: "rgba(255,255,255,0.035)", borderRadius: 6, padding: 3 }}>
               {ALL_TYPES.map((type) => {
                 const isActive = activeType === type;
-
                 return (
                   <button
                     key={type}
                     onClick={() => setActiveType(type)}
                     title={isPlanEligibleAgent(type) ? `${CODING_AGENT_PLAN.name} eligible` : undefined}
                     style={{
-                      display: "inline-flex", alignItems: "center", gap: 5,
-                      fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px",
-                      background: isActive ? "rgba(255,255,255,0.06)" : "transparent",
+                      display: "inline-flex", alignItems: "center", gap: 6,
+                      fontFamily: FONT, fontSize: 13.5, fontWeight: 500, lineHeight: "20px",
+                      background: isActive ? "#0d0d0d" : "transparent",
                       color: isActive ? C.fg : C.muted,
-                      border: "1px solid transparent",
-                      padding: "6px 12px",
-                      borderRadius: 6,
+                      border: "none",
+                      padding: "7px 14px",
+                      borderRadius: 5,
                       cursor: "pointer",
                       transition: "background .15s ease, color .15s ease",
                     }}
                   >
+                    {type === "Recommended" && <IconFlame />}
                     {type}
+                    {type === "Recommended" && <V2Badge title="New in Agentbox v1.3 — curated default tab" />}
                     {isPlanEligibleAgent(type) && (
                       <svg width="12" height="12" viewBox="0 0 24 24" fill={C.lime} aria-hidden="true" style={{ flexShrink: 0 }}><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5z" /></svg>
                     )}
@@ -555,64 +467,29 @@ export default function Marketplace() {
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 7, userSelect: "none" }}>
-              <span style={{ fontFamily: FONT, fontSize: 13, color: C.muted }}>Sort</span>
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as SortKey)}
-                style={{
-                  fontFamily: FONT, fontSize: 13, fontWeight: 500, color: C.fg,
-                  background: "rgba(255,255,255,0.05)", border: `1px solid ${C.border}`,
-                  borderRadius: 6, padding: "5px 8px", cursor: "pointer", outline: "none",
-                }}
-              >
-                {SORT_OPTIONS.map((o) => (
-                  <option key={o.key} value={o.key}>{o.label}</option>
-                ))}
-              </select>
-            </label>
             <label
               onClick={() => setVerifiedOnly((v) => !v)}
               style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}
             >
+              {/* v1.3 §A12 — a square checkbox, not a switch. */}
               <span
                 style={{
                   display: "inline-flex", alignItems: "center", justifyContent: "center",
-                  width: 18, height: 18, borderRadius: 999,
-                  background: verifiedOnly ? "#7dd3fc" : "transparent",
-                  border: `1.5px solid #7dd3fc`,
-                  color: verifiedOnly ? "#0a0a0a" : "#7dd3fc",
-                  transition: "background .15s ease",
+                  width: 16, height: 16, borderRadius: 3,
+                  background: verifiedOnly ? C.lime : "transparent",
+                  border: `1.5px solid ${verifiedOnly ? C.lime : "#5a5a5a"}`,
+                  color: C.limeText,
+                  transition: "background .15s ease, border-color .15s ease",
                 }}
               >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M20 6 9 17l-5-5" />
-                </svg>
+                {verifiedOnly && (
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                )}
               </span>
-              <span style={{ fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px", color: "#7dd3fc" }}>
-                Verified Only
-              </span>
-              <span
-                style={{
-                  width: 32, height: 18,
-                  background: verifiedOnly ? "#7dd3fc" : C.border,
-                  borderRadius: 999,
-                  position: "relative",
-                  transition: "background .15s ease",
-                  marginLeft: 4,
-                }}
-              >
-                <span
-                  style={{
-                    position: "absolute",
-                    top: 2,
-                    left: verifiedOnly ? 16 : 2,
-                    width: 14, height: 14,
-                    background: verifiedOnly ? "#0a0a0a" : "#fafafa",
-                    borderRadius: 999,
-                    transition: "left .15s ease",
-                  }}
-                />
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 14, fontWeight: 500, lineHeight: "20px", color: C.fg }}>
+                Verified Only <V2Badge title="New in Agentbox v1.2 §A3" />
               </span>
             </label>
             </div>
@@ -648,7 +525,7 @@ export default function Marketplace() {
                 }}
               >
                 {filtered.map((claw) => (
-                  <AgentCard key={claw.id} claw={claw} />
+                  <AgentCard key={claw.id} claw={claw} onOpen={setOpenClaw} />
                 ))}
               </div>
             </>
@@ -657,6 +534,9 @@ export default function Marketplace() {
 
         <Footer />
       </div>
+
+      {/* v1.3 §A — card detail */}
+      <AgentDrawer claw={openClaw} onClose={() => setOpenClaw(null)} onSetUp={setUpAgent} />
     </div>
   );
 }
