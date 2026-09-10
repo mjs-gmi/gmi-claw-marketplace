@@ -112,5 +112,9 @@ temp/
 client/public/__manus__/version.json
 .vercel
 
-# local Claude Code / editor config
-.claude/
+# local Claude Code / editor config — everything inside .claude/ except the
+# project skills, which the team shares. Note this excludes the *contents*
+# (.claude/*) rather than the directory: git never descends into an excluded
+# directory, so a `!` rule under `.claude/` would never match.
+.claude/*
+!.claude/skills/
