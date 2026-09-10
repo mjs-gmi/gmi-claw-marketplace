@@ -15,6 +15,8 @@ import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
 import V2Badge from "@/components/V2Badge";
 import TerminalV2 from "@/components/TerminalV2";
 import NoApiBadge, { NoApiNote, NO_API_REASON } from "@/components/NoApiBadge";
+import V21Badge, { V21Note } from "@/components/V21Badge";
+import BuildStatus, { type BuildState, type BuildView } from "@/components/BuildStatus";
 import SdkPlaygroundV2 from "@/components/SdkPlaygroundV2";
 import OpenQuestionBadge from "@/components/OpenQuestionBadge";
 import { REVIEW_MODE } from "@/lib/reviewMode";
@@ -23,6 +25,12 @@ import {
   type PublishRow, type ReviewStatus, type ListingActionHandlers,
 } from "@/components/PublishStatusV2";
 import { discountPriceString, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
+import AgentDrawer from "@/components/AgentDrawer";
+import {
+  CostNotice, InsufficientCredits, TopUpCredits, RedeemCoupon,
+  hasAcknowledged, acknowledge,
+} from "@/components/BillingDialogs";
+import { ALL_CLAWS, TYPE_LABELS, type Claw, type TypeLabel } from "@/lib/clawData";
 
 // ─── Tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const C = {
@@ -34,37 +42,65 @@ const C = {
 };
 
 // ─── Mock data ────────────────────────────────────────────────────────────
-// Status enum matches PRD F-03 swagger: pending · creating · running · stopping · stopped · error · deleted
-// "idle" is a derived agent-level rollup (no instances), not a task status.
-// Runtime 2.0 lifecycle states (PRD §4.1). "stopping"/"stopped" retained for
-// legacy log helpers; the R1 lifecycle uses suspend/resume/delete semantics.
+// ─── Sandbox state ──────────────────────────────────────────────────────────
+// The contract (SandboxControlState) reports exactly SIX values:
+//
+//     provisioning · running · paused · checkpointing · updating · failed
+//
+// Two things it says that the prototype used to contradict:
+//   · internal `creating` is expressed externally as `provisioning`
+//   · `deleting` is NOT one of them — once a delete is accepted the sandbox is
+//     unqueryable (detail returns 404); the state only appears in the delete
+//     call's own acknowledgement.
+//   · `paused` is only ever returned by an IDC that offers suspend. Runloop
+//     does not, so it never appears there — which is why Pause is a 2.1 item.
+//
+// `TaskStatus` keeps more members than that because the mock drives its own
+// transitions (a delete has to animate somehow). Everything the user READS goes
+// through statusLabel, which collapses them onto the six contract words.
+type SandboxControlState =
+  | "provisioning" | "running" | "paused" | "checkpointing" | "updating" | "failed";
+
 type TaskStatus =
   | "pending" | "creating" | "running"
   | "suspending" | "suspended" | "resuming"
   | "deleting" | "deleted" | "error"
-  | "stopping" | "stopped";
+  | "stopping" | "stopped"
+  | "checkpointing" | "updating";
 type AgentStatus = TaskStatus | "idle";
+
+/** Internal transition → the contract's external state. */
+function controlState(status: AgentStatus): SandboxControlState | "deleted" | "idle" {
+  switch (status) {
+    case "pending":
+    case "creating":      return "provisioning";
+    case "running":       return "running";
+    case "suspended":
+    case "stopped":       return "paused";
+    case "suspending":
+    case "resuming":
+    case "stopping":      return "updating";   // in flight; not a state of its own
+    case "checkpointing": return "checkpointing";
+    case "updating":      return "updating";
+    case "error":         return "failed";
+    // Not contract states — local to the delete animation and the agent rollup.
+    case "deleting":
+    case "deleted":       return "deleted";
+    case "idle":          return "idle";
+  }
+}
 
 // Normalized Console label mapping (PRD §4.1 — API states are authoritative,
 // Console labels are presentation only). Backend keeps suspend/suspended field
 // names; the UI presents them as Pause/Paused (Runtime 2.0 PRD v2.3).
+// The label is the contract's own word, so support, the API and the customer all
+// name the same thing. `deleting`/`deleted` are the two the contract does not
+// have, and they are transient by construction.
 function statusLabel(status: AgentStatus): string {
-  switch (status) {
-    case "pending":
-    case "creating":   return "creating";
-    case "running":    return "running";
-    case "suspending": return "pausing";
-    case "suspended":  return "paused";
-    case "resuming":   return "resuming";
-    case "deleting":   return "deleting";
-    case "deleted":    return "deleted";
-    // API state is `failed` (PRD §4.1). Console label matches the API word so
-    // support and customers name the same thing.
-    case "error":      return "failed";
-    case "idle":       return "Idle";
-    case "stopping":   return "pausing";
-    case "stopped":    return "paused";
-  }
+  const s = controlState(status);
+  if (s === "deleted") return status === "deleting" ? "deleting" : "deleted";
+  if (s === "idle") return "Idle";
+  return s;
 }
 
 // Per PRD M4: a registered agent lives in one of four listing states until human
@@ -83,7 +119,16 @@ interface MyAgent {
   maasKey?: string;          // populated for connect-mode agents (synced from Register flow)
   accessUrl?: string;        // populated for connect-mode agents
   registeredAt?: string;
-  listingState?: ListingState;  // M4 state machine — default "draft"
+  listingState?: ListingState;
+  /**
+   * Copied from the catalog via "Set up this Agent" and not configured yet.
+   * The drawer promises "Continue in My Agents to configure settings and
+   * deploy" — this flag is what makes that promise land somewhere instead of
+   * dropping the user in front of an unexplained empty agent.
+   */
+  needsSetup?: boolean;
+  /** Where it was copied from, so the first-run panel can name it. */
+  copiedFrom?: string;  // M4 state machine — default "draft"
   endpoints?: AgentEndpoint[];  // Register → Networking endpoint definitions
   region?: string;              // Register → region id (read-only in runtime)
   tier?: string;                // Register → compute tier id (read-only in runtime)
@@ -239,6 +284,15 @@ function endpointState(inst: Instance, ep: AgentEndpoint): EndpointState {
   return "available";
 }
 
+// v1.3 §C3 — the two Specs the design draws in the Launch panel.
+// NOTE: POST /sandboxes does not accept a spec; it comes from the Template's
+// `resources`. Drawn here because the v1.3 set draws it and this is a
+// prototype — the control carries a NO API marker so the gap is visible.
+const LAUNCH_SPECS = [
+  { id: "small",  name: "Small",  pricePerHr: 0.0475, spec: "2 Core CPU · 4 GiB Memory · 10 GiB OS Storage (Ephemeral) · 30 GiB Data Storage" },
+  { id: "xsmall", name: "XSmall", pricePerHr: 0.0475, spec: "2 Core CPU · 4 GiB Memory · 10 GiB OS Storage (Ephemeral) · 30 GiB Data Storage" },
+] as const;
+
 // Region id → readable IDC label (mirrors Register's REGIONS). Falls back to the id.
 const REGION_LABELS: Record<string, string> = {
   "us-ia-iowa-1": "IOWA IDC-1",
@@ -352,7 +406,21 @@ interface Instance {
   endpointUrl?: string;       // populated when status=running (per swagger F-03)
   config?: InstanceConfig;    // per-task override (PRD F-04 / F-09 — empty = template defaults)
   // ── Runtime 2.0 lifecycle (PRD §2) ──────────────────────────────────────
-  maxActive?: string;             // F-02 Maximum active time: "1h"|"6h"|"24h"|"48h"|"off"
+  /**
+   * THE authoritative expiry, as the control plane reports it.
+   *
+   * Swagger is explicit that the caller must not derive this: POST
+   * /sandboxes/{id}/timeout says "调用方不能从自己的请求参数推出生效值，以响应里的
+   * new_end_at 为准" — a `timeout` ≤ 0 is silently replaced with 300s, so the
+   * number you sent is not the number in force. Every countdown reads this.
+   */
+  endAt?: string;
+  /**
+   * What was asked for at create, kept for display only ("1h", "6h", …).
+   * It is NOT the clock: /timeout re-bases from *now*, so after one extend the
+   * original duration no longer describes when this sandbox dies.
+   */
+  maxActive?: string;
   maxRuntimeAction?: "suspend" | "delete"; // F-02 default action at the limit
   lifecycleStartedAt?: string;    // anchor for active-time-remaining countdown
   suspendedAt?: string;           // F-05 retention clock start (set on entering suspended)
@@ -387,6 +455,13 @@ const _seedDaysAgo = (n: number): string => {
   d.setDate(d.getDate() - n);
   return fmtDate(d);
 };
+// The control plane hands back an absolute expiry; seeds mimic that rather than
+// storing a duration the UI would have to add up itself.
+const _seedMinsIn = (n: number): string => {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() + n);
+  return fmtDate(d);
+};
 const _seedMinsAgo = (n: number): string => {
   const d = new Date();
   d.setMinutes(d.getMinutes() - n);
@@ -400,6 +475,7 @@ const INITIAL_INSTANCES: Instance[] = [
     created: _seedDaysAgo(5),
     endpointUrl: endpointFor("8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36"),
     maxActive: "1h",
+    endAt: _seedMinsIn(7),      // near-expiry state §五.1 calls for
     maxRuntimeAction: "suspend",
     lifecycleStartedAt: _seedMinsAgo(53), // ~7 min left — reaches the near-expiry state §五.1 calls for
     // §4.7 — how an orchestrator maps this Runtime back to its own tenant/job.
@@ -417,7 +493,8 @@ const INITIAL_INSTANCES: Instance[] = [
     status: "running",
     created: _seedDaysAgo(6),
     endpointUrl: endpointFor("1e1bd452-9a3c-4b8e-bf21-7d40c9e6095a"),
-    maxActive: "off",
+    maxActive: "2h",
+    endAt: _seedMinsIn(96),     // the long-lived one
     maxRuntimeAction: "suspend",
     config: {
       ...TEMPLATE_DEFAULT_CONFIG,
@@ -431,6 +508,7 @@ const INITIAL_INSTANCES: Instance[] = [
     status: "suspended",
     created: _seedDaysAgo(20),
     maxActive: "1h",
+    endAt: _seedMinsIn(-8),     // reaper picks this up on load
     maxRuntimeAction: "suspend",
     suspendedAt: _seedDaysAgo(28), // 30-day retention → ~2 days left (danger tier)
     retentionDays: 30,
@@ -442,6 +520,7 @@ const INITIAL_INSTANCES: Instance[] = [
     status: "error",
     created: _seedMinsAgo(6),
     maxActive: "1h",
+    endAt: _seedMinsIn(52),
     maxRuntimeAction: "suspend",
     lastError: "Initialization deadline exceeded — startup probe never became ready.",
   },
@@ -453,6 +532,7 @@ const INITIAL_INSTANCES: Instance[] = [
     created: _seedMinsAgo(3),
     endpointUrl: endpointFor("b2d9f6a3-8e45-4c01-9f27-0a3c4d7b1e66"),
     maxActive: "6h",
+    endAt: _seedMinsIn(357),
     maxRuntimeAction: "suspend",
     lifecycleStartedAt: _seedMinsAgo(3),
     unconfirmed: true,
@@ -460,23 +540,6 @@ const INITIAL_INSTANCES: Instance[] = [
   },
 ];
 
-// Mock log tail (F-03 — `GET /tasks/{id}/logs`); deterministic from instance id
-function mockLogsFor(inst: Instance): string[] {
-  const t = inst.created.slice(11);
-  const lines = [
-    `[${t}] container_hub: pulling image…`,
-    `[${t}] container_hub: image pulled (sha256:${inst.id.slice(-12)})`,
-    `[${t}] runtime: starting container`,
-    `[${t}] env: GMI_MAAS_API_KEY injected (auto)`,
-    `[${t}] env: GMI_MAAS_BASE_URL = https://api.gmi-serving.com`,
-    `[${t}] agent: ready · listening on :8080`,
-  ];
-  if (inst.status === "creating") return lines.slice(0, 3);
-  if (inst.status === "error")    return [...lines.slice(0, 4), `[${t}] error: liveness probe failed (exit 1)`];
-  if (inst.status === "stopping" || inst.status === "stopped")
-    return [...lines, `[${t}] runtime: SIGTERM received · graceful shutdown`];
-  return lines;
-}
 
 function fmtDate(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -514,7 +577,9 @@ function durationMins(v?: string): number {
 }
 // Human label for a duration token, for policy helper text.
 function durationLabel(v?: string): string {
-  if (!v || v === "off") return "No automatic limit";
+  // There is no "no limit". Omitting `timeout` yields 300 seconds — the
+  // SHORTEST life, not an unbounded one. Never render this as "unlimited".
+  if (!v || v === "off") return "300 seconds (API default when timeout is omitted)";
   const m = /^(\d+)\s*(min|h)$/.exec(v.trim());
   if (!m) return v;
   const n = Number(m[1]);
@@ -552,20 +617,33 @@ interface LifecycleClock {
   pct: number;
 }
 function lifecycleClock(inst: Instance): LifecycleClock {
-  const total = durationMins(inst.maxActive);
-  if (total === 0) return { unlimited: true, totalMins: 0, usedMins: 0, leftMins: 0, pct: 0 };
-  const start = inst.lifecycleStartedAt ? new Date(inst.lifecycleStartedAt.replace(" ", "T")).getTime() : Date.now();
-  const used = Math.max(0, Math.floor((Date.now() - start) / 60000));
-  const left = Math.max(0, total - used);
+  // `unlimited` can no longer be produced by any control: the API has no
+  // "no limit" — omitting `timeout` yields 300 seconds, the SHORTEST life, not
+  // an unbounded one. The flag stays only to render legacy records.
+  if (!inst.endAt) return { unlimited: true, totalMins: 0, usedMins: 0, leftMins: 0, pct: 0 };
+  const end = Date.parse(inst.endAt.replace(" ", "T"));
+  if (Number.isNaN(end)) return { unlimited: true, totalMins: 0, usedMins: 0, leftMins: 0, pct: 0 };
+  const start = inst.lifecycleStartedAt
+    ? Date.parse(inst.lifecycleStartedAt.replace(" ", "T"))
+    : Date.parse(inst.created.replace(" ", "T"));
+  const total = Math.max(1, Math.round((end - start) / 60000));
+  const left = Math.max(0, Math.ceil((end - Date.now()) / 60000));
+  const used = Math.max(0, total - left);
   return { unlimited: false, totalMins: total, usedMins: used, leftMins: left, pct: Math.min(100, (used / total) * 100) };
 }
 
+/** The control plane's own answer: now + seconds, as /timeout and /connect return it. */
+function endAtFromNow(seconds: number): string {
+  // Mirrors the server rule — `timeout` ≤ 0 becomes 300s. The UI must never
+  // assume the number it sent is the number in force.
+  const secs = seconds > 0 ? seconds : 300;
+  return fmtDate(new Date(Date.now() + secs * 1000));
+}
+
 function activeRemaining(inst: Instance): string {
-  const total = durationMins(inst.maxActive);
-  if (total === 0) return "No automatic limit";
-  const start = inst.lifecycleStartedAt ? new Date(inst.lifecycleStartedAt.replace(" ", "T")).getTime() : Date.now();
-  const elapsed = Math.floor((Date.now() - start) / 60000);
-  return `${remainingLabel(total - elapsed)} active`;
+  const clock = lifecycleClock(inst);
+  if (clock.unlimited) return "Expiry unknown";
+  return `${remainingLabel(clock.leftMins)} active`;
 }
 
 // PRD v2.3 — Paused instances are NEVER auto-deleted. They persist until the user
@@ -754,6 +832,64 @@ function prepColor(p: RuntimePrep): string {
   return p === "ready" ? C.ok : p === "failed" ? C.err : p === "stale" ? "#fb923c" : C.warn;
 }
 // Launch gate (F-01): image valid AND runtime prepared.
+// ─── RuntimeImage → BuildStatus's view object ───────────────────────────────
+// BuildStatus does not know what a RuntimeImage is, and should not: it renders
+// a build, wherever that build came from. The mapping lives here.
+//
+// Open item (see docs/frontend/build-status-design-record.md): the prototype
+// derives build state from two orthogonal fields, `validation` and
+// `preparation`, while the contract returns ONE state with five values. The two
+// most important of those — `error` (your template is wrong) and `failed` (the
+// build system broke) — were previously collapsed into a single "Build failed",
+// which sends the user down the wrong path half the time. This mapping keeps
+// them apart; converging the underlying fields is a larger change.
+function buildStateFor(img: RuntimeImage): BuildState {
+  if (isLaunchable(img)) return "ready";
+  // The user's template is at fault — a step failed, or the image cannot run here.
+  if (img.validation === "incompatible" || img.validation === "failed") return "error";
+  // Our builder is at fault.
+  if (img.preparation === "failed") return "failed";
+  if (img.preparation === "preparing" || img.validation === "validating") return "building";
+  return "waiting";
+}
+
+const BUILD_HINT: Partial<Record<BuildState, string>> = {
+  error: "Check the failing step below. If it is a package install, add the registry to the egress allowlist under Register → Networking, then rebuild.",
+  failed: "The build host dropped mid-run. Nothing in your template caused this — retry the build, and escalate if it repeats.",
+};
+
+function buildViewFor(img: RuntimeImage): BuildView {
+  const state = buildStateFor(img);
+  const head = [
+    `#1 [internal] load build definition`,
+    `#1 DONE 0.2s`,
+    `#2 [1/3] FROM ${img.url}:${img.tag}`,
+    `#2 DONE 3.1s`,
+    `#3 [2/3] RUN apt-get update`,
+    `#3 DONE 11.8s`,
+  ];
+  const log =
+    state === "waiting" ? ""
+    : state === "building" ? head.slice(0, 4).join("\n")
+    : state === "error"
+      ? [...head, "#4 [3/3] RUN pip install -r requirements.txt",
+         "WARNING: pypi.org is not in the egress allowlist",
+         "ERROR: Could not satisfy dependency torch==2.4.1",
+         "#4 ERROR: process did not complete successfully: exit code 1"].join("\n")
+    : state === "failed"
+      ? [...head.slice(0, 4), "#3 [2/3] RUN npm ci",
+         "builder: lost connection to build host after 41s"].join("\n")
+    : [...head, "#4 [3/3] RUN pip install -r requirements.txt", "#4 DONE 24.1s",
+       "#5 exporting layers", "#5 DONE 2.9s", "build succeeded"].join("\n");
+
+  return {
+    state,
+    log,
+    durationSec: state === "building" ? 42 : undefined,
+    hint: img.compatibilityIssue ?? BUILD_HINT[state],
+  };
+}
+
 function isLaunchable(img?: RuntimeImage): boolean {
   return img?.validation === "valid" && img?.preparation === "ready";
 }
@@ -969,21 +1105,21 @@ function PillSegmented<T extends string>({
   );
 }
 
+// Colour keys off the contract state, not the internal transition, so the same
+// external state can never be two colours in two places.
+const STATE_COLOR: Record<SandboxControlState | "deleted" | "idle", string> = {
+  provisioning:  "#60a5fa",   // blue — preparing, not usable yet
+  running:       C.ok,
+  paused:        C.warn,
+  checkpointing: "#60a5fa",
+  updating:      "#60a5fa",
+  failed:        C.err,
+  deleted:       "#525252",
+  idle:          "#737373",
+};
+
 function statusDot(status: AgentStatus): string {
-  switch (status) {
-    case "running":    return C.ok;       // green
-    case "error":      return C.err;      // red
-    case "pending":    return "#a3a3a3";  // neutral
-    case "creating":   return "#fbbf24";  // amber
-    case "suspending": return "#fbbf24";  // amber (transitioning)
-    case "resuming":   return "#fbbf24";  // amber (transitioning)
-    case "suspended":  return "#60a5fa";  // blue — compute stopped, disk retained
-    case "deleting":   return "#fb923c";  // orange
-    case "stopping":   return "#fb923c";  // orange
-    case "stopped":    return "#737373";  // grey
-    case "deleted":    return "#525252";  // darker grey
-    case "idle":       return "#737373";
-  }
+  return STATE_COLOR[controlState(status)];
 }
 
 // ─── NEW feature badge — small lime pill marking Runtime 2.0 additions ──────
@@ -1464,543 +1600,10 @@ function stateHistory(inst: Instance): { at: string; label: string; tone?: "err"
   if (inst.status === "deleted") out.push({ at: fmtNow(), label: "deleted — release confirmed, metering stopped, final usage emitted" });
   return out;
 }
-function LogsPane({ inst }: { inst: Instance }) {
-  const lines = mockLogsFor(inst);
-  const history = stateHistory(inst);
-  return (
-    <>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-          Logs <ReleaseBadge r="R0" /> · GET /runtimes/{midId(inst.id)}/logs
-        </span>
-        <CopyButton value={lines.join("\n")} />
-      </div>
-      <pre
-        style={{
-          margin: 0,
-          fontFamily: "'GeistMono', monospace", fontSize: 12, lineHeight: "20px",
-          color: C.fg,
-          whiteSpace: "pre",
-          overflowX: "auto",
-          background: "rgba(255,255,255,0.02)",
-          border: `1px solid ${C.borderSoft}`,
-          borderRadius: 6,
-          padding: "10px 12px",
-        }}
-      >
-        {lines.map((line) => (
-          <div key={line} style={{ color: line.includes("error") ? "#fca5a5" : line.includes("env:") ? C.muted : C.fg }}>
-            {line}
-          </div>
-        ))}
-      </pre>
 
-      {/* State-change history — the third thing the R0 Logs gate requires */}
-      <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 5 }}>
-        <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-          State history
-        </span>
-        {history.map((h, i) => (
-          <div key={`${h.label}-${i}`} style={{ display: "flex", gap: 8, alignItems: "baseline", fontFamily: FONT, fontSize: 11.5, lineHeight: "16px" }}>
-            <span style={{ fontFamily: MONO, fontSize: 11, color: C.borderSoft, flexShrink: 0 }}>{h.at.slice(5, 16)}</span>
-            <span style={{ color: h.tone === "err" ? "#fca5a5" : h.tone === "warn" ? C.warn : C.fg }}>{h.label}</span>
-          </div>
-        ))}
-        <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-          Logs, details, and this history stay readable in every state — including after Delete, for the retention period.
-        </span>
-      </div>
-    </>
-  );
-}
 
-// ─── F-02 Command execution ─────────────────────────────────────────────────
-// Mock provider behavior for one exec. Mirrors the field set fixed in the PRD:
-// out = execution_id, status, exit_code, stdout, stderr, stdout_truncated,
-// stderr_truncated, termination_reason.
-// "cancelling" is a UI-only waypoint: POST /executions/{id}/cancel is accepted,
-// then the execution settles into cancelled — or, if the process finished first,
-// into whatever it actually became. "cancel_failed" keeps that visible instead
-// of leaving the button spinning.
-type ExecStatus = "running" | "cancelling" | "cancelled" | "cancel_failed" | "succeeded" | "failed" | "timed_out";
-interface Execution {
-  id: string;
-  command: string;
-  status: ExecStatus;
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-  stdoutTruncated: boolean;
-  stderrTruncated: boolean;
-  terminationReason?: string;
-  /** Advanced fields sent with the run, echoed back on the result. */
-  cwd: string;
-  timeoutSeconds: number;
-  /** Wall-clock ms; live while running, frozen once it settles. */
-  startedAt: number;
-  elapsedMs: number;
-}
-const EXEC_STATUS_COLOR: Record<ExecStatus, string> = {
-  running: "#fbbf24", cancelling: "#fbbf24", cancelled: "#737373", cancel_failed: C.err,
-  succeeded: C.ok, failed: C.err, timed_out: "#fb923c",
-};
-function newExecutionId(): string {
-  const r = () => Math.random().toString(16).slice(2, 8);
-  return `exec_${r()}${r()}`;
-}
-// A submitted run starts in `running` with no result yet — the real call only
-// returns an execution_id when wait=false, and even wait=true can outlive the
-// wait window. `mockExecOutcome` is what it settles into.
-function mockExecStart(cmd: string, cwd: string, timeoutSeconds: number): Execution {
-  return {
-    id: newExecutionId(), command: cmd.trim(), status: "running", exitCode: null,
-    stdout: "", stderr: "", stdoutTruncated: false, stderrTruncated: false,
-    cwd, timeoutSeconds, startedAt: Date.now(), elapsedMs: 0,
-  };
-}
 
-// How long the mock pretends each command takes, so the running state is
-// actually observable and cancel has something to interrupt.
-function mockExecDurationMs(cmd: string): number {
-  const c = cmd.trim();
-  if (/\bsleep\b|\btrain\b/.test(c)) return 60_000;          // long enough to cancel
-  if (/\bfind\b|\bdump\b|\byes\b/.test(c)) return 4_200;
-  if (c.startsWith("python") || c.startsWith("node") || c.startsWith("./")) return 2_600;
-  return 700;
-}
 
-function mockExecOutcome(cmd: string, inst: Instance): Partial<Execution> {
-  const c = cmd.trim();
-  const base = { stderr: "", stdoutTruncated: false, stderrTruncated: false };
-  // execution_timeout is server-side: it kills the process group and returns
-  // timed_out with partial output. The Runtime stays Running (rule 4).
-  if (/\bsleep\b|\btrain\b/.test(c)) {
-    return { ...base, status: "timed_out", exitCode: null, stdout: "step 1/50 …\nstep 2/50 …", stderr: "", terminationReason: "execution_timeout reached — process group killed. The Sandbox is unaffected and nothing was retried for you." };
-  }
-  if (/\bfind\b|\bdump\b|\byes\b/.test(c)) {
-    return { ...base, status: "succeeded", exitCode: 0, stdout: "…\n(1.9 MB of output)", stdoutTruncated: true };
-  }
-  if (c === "ls") return { ...base, status: "succeeded", exitCode: 0, stdout: "Dockerfile  README.md  package.json  src/  bin/  input/  output/" };
-  if (c === "pwd") return { ...base, status: "succeeded", exitCode: 0, stdout: "/app" };
-  if (c === "ps") return { ...base, status: "succeeded", exitCode: 0, stdout: "PID   COMMAND\n  1   node server.js\n 27   sh -c ps" };
-  // Rule 9 — platform-injected secret values are exact-match redacted from
-  // output, logs, and audit. Only the platform's own values are covered.
-  if (c === "env") {
-    return { ...base, status: "succeeded", exitCode: 0, stdout: `GMI_MAAS_API_KEY=[redacted]\nGMI_MAAS_BASE_URL=https://api.gmi-serving.com\nGMI_MODEL_ID=${inst.config?.model ?? FEATURED_MODEL.id}\nPORT=8080` };
-  }
-  if (c.startsWith("cat ")) return { ...base, status: "succeeded", exitCode: 0, stdout: `# ${c.slice(4)}\n(mock contents)` };
-  if (c.startsWith("python") || c.startsWith("node") || c.startsWith("./")) {
-    return { ...base, status: "succeeded", exitCode: 0, stdout: "wrote /app/output/result.json (3 records)" };
-  }
-  // Rule 2 — a non-zero exit is a failed command, not a failed API call.
-  return { ...base, status: "failed", exitCode: 127, stdout: "", stderr: `sh: command not found: ${c.split(" ")[0]}` };
-}
-
-// Cancel is accepted, not instant. A command that was already finishing wins.
-function mockCancelSettles(cmd: string): "cancelled" | "cancel_failed" {
-  return /\bdump\b/.test(cmd) ? "cancel_failed" : "cancelled";
-}
-
-function execDurationLabel(ms: number): string {
-  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
-}
-
-// The headline for a settled run: result first, output second (§B).
-function execResultLine(ex: Execution): { text: string; color: string } {
-  const d = execDurationLabel(ex.elapsedMs);
-  switch (ex.status) {
-    case "succeeded":     return { text: `exit ${ex.exitCode} · ${d}`, color: C.ok };
-    case "failed":        return { text: `exit ${ex.exitCode} · ${d}`, color: C.err };
-    case "timed_out":     return { text: `timed out after ${ex.timeoutSeconds}s · ${d}`, color: "#fb923c" };
-    case "cancelled":     return { text: `cancelled · ${d}`, color: "#a3a3a3" };
-    case "cancel_failed": return { text: `cancel failed · still ${d}`, color: C.err };
-    case "cancelling":    return { text: `cancelling… · ${d}`, color: C.warn };
-    case "running":       return { text: `running · ${d}`, color: C.warn };
-  }
-}
-
-// The exec call for whatever is in the form right now. Daytona's Playground
-// generates a snippet beside the operation you are configuring; that idea is
-// worth having without building a separate Playground for it — the command you
-// just ran is the one you want to paste into your own code.
-function execSnippet(cmd: string, cwd: string, timeoutSeconds: number, lang: "python" | "typescript" | "curl"): string {
-  const c = cmd.trim() || "python main.py";
-  if (lang === "python") {
-    return `run = sandbox.exec(\n    "${c}",\n    cwd="${cwd}",\n    timeout=${timeoutSeconds},\n)\nprint(run.exit_code, run.stdout)`;
-  }
-  if (lang === "typescript") {
-    return `const run = await sandbox.exec("${c}", {\n  cwd: "${cwd}",\n  timeout: ${timeoutSeconds},\n});\nconsole.log(run.exitCode, run.stdout);`;
-  }
-  return `curl -sS -X POST "$DP_BASE/executions?wait=true&wait_timeout_seconds=25" \\\n  -H "X-Access-Token: $SAT" -H 'Content-Type: application/json' \\\n  -d '{"action":"exec","parameters":{"command":"${c}",\n       "cwd":"${cwd}","execution_timeout_seconds":${timeoutSeconds}}}'`;
-}
-
-// Run Command — ONE command per submission, Running only. Backed by the data
-// plane: POST /executions?wait=… returns an execution_id, and
-// POST /executions/{id}/cancel (empty body) interrupts one that is still going.
-//
-// This is not the Terminal. Run submits a command and reports its result; the
-// Terminal tab is a persistent TTY with stdin and Ctrl-C. Both exist.
-function ShellPane({
-  inst, history, setHistory,
-}: {
-  inst: Instance;
-  // Owned by the page, keyed by sandbox: executions stay retrievable by
-  // execution_id, so switching tabs must not throw them away.
-  history: Execution[];
-  setHistory: (fn: (prev: Execution[]) => Execution[]) => void;
-}) {
-  const [cmd, setCmd] = useState("");
-  const [cwd, setCwd] = useState("/home/user");
-  // Kept as a string so the field can be emptied mid-edit; coerced on use.
-  const [timeoutText, setTimeoutText] = useState("300");
-  const timeoutSeconds = Math.max(1, Number(timeoutText) || 300);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [snippetLang, setSnippetLang] = useState<"python" | "typescript" | "curl" | null>(null);
-  // Drives the live duration readout without re-rendering the whole drawer.
-  const [, setTick] = useState(0);
-  const timers = useRef<number[]>([]);
-  // Per-execution settle timer. Cancelling has to clear the run's own timer,
-  // or the original outcome fires later and overwrites the cancelled result.
-  const settleTimer = useRef<Record<string, number>>({});
-
-  const live = history[0]?.status === "running" || history[0]?.status === "cancelling";
-
-  // One interval while anything is in flight; cleared as soon as it settles.
-  useEffect(() => {
-    if (!live) return;
-    const iv = window.setInterval(() => setTick((t) => t + 1), 100);
-    return () => window.clearInterval(iv);
-  }, [live]);
-
-  // Deliberately no unmount cleanup: `history` is owned by the page, so a
-  // settle timer that fires after this pane closes writes to a live parent and
-  // is exactly what we want. Clearing them left executions pinned at "running"
-  // forever, which disabled the input with no way out but cancelling a command
-  // that had already finished.
-  useEffect(() => {
-    // Anything still marked running from a previous mount can never settle —
-    // its timer belonged to that mount. Resolve it rather than deadlock.
-    setHistory((prev) => prev.map((e) => (
-      e.status === "running" || e.status === "cancelling"
-        ? { ...e, status: "failed" as ExecStatus, exitCode: null, elapsedMs: e.elapsedMs || Date.now() - e.startedAt,
-            terminationReason: "Result unknown — the page reloaded while this was running. Re-run to get a fresh result." }
-        : e
-    )));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const settle = (id: string, patch: Partial<Execution>) => {
-    setHistory((h) => h.map((e) => (
-      e.id === id
-        ? { ...e, ...patch, elapsedMs: patch.elapsedMs ?? Date.now() - e.startedAt }
-        : e
-    )));
-  };
-
-  const run = () => {
-    const c = cmd.trim();
-    if (!c || live) return;
-    const ex = mockExecStart(c, cwd, timeoutSeconds);
-    setHistory((h) => [ex, ...h].slice(0, 4));
-    setCmd("");
-    // #14 — honour the timeout the user actually set: whichever comes first.
-    const runMs = Math.min(mockExecDurationMs(c), timeoutSeconds * 1000);
-    const timesOut = runMs < mockExecDurationMs(c);
-    const t = window.setTimeout(() => {
-      delete settleTimer.current[ex.id];
-      settle(ex.id, timesOut
-        ? { status: "timed_out", exitCode: null, stdout: "step 1/50 …\nstep 2/50 …", terminationReason: "execution_timeout reached — process group killed. The Sandbox is unaffected and nothing was retried for you." }
-        : mockExecOutcome(c, inst));
-    }, runMs);
-    settleTimer.current[ex.id] = t;
-    timers.current.push(t);
-  };
-
-  const cancel = (ex: Execution) => {
-    // Stop the run from settling on its own — otherwise the pending outcome
-    // lands later and silently replaces the cancelled result.
-    const pending = settleTimer.current[ex.id];
-    if (pending !== undefined) { window.clearTimeout(pending); delete settleTimer.current[ex.id]; }
-    settle(ex.id, { status: "cancelling", elapsedMs: Date.now() - ex.startedAt });
-    const t = window.setTimeout(() => {
-      const outcome = mockCancelSettles(ex.command);
-      if (outcome === "cancelled") {
-        settle(ex.id, {
-          status: "cancelled",
-          terminationReason: "Cancelled on request — the process group was killed. The Sandbox is unaffected.",
-        });
-      } else {
-        // The command finished before cancel landed; say so rather than
-        // reporting a cancel that did not happen.
-        settle(ex.id, {
-          ...mockExecOutcome(ex.command, inst),
-          status: "cancel_failed",
-          terminationReason: "Cancel arrived after the command had already finished — the result below is the real one.",
-        });
-      }
-    }, 900);
-    timers.current.push(t);
-  };
-
-  const field = (label: string, value: React.ReactNode, color?: string) => (
-    <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>
-      {label} <span style={{ fontFamily: MONO, color: color ?? C.fg }}>{value}</span>
-    </span>
-  );
-
-  const advInput: React.CSSProperties = {
-    background: C.pillBg, color: C.fg, border: `1px solid ${C.border}`, outline: "none",
-    borderRadius: 7, padding: "6px 9px", fontFamily: MONO, fontSize: 11.5, minWidth: 0,
-  };
-
-  return (
-    <>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-          Run Command <ReleaseBadge r="R0" /> <V2Badge /> · POST /executions
-        </span>
-        <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>one command per submission</span>
-      </div>
-
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <input
-          value={cmd}
-          onChange={(e) => setCmd(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") run(); }}
-          placeholder="e.g. python main.py --input /home/user/in.json"
-          disabled={live}
-          style={{
-            flex: 1, background: live ? "rgba(255,255,255,0.02)" : C.pillBg,
-            color: live ? C.muted : C.fg,
-            border: `1px solid ${C.border}`, outline: "none", borderRadius: 8,
-            padding: "8px 10px", fontFamily: MONO, fontSize: 12,
-          }}
-        />
-        <button
-          onClick={run}
-          disabled={live || !cmd.trim()}
-          style={{
-            fontFamily: FONT, fontSize: 12, fontWeight: 600,
-            background: live || !cmd.trim() ? "#3a3a1f" : C.lime,
-            color: live || !cmd.trim() ? "#6b6b52" : C.limeText,
-            border: "none", borderRadius: 8, padding: "8px 16px",
-            cursor: live || !cmd.trim() ? "not-allowed" : "pointer",
-          }}
-        >
-          Run
-        </button>
-      </div>
-
-      {/* Advanced — collapsed, because the defaults are right nearly always */}
-      <button
-        onClick={() => setShowAdvanced((v) => !v)}
-        style={{
-          alignSelf: "flex-start", marginTop: 7,
-          display: "inline-flex", alignItems: "center", gap: 5,
-          fontFamily: FONT, fontSize: 11, fontWeight: 500, color: C.muted,
-          background: "transparent", border: "none", padding: 0, cursor: "pointer",
-        }}
-      >
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ transform: showAdvanced ? "rotate(90deg)" : "none", transition: "transform .15s" }}>
-          <path d="m9 18 6-6-6-6" />
-        </svg>
-        Working directory · timeout
-      </button>
-      {showAdvanced && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 110px", gap: 8, marginTop: 7 }}>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted }}>cwd</span>
-            <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={live} style={advInput} />
-          </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted }}>timeout (s)</span>
-            <input
-              type="number" min={1} value={timeoutText} disabled={live}
-              onChange={(e) => setTimeoutText(e.target.value)}
-              onBlur={() => setTimeoutText(String(timeoutSeconds))}
-              style={advInput}
-            />
-          </label>
-        </div>
-      )}
-
-      {/* The generated snippet moved out with the SDK tab: someone running a
-          command here is operating a sandbox, not writing code, and the call
-          belongs in the docs where it can be versioned. Still available in
-          review mode. */}
-      {REVIEW_MODE && (
-        <div style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 7 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>Same call in code:</span>
-            {([
-              { k: "python" as const,     label: "Python" },
-              { k: "typescript" as const, label: "TypeScript" },
-              { k: "curl" as const,       label: "curl" },
-            ]).map((l) => {
-              const on = snippetLang === l.k;
-              return (
-                <button
-                  key={l.k}
-                  onClick={() => setSnippetLang(on ? null : l.k)}
-                  style={{
-                    fontFamily: FONT, fontSize: 11, fontWeight: on ? 600 : 500,
-                    color: on ? C.limeText : C.fg,
-                    background: on ? C.lime : "transparent",
-                    border: `1px solid ${on ? C.lime : C.border}`,
-                    borderRadius: 6, padding: "1px 9px", cursor: "pointer",
-                  }}
-                >
-                  {l.label}
-                </button>
-              );
-            })}
-          </div>
-          {snippetLang && (() => {
-            const code = execSnippet(cmd, cwd, timeoutSeconds, snippetLang);
-            return (
-              <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", background: "#000" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", borderBottom: `1px solid ${C.borderSoft}`, background: C.cardSolid }}>
-                  <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted }}>POST /executions</span>
-                  <CopyButton value={code} />
-                </div>
-                <pre style={{ margin: 0, padding: "10px 12px", overflowX: "auto", fontFamily: MONO, fontSize: 11.5, lineHeight: "18px", color: C.fg }}>{code}</pre>
-              </div>
-            );
-          })()}
-        </div>
-      )}
-
-      <span style={{ display: "block", marginTop: 8, fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-        One command at a time. <span style={{ color: C.fg }}>This is not a persistent terminal</span> — no stdin,
-        no retained <span style={{ fontFamily: MONO }}>cd</span>, no Ctrl-C. For anything interactive,
-        the session is right below.
-        Closing this pane does not stop the command, and every result stays retrievable by
-        <span style={{ fontFamily: MONO }}> execution_id</span> after the Sandbox is suspended, fails, or is deleted.
-      </span>
-
-      {history.map((ex, i) => {
-        const settling = ex.status === "running" || ex.status === "cancelling";
-        const elapsed = settling ? Date.now() - ex.startedAt : ex.elapsedMs;
-        const result = execResultLine({ ...ex, elapsedMs: elapsed });
-        return (
-          <div key={ex.id} style={{ marginTop: 10, background: "#000", border: `1px solid ${i === 0 ? C.border : C.borderSoft}`, borderRadius: 6, padding: "10px 12px", fontFamily: MONO, fontSize: 12, lineHeight: "20px", opacity: i === 0 ? 1 : 0.72 }}>
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
-              <span style={{ color: C.lime, minWidth: 0, wordBreak: "break-all" }}>$ {ex.command}</span>
-              {/* Cancel only exists while there is something to interrupt */}
-              {ex.status === "running" && (
-                <button
-                  onClick={() => cancel(ex)}
-                  style={{
-                    flexShrink: 0, fontFamily: FONT, fontSize: 11, fontWeight: 600,
-                    color: C.err, background: "transparent", border: `1px solid ${C.err}55`,
-                    borderRadius: 6, padding: "2px 9px", cursor: "pointer",
-                  }}
-                >
-                  Cancel
-                </button>
-              )}
-              {ex.status === "cancelling" && (
-                <span style={{ flexShrink: 0, fontFamily: FONT, fontSize: 11, color: C.warn }}>Cancelling…</span>
-              )}
-            </div>
-
-            {/* Result first, output second */}
-            <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 4, fontFamily: FONT, fontSize: 11.5, fontWeight: 600, color: result.color }}>
-              {settling && (
-                <span style={{ width: 7, height: 7, borderRadius: 999, background: C.warn, animation: "pulse 1.2s ease-in-out infinite", flexShrink: 0 }} />
-              )}
-              {result.text}
-            </div>
-
-            {ex.stdout && <div style={{ color: C.fg, whiteSpace: "pre-wrap", marginTop: 4 }}>{ex.stdout}</div>}
-            {ex.stderr && <div style={{ color: "#fca5a5", whiteSpace: "pre-wrap" }}>{ex.stderr}</div>}
-            {settling && !ex.stdout && (
-              <div style={{ color: C.muted, marginTop: 4 }}>waiting for output…</div>
-            )}
-            {(ex.stdoutTruncated || ex.stderrTruncated) && (
-              <div style={{ color: C.warn, fontFamily: FONT, fontSize: 11, marginTop: 2 }}>
-                Output truncated at the size limit — {ex.stdoutTruncated ? "stdout_truncated" : "stderr_truncated"}: true. The call still succeeded.
-              </div>
-            )}
-            {ex.terminationReason && (
-              <div style={{ color: "#fdba74", fontFamily: FONT, fontSize: 11, marginTop: 2, lineHeight: "16px" }}>
-                {ex.terminationReason}
-              </div>
-            )}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.borderSoft}` }}>
-              {field("execution_id", ex.id)}
-              {field("status", ex.status, EXEC_STATUS_COLOR[ex.status])}
-              {field("exit_code", ex.exitCode === null ? "null" : ex.exitCode, ex.exitCode === 0 ? C.ok : ex.exitCode === null ? C.muted : C.err)}
-              {field("cwd", ex.cwd, C.muted)}
-            </div>
-          </div>
-        );
-      })}
-    </>
-  );
-}
-
-// ─── Metrics pane — 3 mock sparklines (CPU / Memory / RPS) ──────────────
-function seedFrom(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return h || 1;
-}
-
-function walk(n: number, seed: number, min: number, max: number): number[] {
-  let s = seed;
-  let v = (min + max) / 2;
-  const out: number[] = [];
-  for (let i = 0; i < n; i++) {
-    s = (s * 9301 + 49297) % 233280;
-    const r = s / 233280;
-    v += (r - 0.5) * (max - min) * 0.18;
-    if (v < min) v = min + (min - v);
-    if (v > max) v = max - (v - max);
-    out.push(Math.round(v * 10) / 10);
-  }
-  return out;
-}
-
-function Sparkline({ label, current, suffix, data, color }: {
-  label: string;
-  current: string;
-  suffix?: string;
-  data: number[];
-  color: string;
-}) {
-  const w = 240, h = 56;
-  const max = Math.max(...data, 1);
-  const points = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - (v / max) * h + 2}`).join(" ");
-  return (
-    <div
-      style={{
-        background: C.card,
-        border: `1px solid ${C.border}`,
-        borderRadius: 8,
-        padding: "10px 12px",
-        display: "flex", flexDirection: "column", gap: 4,
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-        <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>{label}</span>
-        <span style={{ fontFamily: FONT, fontSize: 16, fontWeight: 700, color: C.fg, letterSpacing: "-0.01em" }}>
-          {current}<span style={{ fontSize: 11, fontWeight: 500, color: C.muted, marginLeft: 2 }}>{suffix}</span>
-        </span>
-      </div>
-      <svg width="100%" height={h} viewBox={`0 0 ${w} ${h + 4}`} preserveAspectRatio="none" style={{ display: "block" }}>
-        <defs>
-          <linearGradient id={`grad-${label}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity="0.35" />
-            <stop offset="100%" stopColor={color} stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <polygon points={`0,${h + 4} ${points} ${w},${h + 4}`} fill={`url(#grad-${label})`} />
-        <polyline points={points} fill="none" stroke={color} strokeWidth="1.4" strokeLinejoin="round" />
-      </svg>
-    </div>
-  );
-}
 
 // ─── Runtime Detail pane (PRD §5.4) — Overview / Lifecycle / Persistence /
 //     Activity. Opened via the row ⋮ "View Detail" action.
@@ -2011,6 +1614,29 @@ function DetailRow({ label, value, accent }: { label: string; value: React.React
       <span style={{ color: accent || C.fg, textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</span>
     </div>
   );
+}
+
+// v1.3 §F — "View public listing" renders the agent through the same Browse
+// Agents drawer the catalog uses, so the preview is the real thing rather than
+// a second rendering that can drift. Falls back to the agent's own fields when
+// the listing is not in the public catalog yet.
+function asCatalogClaw(agent: MyAgent): Claw {
+  const published = ALL_CLAWS.find((c) => c.name === agent.name);
+  if (published) return published;
+  const category = (TYPE_LABELS as string[]).includes(agent.category)
+    ? (agent.category as TypeLabel)
+    : "Code & Dev Tools";
+  return {
+    id: agent.id,
+    name: agent.name,
+    publisher: "You",
+    description: `${agent.name} runs as a GMI AgentBox container from template ${agent.templateId}.`,
+    tags: [category.toLowerCase().replace(/[^a-z]+/g, "-"), "agent", "ai", "llm"],
+    typeLabel: category,
+    infrastructurePath: agent.verified ? "gmi_ce_maas" : "gmi_ce_only",
+    availability: "available",
+    pricing: "Free",
+  };
 }
 
 // ─── Listing actions — primary CTA inline + ⋮ menu for secondary ─────────
@@ -2114,7 +1740,8 @@ function ExpiresCell({
   inst, onSetExpiry,
 }: {
   inst: Instance;
-  onSetExpiry: (id: string, totalMins: number) => void;
+  /** minutes FROM NOW — /timeout re-bases; it is not a total from creation. */
+  onSetExpiry: (id: string, minutesFromNow: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
@@ -2131,8 +1758,11 @@ function ExpiresCell({
   const clock = lifecycleClock(inst);
   if (clock.unlimited) {
     return (
-      <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, whiteSpace: "nowrap" }} title="No timeout was set at create — this sandbox runs until you delete it.">
-        No automatic limit
+      <div
+        style={{ fontFamily: FONT, fontSize: 12, color: C.warn, whiteSpace: "nowrap" }}
+        title="No expiry reported by the control plane. Omitting `timeout` at create does not mean unlimited — the API substitutes 300 seconds."
+      >
+        Expiry unknown
       </div>
     );
   }
@@ -2191,15 +1821,18 @@ function ExpiresCell({
               onChange={(e) => setDraft(e.target.value)}
               style={{ width: 78, background: C.pillBg, border: `1px solid ${C.border}`, color: C.fg, fontFamily: MONO, fontSize: 12, padding: "5px 8px", borderRadius: 6, outline: "none" }}
             />
-            <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>minutes total, from creation</span>
+            <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>minutes from now</span>
           </label>
+          {/* /timeout re-bases from now — it is not a new total measured from
+              creation, and it can move the expiry EARLIER. Say so, because the
+              old wording promised the opposite. */}
           <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted, lineHeight: "14px" }}>
-            Currently {durationLabel(inst.maxActive)}, {clock.usedMins < 1 ? "under a minute" : remainingShort(clock.usedMins)} used.
-            A new expiry can only move later.
+            Counted from now, replacing the current expiry — a smaller number brings it closer.
+            Currently expires in {remainingShort(clock.leftMins)}.
           </span>
           <button
             onClick={() => {
-              const next = Math.max(1, Number(draft) || clock.totalMins);
+              const next = Math.max(1, Number(draft) || clock.leftMins);
               setOpen(false);
               onSetExpiry(inst.id, next);
             }}
@@ -2242,15 +1875,15 @@ function InstanceRowMenu({
   }, [open]);
 
   // Lifecycle actions by state — the §4.1 transition matrix is authoritative.
-  type MenuAction = { action: RowAction; label: string; icon: React.ReactNode; release?: Release; danger?: boolean; title?: string; noApi?: boolean };
+  type MenuAction = { action: RowAction; label: string; icon: React.ReactNode; release?: Release; danger?: boolean; title?: string; noApi?: boolean; v21?: boolean };
   const lifecycle: MenuAction[] = [];
   if (inst.status === "running") {
-    lifecycle.push({ action: "snapshot", label: "Save as Snapshot", icon: <IconSnapshot />, release: "R1", noApi: true });
+    lifecycle.push({ action: "snapshot", label: "Save as Snapshot", icon: <IconSnapshot />, release: "R1", noApi: true, v21: true });
   }
   // Snapshot from Suspended is conditional on Q8. While it's unresolved AgentBox
   // never silently resumes: Resume → Snapshot → Suspend stays three steps.
   if (inst.status === "suspended" && CAP.snapshotFromSuspended && canConvert) {
-    lifecycle.push({ action: "convert", label: "Save as Snapshot", icon: <IconSnapshot />, release: "R1?" });
+    lifecycle.push({ action: "convert", label: "Save as Snapshot", icon: <IconSnapshot />, release: "R1?", v21: true });
   }
   // F-04 / §4.2 — Delete is available from every non-terminal state, confirmed or
   // not, and is never rejected as a lifecycle conflict. Deleting is an idempotent
@@ -2314,6 +1947,7 @@ function InstanceRowMenu({
             >
               {it.icon}
               <span style={{ flex: 1 }}>{it.label}</span>
+              {it.v21 && <V21Badge />}
               {it.noApi && <NoApiBadge />}
               {it.release && <ReleaseBadge r={it.release} />}
             </button>
@@ -2442,6 +2076,9 @@ function ProvisionModal({
   const [name, setName] = useState("");
   // idc_name is a create parameter, so it belongs here and nowhere else.
   const [idc, setIdc] = useState(idcDefault ?? "us-ia-iowa-1");
+  // v1.3 §C3 / §C4 — Spec picker and the Add Model gate.
+  const [launchSpec, setLaunchSpec] = useState<string>(LAUNCH_SPECS[0].id);
+  const [addModel, setAddModel] = useState(false);
   // Always start with one empty editable row at the bottom (matches the
   // reference UI — user can start typing without clicking "+ key" first).
   const [env, setEnv] = useState<{ id: string; key: string; value: string }[]>([
@@ -2628,6 +2265,30 @@ function ProvisionModal({
             </span>
           </section>
 
+          {/* v1.3 §C4 — Add Model. Off means the sandbox only starts the runtime.
+              The model itself is not a create parameter; it rides in env_vars as
+              GMI_MODEL_ID, so this gate is contract-safe. */}
+          <section style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 20 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Add Model</label>
+                <V2Badge />
+              </div>
+              <div style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, marginTop: 2 }}>
+                If no model is selected, this sandbox will only start the runtime environment.
+              </div>
+            </div>
+            <span
+              role="switch"
+              aria-checked={addModel}
+              onClick={() => setAddModel((v) => !v)}
+              style={{ width: 36, height: 20, flexShrink: 0, cursor: "pointer", background: addModel ? C.lime : C.border, borderRadius: 999, position: "relative", transition: "background .15s ease" }}
+            >
+              <span style={{ position: "absolute", top: 2, left: addModel ? 18 : 2, width: 16, height: 16, borderRadius: 999, background: addModel ? C.limeText : "#fafafa", transition: "left .15s ease" }} />
+            </span>
+          </section>
+
+          {addModel && <>
           {/* Model selection (F-08) — precedence: this per-Runtime override >
               Saved Launch Configuration > the Agent Version's default. The resolved
               value is injected as locked GMI_MODEL_ID. */}
@@ -2700,6 +2361,8 @@ function ProvisionModal({
             })()}
           </section>
 
+          </>}
+
           {/* IDC — a create parameter. Spec is not: it comes from the Template's
               `resources`, so Launch shows it and cannot change it (§H). */}
           <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -2722,6 +2385,45 @@ function ProvisionModal({
               (<span style={{ fontFamily: MONO }}>/sandbox-product-specifications?idc_name=</span>), so the IDC
               decides what this Template can run.
             </span>
+          </section>
+
+          {/* v1.3 §C3 — Spec picker. Drawn in the design set; create does not
+              take it (Spec is the Template's `resources`), hence the marker. */}
+          <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Compute Tier</label>
+              <V2Badge />
+              <NoApiBadge title="POST /sandboxes accepts template_id / idc_name / timeout / env_vars / metadata only — Spec comes from the Template's resources. Drawn in the v1.3 set." />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              {LAUNCH_SPECS.map((t) => {
+                const on = launchSpec === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => setLaunchSpec(t.id)}
+                    style={{
+                      textAlign: "left", cursor: "pointer",
+                      background: on ? "rgba(221,234,77,0.05)" : "transparent",
+                      border: `1px solid ${on ? C.lime : C.border}`,
+                      borderRadius: 8, padding: "11px 13px",
+                      display: "flex", flexDirection: "column", gap: 6,
+                    }}
+                  >
+                    <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ width: 14, height: 14, borderRadius: 999, flexShrink: 0, border: `1.5px solid ${on ? C.lime : "#5a5a5a"}`, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                          {on && <span style={{ width: 7, height: 7, borderRadius: 999, background: C.lime }} />}
+                        </span>
+                        <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, color: C.fg }}>{t.name}</span>
+                      </span>
+                      <span style={{ fontFamily: FONT, fontSize: 13, color: C.fg, whiteSpace: "nowrap" }}>${t.pricePerHr}/hr</span>
+                    </span>
+                    <span style={{ fontFamily: FONT, fontSize: 11, lineHeight: "15px", color: C.muted, paddingLeft: 22 }}>{t.spec}</span>
+                  </button>
+                );
+              })}
+            </div>
           </section>
 
           {/* Name — optional */}
@@ -2801,7 +2503,9 @@ function ProvisionModal({
                   </label>
                   <NoApiNote>
                     No idle policy in the R1 API. A sandbox runs on one wall-clock
-                    <span style={{ fontFamily: MONO }}> timeout</span> and activity does not extend it.
+                    <span style={{ fontFamily: MONO }}> timeout</span>; work inside it does not extend it.
+                    Opening a Terminal does, because attaching calls
+                    <span style={{ fontFamily: MONO }}> connect</span>.
                   </NoApiNote>
                   {/* The idle sub-controls used to live here. With the checkbox
                       hard-disabled — there is no idle policy in the API — they
@@ -2818,15 +2522,17 @@ function ProvisionModal({
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 12 }}>
                     <span style={{ color: C.muted }}>Clock</span>
-                    <span style={{ color: C.fg }}>Wall-clock from creation · activity does not reset it</span>
+                    <span style={{ color: C.fg }}>Wall-clock from creation · work inside does not reset it</span>
                   </div>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
                     <V2Badge />
                     <span>
                       One <span style={{ fontFamily: MONO }}>timeout</span>, counted from the moment the sandbox is
-                      created. Running, idle and waiting all count. Nothing you do inside extends it — save anything you
-                      need out through Files first. There is no pause at the limit: the sandbox is released and its
-                      files go with it.
+                      created. Running, idle and waiting all count. Nothing you do <em>inside</em> extends it — commands
+                      and traffic do not reset the clock, so save anything you need out through Filesystem first.
+                      The one exception is opening a Terminal: attaching a session is a control-plane
+                      <span style={{ fontFamily: MONO }}> connect</span>, which pushes the expiry out to at least 30
+                      minutes. There is no pause at the limit: the sandbox is released and its files go with it.
                     </span>
                   </span>
                 </div>
@@ -3083,31 +2789,6 @@ function ProvisionModal({
   );
 }
 
-function MetricsPane({ inst }: { inst: Instance }) {
-  const cpu = useMemo(() => walk(60, seedFrom(inst.id + "cpu"), 5, 78), [inst.id]);
-  const mem = useMemo(() => walk(60, seedFrom(inst.id + "mem"), 28, 72), [inst.id]);
-  const rps = useMemo(() => walk(60, seedFrom(inst.id + "rps"), 0, 42), [inst.id]);
-  return (
-    <>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
-        <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-          Metrics · last 60s
-        </span>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 11, color: C.muted }}>
-          live · 1 Hz
-          {/* Where a surface stands belongs inside it, not stamped on the tab
-              everyone navigates by. */}
-          <NoApiBadge title="No metrics endpoint yet — these are generated values until there is something real to read." />
-        </span>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-        <Sparkline label="CPU"        current={String(cpu[cpu.length - 1])} suffix="%"   data={cpu} color="#7dd3fc" />
-        <Sparkline label="Memory"     current={String(mem[mem.length - 1])} suffix="%"   data={mem} color="#86efac" />
-        <Sparkline label="Requests/s" current={String(rps[rps.length - 1])} suffix="/s"  data={rps} color="#c7a7ff" />
-      </div>
-    </>
-  );
-}
 
 // ─── Access section (Networking spec §2) — live endpoints for this instance ──
 // Shows each endpoint's actual URL, Visibility (Private/Public) and Availability as
@@ -3149,6 +2830,8 @@ type TransferState =
   | { kind: "error"; reason: string; hint: string };
 
 const FILES_DEFAULT_DIR = "/home/user/";
+/** Mock-only. Not a documented limit — see uploadFailure(). */
+const MOCK_OVERSIZE_MB = 100;
 
 // The three failures the API actually distinguishes, plus what to do about each.
 function uploadFailure(path: string, sizeMb: number): { reason: string; hint: string } | null {
@@ -3158,8 +2841,11 @@ function uploadFailure(path: string, sizeMb: number): { reason: string; hint: st
   if (/^\/(proc|sys|dev)\//.test(path) || path.startsWith("/root/")) {
     return { reason: "Permission denied", hint: "The sandbox user cannot write here. Try somewhere under /home/user/." };
   }
-  if (sizeMb > 100) {
-    return { reason: "File too large", hint: `${sizeMb.toFixed(1)} MB exceeds the 100 MB per-file limit. Nothing was written — there is no partial file.` };
+  // The threshold is a MOCK trigger so the rejected state is reachable in the
+  // prototype — the contract does not state a per-file limit and neither does
+  // this copy. Put the real number back only once the swagger names one.
+  if (sizeMb > MOCK_OVERSIZE_MB) {
+    return { reason: "File too large", hint: "The upload was rejected before anything was written — there is no partial file." };
   }
   return null;
 }
@@ -3172,7 +2858,7 @@ function downloadFailure(path: string): { reason: string; hint: string } | null 
     return { reason: "Not a file", hint: "There is no directory listing — name the file, not the folder." };
   }
   if (!/\.[A-Za-z0-9]+$/.test(path)) {
-    return { reason: "No such file", hint: "Nothing at that path. Run `ls` from the Run tab to check." };
+    return { reason: "No such file", hint: "Nothing at that path. Run `ls` from the Terminal tab to check." };
   }
   return null;
 }
@@ -3322,12 +3008,15 @@ function FilesSection({ inst }: { inst: Instance }) {
       </div>
 
       <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-        One file at a time, by full path — <span style={{ color: C.fg }}>there is no directory browser</span>, because the
-        API has no listing endpoint. Use <span style={{ fontFamily: MONO }}>ls</span> from the Run tab to see what is there.
-        A failed or oversize upload leaves no partial file; a failed download errors rather than silently truncating.
+        One file at a time, by full path — <span style={{ color: C.fg }}>there is no directory browser</span>.
+        Use <span style={{ fontFamily: MONO }}>ls</span> from the Terminal tab to see what is there.
+        A failed upload leaves no partial file; a failed download errors rather than silently truncating.
       </span>
+      {/* Points at Download, the control directly above, because it is the only
+          way to get a file off this sandbox today. Snapshot is 2.1 and there is
+          no export feature — neither belongs in a line about not losing data. */}
       <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-        Files are stored on this Sandbox. Deleting the Sandbox permanently deletes files unless saved through a Snapshot or exported.
+        Files live on this Sandbox. Deleting it deletes them permanently — download anything you need to keep first.
       </span>
     </div>
   );
@@ -3521,15 +3210,20 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
 // does an "Access" tab; Daytona reaches credentials through a row action, which
 // is where ours went. Running one command lives inside Terminal, which is
 // Vercel's Connect shape.
+// Metrics and Logs are gone: neither has an endpoint in the Sandbox contract
+// (no /usage, no /logs), so two of five tabs were dead. They stay in the union
+// only so an existing /dashboard/sandbox/:id/logs URL still resolves — TAB_ALIAS
+// redirects them to Overview rather than 404ing someone's bookmark.
 type DrawerTab = "overview" | "metrics" | "logs" | "terminal" | "files" | "work" | "access" | "run" | "config";
 // Old links keep resolving.
 const TAB_ALIAS: Partial<Record<DrawerTab, DrawerTab>> = {
   run: "terminal", work: "terminal", access: "overview", config: "overview",
+  // Retired 2026-09-09 — no /logs and no /usage endpoint exists, so both tabs
+  // were permanently empty. Old links land on Overview instead of 404ing.
+  metrics: "overview", logs: "overview",
 };
 const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean; noApi?: boolean; question?: string }[] = [
   { key: "overview", label: "Overview" },
-  { key: "metrics",  label: "Metrics", runningOnly: true },
-  { key: "logs",     label: "Logs" },
   { key: "terminal", label: "Terminal", runningOnly: true, v2: true },
   // Both E2B and Daytona call it Filesystem.
   { key: "files",    label: "Filesystem", v2: true },
@@ -3538,7 +3232,7 @@ const DRAWER_WIDTH = 560;
 
 function InstanceDrawer({
   inst, deploymentName, agentVersion, endpoints, idc, product, tab, onTab,
-  execHistory, setExecHistory, variant = "drawer", tabHref,
+  variant = "drawer", tabHref, onConnectSandbox, tokenStale = false,
   onAction, onPatchMetadata, onClose,
 }: {
   inst: Instance | null;
@@ -3549,8 +3243,14 @@ function InstanceDrawer({
   product: string;
   tab: DrawerTab;
   onTab: (t: DrawerTab) => void;
-  execHistory: Execution[];
-  setExecHistory: (fn: (prev: Execution[]) => Execution[]) => void;
+  /** POST /connect — floors the expiry; returns what moved, or null. */
+  onConnectSandbox: (id: string) => { extendedToMins: number } | null;
+  /**
+   * The access token is bound to the sandbox lifetime, so extending it re-signs
+   * the token and invalidates the one the user already copied. Say so before
+   * they hit a 401 they cannot explain.
+   */
+  tokenStale?: boolean;
   /** "page" renders full width at its own URL; "drawer" is the slide-over. */
   variant?: "drawer" | "page";
   /** Tabs are links in page mode, so the URL is the state. */
@@ -3586,7 +3286,7 @@ function InstanceDrawer({
     </div>
   );
 
-  const actionBtn = (label: string, icon: React.ReactNode, action: RowAction, kind: "primary" | "ghost" | "danger", noApi = false) => (
+  const actionBtn = (label: string, icon: React.ReactNode, action: RowAction, kind: "primary" | "ghost" | "danger", noApi = false, v21 = false) => (
     <button
       onClick={() => onAction(inst.id, action)}
       title={
@@ -3603,7 +3303,7 @@ function InstanceDrawer({
         padding: "5px 11px", borderRadius: 7, cursor: "pointer",
       }}
     >
-      {icon} {label} {noApi && <NoApiBadge />}
+      {icon} {label} {v21 && <V21Badge />} {noApi && <NoApiBadge />}
     </button>
   );
 
@@ -3676,9 +3376,10 @@ function InstanceDrawer({
         <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
           {/* Pause / Resume / Snapshot have no endpoint in the R1 swagger. Kept,
               marked, and left clickable so the flows stay demoable. */}
-          {running && actionBtn("Pause", <IconSuspend />, "suspend", "ghost", true)}
-          {inst.status === "suspended" && actionBtn("Resume", <IconResume />, "resume", "primary", true)}
-          {running && actionBtn("Create Snapshot", <IconSnapshot />, "snapshot", "ghost", true)}
+          {/* Pause / Resume / Snapshot are drawn but not built — Agentbox 2.1. */}
+          {running && actionBtn("Pause", <IconSuspend />, "suspend", "ghost", true, true)}
+          {inst.status === "suspended" && actionBtn("Resume", <IconResume />, "resume", "primary", true, true)}
+          {running && actionBtn("Create Snapshot", <IconSnapshot />, "snapshot", "ghost", true, true)}
           {(inst.status === "error" || inst.unconfirmed) && actionBtn("Retry", <IconRestart />, "retry", "ghost")}
           {inst.status !== "deleted" && inst.status !== "deleting" && actionBtn("Delete", <IconTrash />, "delete", "danger")}
         </div>
@@ -3735,7 +3436,7 @@ function InstanceDrawer({
               </div>
               <DetailRow label="Maximum active time" value={durationLabel(inst.maxActive)} />
               <DetailRow label="Active time used" value={totalMins ? `${usedMins} min` : "—"} />
-              <DetailRow label="Remaining" value={totalMins ? remainingLabel(totalMins - usedMins) : "No automatic limit"} />
+              <DetailRow label="Remaining" value={totalMins ? remainingLabel(totalMins - usedMins) : "Expiry unknown"} />
               <DetailRow label="At the limit" value="Deleted — the Sandbox and its files go" accent={C.err} />
               <DetailRow label="Inactivity policy" value={inst.config?.idleTimeout && inst.config.idleTimeout !== "off" ? `Pause after ${durationLabel(inst.config.idleTimeout)}` : "Off"} />
             </div>
@@ -3748,7 +3449,10 @@ function InstanceDrawer({
                 value={inst.status === "suspended" ? `Paused · charges continue (≈$${pausedCostMo(inst)}/mo)` : "Active (running)"}
                 accent={inst.status === "suspended" ? "#60a5fa" : undefined}
               />
-              <DetailRow label="Clock" value="Wall-clock from creation · using the Sandbox does not extend it" />
+              <DetailRow
+                label="Clock"
+                value="Wall-clock from creation · work inside does not extend it; opening a Terminal does"
+              />
               <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px", marginTop: 2 }}>
                 Starting, pausing, and resuming time is not billed. Compute metering starts when Running is confirmed and stops on a
                 confirmed Pause or release. Resume is a fresh boot of the same disk: the ID and files are kept, memory, processes, and
@@ -3766,33 +3470,32 @@ function InstanceDrawer({
             §六.E does specify content for one and the decision is open, so it
             stays reachable for review instead of becoming dead code. */}
         {REVIEW_MODE && activeTab === "overview" && <AccessSection inst={inst} endpoints={endpoints} />}
-        {activeTab === "metrics" && <MetricsPane inst={inst} />}
-        {activeTab === "logs"    && <LogsPane inst={inst} />}
         {activeTab === "terminal" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-            {/* §五.2 — the job is not to explain HTTP versus WebSocket, it is to
-                make the two purposes legible. These two lines are the spec's
-                own wording. */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 10 }}>
-              {([
-                { t: "Run Command", d: "Run one command and get the result." },
-                { t: "Terminal",    d: "Open an interactive shell for continuous work." },
-              ]).map((x) => (
-                <div key={x.t} style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "9px 12px" }}>
-                  <div style={{ fontFamily: FONT, fontSize: 12.5, fontWeight: 600, color: C.fg }}>{x.t}</div>
-                  <div style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, marginTop: 2, lineHeight: "16px" }}>{x.d}</div>
-                </div>
-              ))}
-            </div>
-            <ShellPane inst={inst} history={execHistory} setHistory={setExecHistory} />
-            <div style={{ borderTop: `1px solid ${C.borderSoft}`, paddingTop: 18 }}>
+            {/* Retired 2026-09-09 — the one-shot "Run Command" pane is gone. No
+                sandbox console ships one: Runloop, Vercel Connect, Cloudflare and
+                Daytona all put command execution in an interactive shell, and E2B
+                and Modal keep it in the SDK entirely. `POST /executions` still
+                exists in the contract; it is an SDK call, not a console screen. */}
+            <div>
               <TerminalV2
                 sandboxId={inst.id}
                 sandboxKey={midId(inst.id)}
                 domain="sandbox.gmi.cloud"
                 canConnect={running}
                 blockedReason={`A session needs a Running Sandbox — this one is ${statusLabel(inst.status)}.`}
+                onConnect={() => onConnectSandbox(inst.id)}
               />
+              {tokenStale && (
+                <div
+                  role="status"
+                  style={{ display: "flex", alignItems: "flex-start", gap: 7, marginTop: 10, fontFamily: FONT, fontSize: 11.5, lineHeight: "16px", color: C.fg, background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.35)", borderRadius: 8, padding: "9px 11px" }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.warn} strokeWidth="2" strokeLinecap="round" aria-hidden="true" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></svg>
+                  The expiry changed, so the control plane re-signed this sandbox&apos;s access token.
+                  Any token you copied earlier no longer works — reconnect above to get the current one.
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -3858,10 +3561,10 @@ function MonitorPane({
   agent: MyAgent;
   instances: Instance[];
   /** §五 — set a new total lifetime for a sandbox, in minutes from creation. */
-  onExtend: (id: string, totalMins: number) => void;
+  onExtend: (id: string, minutesFromNow: number) => void;
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
-  // A row click opens the drawer. Logs / Run Command / resource usage live there
+  // A row click opens the drawer. Terminal and Filesystem live there
   // too, so nothing expands inline and no view is reachable through ⋮ only.
   onOpenDetail: (id: string, tab?: DrawerTab) => void;
   activeInstanceId: string | null;
@@ -4220,7 +3923,7 @@ function MonitorPane({
                         </button>
                       )}
                       {inst.status === "error" && (
-                        <button onClick={() => onOpenDetail(inst.id, "logs")} title="Open the failure reason and state history" style={rowBtnGhost}>
+                        <button onClick={() => onOpenDetail(inst.id, "overview")} title="Open the failure reason and state history" style={rowBtnGhost}>
                           View error
                         </button>
                       )}
@@ -4255,10 +3958,8 @@ function MonitorPane({
                     >
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
                         {([
-                          { tab: "terminal" as DrawerTab, label: "Terminal",   icon: <IconTerminal />, hint: "Run one command, or open an interactive shell", on: inst.status === "running" },
+                          { tab: "terminal" as DrawerTab, label: "Terminal",   icon: <IconTerminal />, hint: "Open an interactive shell", on: inst.status === "running" },
                           { tab: "files"    as DrawerTab, label: "Filesystem", icon: <IconFile />,     hint: "Upload or download one file by absolute path", on: inst.status === "running" },
-                          { tab: "metrics"  as DrawerTab, label: "Metrics",    icon: <IconNetwork />,  hint: "CPU, memory and requests", on: inst.status === "running" },
-                          { tab: "logs"     as DrawerTab, label: "Logs",       icon: <IconConfig />,   hint: "Container output", on: true },
                         ]).map((a) => (
                           <button
                             key={a.tab}
@@ -4425,7 +4126,7 @@ function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instan
 function AgentDetailPane({
   agent, instances, snapshots, image, onProvision, onAction, onOpenDetail, onExtend, activeInstanceId,
   onPublishListing, onUnpublishListing,
-  onRetryPrep, onEditTemplate, canConvert = false,
+  onRetryPrep, onEditTemplate, onDismissSetup, canConvert = false,
 }: {
   agent: MyAgent;
   instances: Instance[];
@@ -4433,34 +4134,49 @@ function AgentDetailPane({
   image?: RuntimeImage;
   onPublishListing: (agentId: string) => void;
   onUnpublishListing: (agentId: string) => void;
-  onExtend: (id: string, totalMins: number) => void;
+  onExtend: (id: string, minutesFromNow: number) => void;
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
   onOpenDetail: (id: string, tab?: DrawerTab) => void;
   activeInstanceId: string | null;
   onRetryPrep: (agentId: string) => void;
   onEditTemplate: (agent: MyAgent) => void;
+  /** Clears the first-run panel without configuring anything. */
+  onDismissSetup: (agentId: string) => void;
   canConvert?: boolean;
 }) {
   const [tab, setTab] = useState<"monitor" | "integration" | "analytics">("monitor");
   // Launch gate: the Template must be Ready. That is the only gate now — the
   // saved-launch-configuration surface is gone, so a "confirm a model" block
   // would have had nowhere to send anyone.
+  // Disclosure state for the build log — presentation, local to this header.
+  const [buildLogOpen, setBuildLogOpen] = useState(false);
   const templateReady = isLaunchable(image);
   const launchable = templateReady;
   // + Sandbox + Listing ▼ now share the top-right of the agent header.
   // Provisioning is the highest-frequency action so it gets the lime fill;
   // listing actions sit behind a single dropdown next to it.
+  // A disabled launch button has to say WHICH step it is waiting on, and
+  // whether waiting is even the right response — "no template at all" and
+  // "template is still building" call for different things from the user.
+  const launchBlockedReason = !image
+    ? "This agent has no Sandbox Template yet."
+    : image.validation === "incompatible"
+      ? (image.compatibilityIssue ?? "The image is not compatible with this IDC.")
+      : image.validation === "failed"
+        ? "The image could not be validated. Open the build log for the reason."
+        : image.preparation === "failed"
+          ? "The template build failed. Open the build log, then retry the build."
+          : image.preparation === "preparing" || image.validation === "validating"
+            ? "The template is still building — this becomes available when it reaches Ready."
+            : "The template has not been built yet.";
+
   const headerActions = (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <button
         onClick={() => launchable && onProvision(agent.id)}
         disabled={!launchable}
-        title={
-          launchable
-            ? "Launch a new sandbox"
-            : "Launch is available once the Sandbox Template is validated and prepared"
-        }
+        title={launchable ? "Launch a new sandbox" : launchBlockedReason}
         style={{
           display: "inline-flex", alignItems: "center", gap: 6,
           fontFamily: FONT, fontSize: 13, fontWeight: 600, lineHeight: "20px",
@@ -4582,10 +4298,16 @@ function AgentDetailPane({
         return (
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12, alignItems: "center", padding: "9px 0", borderTop: `1px solid ${C.borderSoft}`, borderBottom: `1px solid ${C.borderSoft}` }}>
             <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", minWidth: 0 }}>
-            <span
+            {/* The badge is the disclosure for the build log. Before this it was
+                a dead label: a failed build said "Build failed" and gave the
+                reader nowhere to go. */}
+            <button
+              onClick={() => setBuildLogOpen((o) => !o)}
+              aria-expanded={buildLogOpen}
+              aria-controls={`build-log-${agent.id}`}
               title={image.compatibilityIssue ?? (ready ? "Sandboxes can start from this Template" : "Sandboxes cannot start until the Template is ready")}
               style={{
-                display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0,
+                display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0, cursor: "pointer",
                 fontFamily: FONT, fontSize: 11, fontWeight: 600, letterSpacing: "0.04em",
                 color: state.color, background: `${state.color}1f`, border: `1px solid ${state.color}55`,
                 padding: "1px 8px", borderRadius: 5,
@@ -4595,7 +4317,11 @@ function AgentDetailPane({
                 <span style={{ width: 6, height: 6, borderRadius: 999, background: state.color, animation: "pulse 1.2s ease-in-out infinite" }} />
               )}
               {state.label}
-            </span>
+              <V2Badge title="New in Agentbox v2 — the build log behind this badge" style={{ marginLeft: 1 }} />
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: buildLogOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}>
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </button>
             {field("Template", agentVersionName(agent.id, agent.name))}
             {field("Image", `${image.url}:${image.tag}`)}
             {field("Spec", productForTier(agent.tier))}
@@ -4616,6 +4342,83 @@ function AgentDetailPane({
           </div>
         );
       })()}
+
+      {/* v1.3 §A10 — the drawer says "Continue in My Agents to configure settings
+          and deploy". This is where that lands: a copy arrives pointing at a
+          placeholder image, and the three things standing between it and a
+          running sandbox are named, in order, with the control that does each. */}
+      {agent.needsSetup && (
+        <section
+          style={{
+            border: "1px solid rgba(221,234,77,0.35)", background: "rgba(221,234,77,0.05)",
+            borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+            <h3 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: 0 }}>
+              Finish setting up this agent
+            </h3>
+            <V2Badge />
+          </div>
+          <p style={{ fontFamily: FONT, fontSize: 12.5, lineHeight: "18px", color: C.muted, margin: 0 }}>
+            Copied from <span style={{ color: C.fg }}>{agent.copiedFrom ?? "the catalog"}</span>. A copy carries the
+            shape of the original, not its image or credentials — those are the publisher&apos;s. Three things to do:
+          </p>
+          <ol style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 6 }}>
+            <li style={{ fontFamily: FONT, fontSize: 12.5, lineHeight: "18px", color: C.fg }}>
+              Point the template at <span style={{ fontWeight: 600 }}>your own image</span> — it starts on a placeholder.
+            </li>
+            <li style={{ fontFamily: FONT, fontSize: 12.5, lineHeight: "18px", color: C.fg }}>
+              Set the <span style={{ fontWeight: 600 }}>IDC and Spec</span> you want it to run on.
+            </li>
+            <li style={{ fontFamily: FONT, fontSize: 12.5, lineHeight: "18px", color: C.fg }}>
+              Wait for the build to reach <span style={{ fontWeight: 600 }}>Ready</span>, then launch a sandbox.
+            </li>
+          </ol>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button
+              onClick={() => onEditTemplate(agent)}
+              style={{ fontFamily: FONT, fontSize: 12.5, fontWeight: 600, background: C.lime, color: C.limeText, border: "none", borderRadius: 7, padding: "6px 14px", cursor: "pointer" }}
+            >
+              Edit Template
+            </button>
+            <button
+              onClick={() => onDismissSetup(agent.id)}
+              style={{ fontFamily: FONT, fontSize: 12.5, fontWeight: 500, background: "transparent", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 7, padding: "6px 12px", cursor: "pointer" }}
+            >
+              I&apos;ll do this later
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* Say it in the page, not only in a tooltip — the reason a sandbox cannot
+          start is the single thing blocking this agent from being useful. */}
+      {!launchable && (
+        <div
+          style={{
+            display: "flex", alignItems: "flex-start", gap: 7,
+            background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.32)",
+            borderRadius: 8, padding: "9px 11px",
+            fontFamily: FONT, fontSize: 12, lineHeight: "17px", color: C.fg,
+          }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.warn} strokeWidth="2" strokeLinecap="round" aria-hidden="true" style={{ flexShrink: 0, marginTop: 1 }}>
+            <circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" />
+          </svg>
+          <span>
+            <span style={{ fontWeight: 600 }}>No sandbox can start yet.</span> {launchBlockedReason}
+          </span>
+        </div>
+      )}
+
+      {/* Build log — collapsed by default. A failed build does NOT auto-expand:
+          the header would jump under the reader without being asked. */}
+      {image && buildLogOpen && (
+        <div id={`build-log-${agent.id}`} style={{ paddingBottom: 4 }}>
+          <BuildStatus build={buildViewFor(image)} onRetry={() => onRetryPrep(agent.id)} />
+        </div>
+      )}
 
 
 
@@ -4716,7 +4519,7 @@ function CreateSnapshotModal({
       <div onClick={(e) => e.stopPropagation()} style={{ width: 540, maxWidth: "100%", background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 10, display: "flex", flexDirection: "column", maxHeight: "90vh", overflow: "hidden" }}>
         <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}` }}>
           <h3 style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>
-            Create Snapshot <ReleaseBadge r="R1" />
+            Create Snapshot <V21Badge /> <ReleaseBadge r="R1" />
           </h3>
           <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "4px 0 0", lineHeight: "17px" }}>
             Capture this Sandbox's filesystem so you can launch new Sandboxes without repeating setup. {agentName} · {midId(inst.id)} keeps running.
@@ -4953,7 +4756,13 @@ function OrganizationSnapshots({
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <h1 style={{ fontFamily: FONT, fontSize: 24, fontWeight: 700, lineHeight: "30px", color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>Snapshots</h1>
+        <h1 style={{ display: "flex", alignItems: "center", gap: 10, fontFamily: FONT, fontSize: 24, fontWeight: 700, lineHeight: "30px", color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>
+          Snapshots <V21Badge />
+        </h1>
+        <V21Note>
+          Snapshots are not built yet — capture, restore and retention all land in Agentbox 2.1.
+          Everything below is here so the flow can be reviewed; none of it runs.
+        </V21Note>
         <ReleaseBadge r="R1" />
       </div>
       <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, margin: 0, lineHeight: "19px" }}>
@@ -5082,11 +4891,14 @@ function Toaster({ toasts }: { toasts: ToastMsg[] }) {
 
 // ─── Notification entry (PRD §4.3) — resources nearing auto-deletion ────────
 function NotificationBell({
-  instances, snapshots, onOpenSnapshots,
+  instances, snapshots, agents, onOpenSnapshots, onOpenPublishStatus,
 }: {
   instances: Instance[];
   snapshots: Snapshot[];
+  /** Listing review outcomes belong here — see group 0 below. */
+  agents: MyAgent[];
   onOpenSnapshots: () => void;
+  onOpenPublishStatus: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -5107,7 +4919,14 @@ function NotificationBell({
   const paused = instances
     .filter((i) => i.status === "suspended")
     .map((i) => ({ id: i.id, name: midId(i.id), cost: pausedCostMo(i) }));
-  const count = expiring.length + paused.length;
+  //  3) Listing review outcomes. Submitting a listing used to be a one-way door:
+  //     nothing ever told the publisher the review had finished, so the only way
+  //     to find out was to keep reopening Publish Status. A decision — approved
+  //     or denied — is exactly what a notification is for.
+  const reviewed = agents
+    .filter((a) => a.listingState === "live" || a.listingState === "rejected")
+    .map((a) => ({ id: a.id, name: a.name, approved: a.listingState === "live" }));
+  const count = expiring.length + paused.length + reviewed.length;
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
@@ -5126,6 +4945,30 @@ function NotificationBell({
           <div style={{ maxHeight: 360, overflowY: "auto" }}>
             {count === 0 && (
               <div style={{ padding: "18px 14px", fontFamily: FONT, fontSize: 12, color: C.muted, textAlign: "center" }}>No notifications.</div>
+            )}
+
+            {/* Group 0 — Listing review outcomes */}
+            {reviewed.length > 0 && (
+              <>
+                <div style={{ padding: "10px 14px 6px", fontFamily: FONT, fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: "0.04em", textTransform: "uppercase" }}>Listing review</div>
+                {reviewed.map((it) => (
+                  <button
+                    key={it.id}
+                    onClick={() => { setOpen(false); onOpenPublishStatus(); }}
+                    style={{ width: "100%", textAlign: "left", display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "transparent", border: "none", borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={it.approved ? C.ok : C.err} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                      {it.approved ? <path d="M20 6 9 17l-5-5" /> : <><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></>}
+                    </svg>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: "block", fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
+                      <span style={{ fontFamily: FONT, fontSize: 11, color: it.approved ? C.ok : C.err }}>
+                        {it.approved ? "Approved — now live in Browse Agents" : "Denied — open Publish Status for the reason"}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </>
             )}
 
             {/* Group 1 — Expiring soon (snapshots only) */}
@@ -5178,7 +5021,55 @@ export default function Dashboard() {
   const [topTab, setTopTab] = useState<"deployments" | "uses" | "snapshots">("deployments");
   const [filter, setFilter] = useState("");
   const [registered, setRegistered] = useState<MyAgent[]>(() => loadRegisteredAgents());
+  // v1.3 §F — listing preview through the Browse Agents drawer.
+  const [publicListing, setPublicListing] = useState<MyAgent | null>(null);
+  // v1.3 §B1 — AgentBox bills by usage; say so once before anything can spend.
+  const [showCostNotice, setShowCostNotice] = useState(() => !hasAcknowledged("myagents"));
+  // v1.3 §D — no balance endpoint exists; this stands in for one.
+  const [hasCredits, setHasCredits] = useState(true);
+  const [showInsufficient, setShowInsufficient] = useState(false);
+  const [showTopUp, setShowTopUp] = useState(false);
+  const [showCoupon, setShowCoupon] = useState(false);
+
+  // v1.3 §B2/§B3 — "Set up this Agent" in Browse Agents hands the catalog entry
+  // over through sessionStorage. Pick it up once, add it as a private copy at
+  // the top of the list, and select it.
+  useEffect(() => {
+    let handoff: { id: string; name: string } | null = null;
+    try {
+      const raw = sessionStorage.getItem("gmi.setupAgent");
+      if (raw) { handoff = JSON.parse(raw); sessionStorage.removeItem("gmi.setupAgent"); }
+    } catch { return; }
+    if (!handoff) return;
+    const copy: MyAgent = {
+      id: `ag_${Date.now().toString(36)}`,
+      name: `${handoff.name} (copy)`,
+      templateId: `tpl_${Math.random().toString(36).slice(2, 10)}`,
+      category: "Code & Dev Tools",
+      verified: true,
+      displayStatus: "idle",
+      hostMode: "gmi",
+      maasKey: "",
+      accessUrl: "",
+      registeredAt: new Date().toISOString(),
+      listingState: "draft",
+      needsSetup: true,
+      copiedFrom: handoff.name,
+    };
+    setRegistered((prev) => [copy, ...prev]);
+    setSelectedId(copy.id);
+    pushToast("success", "Finish setting up this agent.");
+  }, []);
   const [hiddenSeedIds, setHiddenSeedIds] = useState<Set<string>>(new Set());
+
+  // "I'll do this later" — the panel is a nudge, not a gate.
+  const dismissSetup = (agentId: string) => {
+    setRegistered((prev) => {
+      const next = prev.map((a) => (a.id === agentId ? { ...a, needsSetup: false } : a));
+      try { localStorage.setItem(REGISTERED_AGENTS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
 
   // Single shared destructive-action confirm dialog. Setting `confirm` opens it.
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
@@ -5261,6 +5152,42 @@ export default function Dashboard() {
   // Snapshot lifecycle (PRD §3 / §5.5)
   const [snapshots, setSnapshots] = useState<Snapshot[]>(INITIAL_SNAPSHOTS);
   const [runtimeImages, setRuntimeImages] = useState<Record<string, RuntimeImage>>(INITIAL_RUNTIME_IMAGES);
+
+  // Every agent needs a Template record — it is what carries the build state,
+  // the Ready badge and the launch gate. Seeds got one hard-coded; anything the
+  // user registered got nothing, which left a brand-new agent as an empty shell
+  // with "+ Sandbox" disabled forever. Mint one on arrival and run the build.
+  useEffect(() => {
+    const missing = registered.filter((a) => !runtimeImages[a.id]);
+    if (missing.length === 0) return;
+    const image = (a: MyAgent): RuntimeImage => {
+      const raw = (a as { dockerImage?: string }).dockerImage || "ghcr.io/you/agent:latest";
+      const at = raw.lastIndexOf(":");
+      const hasTag = at > raw.lastIndexOf("/");
+      return {
+        url: hasTag ? raw.slice(0, at) : raw,
+        tag: hasTag ? raw.slice(at + 1) : "latest",
+        digest: `sha256:${a.id.replace(/[^a-f0-9]/g, "").padEnd(36, "0").slice(0, 36)}`,
+        registry: (raw.split("/")[0].includes(".") ? raw.split("/")[0] : "docker.io"),
+        architecture: "linux/amd64",
+        validation: "pending",
+        preparation: "not_started",
+        lastValidated: fmtNow(),
+      };
+    };
+    setRuntimeImages((prev) => {
+      const next = { ...prev };
+      missing.forEach((a) => { next[a.id] = image(a); });
+      return next;
+    });
+    // Then let it build, so the build log and the Ready gate are reachable for
+    // an agent the user actually created — not just the three seeds.
+    missing.forEach((a) => {
+      setTimeout(() => patchImage(a.id, { validation: "validating" }), 700);
+      setTimeout(() => patchImage(a.id, { validation: "valid", preparation: "preparing" }), 1900);
+      setTimeout(() => patchImage(a.id, { preparation: "ready", lastValidated: fmtNow() }), 4200);
+    });
+  }, [registered, runtimeImages]);
   const [restoreSnapshot, setRestoreSnapshot] = useState<Snapshot | null>(null);
   // F-07 — capture starts from Runtime Detail and opens a real form (name,
   // description, metadata), not a bare confirm.
@@ -5303,7 +5230,6 @@ export default function Dashboard() {
 
   // Run history per sandbox. Lives here so it survives closing the tab or the
   // drawer — the pane promises results stay retrievable by execution_id.
-  const [execHistory, setExecHistory] = useState<Record<string, Execution[]>>({});
   const [publishStatusOpen, setPublishStatusOpen] = useState(false);
   const [unpublishRow, setUnpublishRow] = useState<PublishRow | null>(null);
 
@@ -5335,14 +5261,15 @@ export default function Dashboard() {
     onComplete:  (row) => openListingForm(row.id),
     onEdit:      (row) => openListingForm(row.id),
     onFix:       (row) => openListingForm(row.id),
-    // The public listing lives at /marketplace/:clawId. Agent ids and claw ids
-    // are different namespaces in the prototype, so until a listing carries its
-    // published claw id, send the user to the catalog and say why rather than
-    // to a URL that 404s.
+    // v1.3 §F — preview the listing in place, in the same drawer Browse Agents
+    // uses. This replaces the old punt to /marketplace: agent ids and claw ids
+    // are still different namespaces, but the drawer renders from the agent, so
+    // there is no URL to 404 on.
     onView:      (row) => {
+      const agent = allAgents.find((a) => a.id === row.id);
+      if (!agent) return;
       setPublishStatusOpen(false);
-      setLocation("/marketplace");
-      pushToast("progress", `${row.listingName} — opening the Marketplace. Per-listing deep links land once listings carry their published id.`);
+      setPublicListing(agent);
     },
     onRepost:    (row) => handleRepost(row.id),
     onWithdraw:  (row) => {
@@ -5362,7 +5289,9 @@ export default function Dashboard() {
       status: "pending",
       created: fmtNow(),
       config,
-      maxActive: config.maxLifetime,          // P-01 maximum continuous active time
+      maxActive: config.maxLifetime,          // what was requested — display only
+      // The control plane decides the expiry; the UI reads it back, never derives it.
+      endAt: endAtFromNow(durationMins(config.maxLifetime) * 60),
       maxRuntimeAction: "suspend",            // P-01 default action at the limit
       latestOperation: { kind: "create", status: "in_progress", at: fmtNow() },
     };
@@ -5396,20 +5325,63 @@ export default function Dashboard() {
   // sandbox's timeout, and the expiry only ever moves later: E2B's setTimeout
   // takes whichever of the current and the new expiry is further out, so a
   // small number cannot cut a running sandbox short by accident.
-  const setSandboxExpiry = (id: string, totalMins: number) => {
+  // POST /sandboxes/{id}/connect — exchanges data-plane credentials, and the
+  // call carries a `timeout`. Two rules, both decided earlier in review:
+  //   · it FLOORS the expiry at now + CONNECT_FLOOR_MINS; it never shortens one
+  //     that is already further out. Overwriting would turn "I opened a
+  //     terminal" into "I cut my sandbox from 5h to 30m".
+  //   · whatever it does is stated in the Terminal at the moment it happens.
+  // Returns what moved so the Terminal can say it, or null when nothing did.
+  // Extending invalidates the data-plane token — "延长 sandbox 存活时需重新调用
+  // connect 接口获取新的令牌". Tracked per sandbox so the UI can say the token
+  // in the user's hand is stale, rather than letting them find out on a 401.
+  const [tokenStale, setTokenStale] = useState<Record<string, boolean>>({});
+
+  const CONNECT_FLOOR_MINS = 30;
+  const connectSandbox = (id: string): { extendedToMins: number } | null => {
     const inst = instances.find((i) => i.id === id);
-    const current = inst ? durationMins(inst.maxActive) : 0;
-    if (inst && totalMins <= current) {
-      pushToast("error", `${durationLabel(`${totalMins}min`)} is not later than the current expiry — nothing changed.`);
+    if (!inst) return null;
+    // Connecting always re-issues the token — that is the point of the call.
+    setTokenStale((prev) => { const n = { ...prev }; delete n[id]; return n; });
+    const { leftMins } = lifecycleClock(inst);
+    // "传 timeout 且大于 0 时顺带延长存活时间（只延长不缩短）" — a floor, never
+    // an overwrite. The response's `end_at` is authoritative either way.
+    if (leftMins >= CONNECT_FLOOR_MINS) return null;
+    setInstances((prev) => prev.map((i) => (
+      i.id === id ? { ...i, endAt: endAtFromNow(CONNECT_FLOOR_MINS * 60) } : i
+    )));
+    return { extendedToMins: CONNECT_FLOOR_MINS };
+  };
+
+  // POST /sandboxes/{id}/timeout — "以当前时间为基准重设存活时长".
+  //
+  // Three things the swagger is explicit about, all of which the previous
+  // implementation got wrong:
+  //   · it re-bases from NOW. It is not a new total measured from creation.
+  //   · `timeout` <= 0 is silently replaced with 300s, so the caller cannot
+  //     derive the result — "以响应里的 new_end_at 为准".
+  //   · only a running sandbox may be retimed; anything else is 409.
+  //
+  // `minutes` is what the user picked; `new_end_at` is what actually took hold,
+  // and it is the only thing written to state.
+  const setSandboxTimeout = (id: string, minutes: number) => {
+    const inst = instances.find((i) => i.id === id);
+    if (!inst) return;
+    if (inst.status !== "running") {
+      pushToast("error", `Only a running sandbox can be retimed — this one is ${statusLabel(inst.status)}.`);
       return;
     }
-    setInstances((prev) => prev.map((i) => (
-      i.id === id
-        ? { ...i, maxActive: totalMins % 60 === 0 ? `${totalMins / 60}h` : `${totalMins}min` }
-        : i
-    )));
-    const left = inst ? remainingShort(Math.max(0, totalMins - lifecycleClock(inst).usedMins)) : "";
-    pushToast("success", `New expiry set${left ? ` — expires in ${left}` : ""}`);
+    const t = pushToast("progress", "Setting new expiry…");
+    setTimeout(() => {
+      // Stand-in for the response body: the server's authoritative new_end_at.
+      const newEndAt = endAtFromNow(minutes * 60);
+      setInstances((prev) => prev.map((i) => (i.id === id ? { ...i, endAt: newEndAt } : i)));
+      const mins = Math.max(0, Math.ceil((Date.parse(newEndAt.replace(" ", "T")) - Date.now()) / 60000));
+      // The token is bound to the sandbox lifetime, so extending invalidates it:
+      // "延长 sandbox 存活时需重新调用 connect 接口获取新的令牌".
+      settleToast(t, "success", `Expires in ${remainingShort(mins)} — reconnect to pick up a fresh access token`);
+      setTokenStale((prev) => ({ ...prev, [id]: true }));
+    }, 600);
   };
 
   const retryPreparation = (agentId: string) => {
@@ -5461,7 +5433,7 @@ export default function Dashboard() {
             }
           : i,
       ));
-      settleToast(t, "success", "Running — anything the startup command doesn't launch must be restarted with Run Command");
+      settleToast(t, "success", "Running — anything the startup command doesn't launch has to be restarted from the Terminal");
     }, 1500);
   };
   const performDelete = (id: string) => {
@@ -5477,6 +5449,60 @@ export default function Dashboard() {
       setTimeout(() => setInstances((prev) => prev.filter((i) => i.id !== id)), 1500);
     }, 1200);
   };
+  // ── Expiry reaper ────────────────────────────────────────────────────────
+  // The whole lifecycle story is "wall-clock from creation, deleted at the
+  // limit". Before this, hitting zero only changed the label to "Expired" and
+  // the row sat there forever — a sandbox the UI promised was gone, still
+  // listed, still offering Terminal. The reaper makes the promise true.
+  //
+  // Runs off the same 1 Hz tick the countdown uses. Only touches sandboxes that
+  // actually have a limit and are still live; anything already deleting/deleted
+  // is left alone so this can never fight performDelete.
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      setInstances((prev) => {
+        const expired = prev.filter((i) =>
+          durationMins(i.maxActive) > 0 &&
+          lifecycleClock(i).leftMins <= 0 &&
+          i.status !== "deleting" && i.status !== "deleted",
+        );
+        if (expired.length === 0) return prev;
+        // Toast outside the updater would fire twice under StrictMode; queue it.
+        queueMicrotask(() => {
+          expired.forEach((i) =>
+            pushToast("unconfirmed", `${midId(i.id)} reached its limit — deleted with its files`),
+          );
+        });
+        return prev.map((i) =>
+          expired.some((e) => e.id === i.id)
+            ? { ...i, status: "deleting" as const, endpointUrl: undefined,
+                latestOperation: { kind: "delete" as const, status: "in_progress" as const, at: fmtNow() } }
+            : i,
+        );
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Second stage: a sandbox the reaper put into `deleting` settles to `deleted`,
+  // then leaves the list — the same two-step performDelete uses, so an expiry
+  // and a manual delete look identical to the operator.
+  useEffect(() => {
+    const reaped = instances.filter(
+      (i) => i.status === "deleting" && i.latestOperation?.kind === "delete" && i.latestOperation.status === "in_progress",
+    );
+    if (reaped.length === 0) return;
+    const t = window.setTimeout(() => {
+      setInstances((prev) => prev.map((i) =>
+        reaped.some((r) => r.id === i.id)
+          ? { ...i, status: "deleted" as const, latestOperation: { kind: "delete" as const, status: "succeeded" as const, at: fmtNow() } }
+          : i,
+      ));
+      setTimeout(() => setInstances((prev) => prev.filter((i) => !reaped.some((r) => r.id === i.id))), 1500);
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [instances]);
+
   const performRetry = (id: string) => {
     // Failed creation or unconfirmed outcome → re-attempt (§4.2 / F-01).
     const inst = instances.find((i) => i.id === id);
@@ -5502,7 +5528,7 @@ export default function Dashboard() {
             <>
               Compute billing stops and the sandbox keeps its ID and files until you Resume or Delete —
               storage keeps billing ≈${cost}/mo. Memory, running processes, and live connections are lost,
-              and any command running now is cancelled (its result stays retrievable).
+              and any command running now is cancelled.
               Endpoint URLs survive but return the unavailable response while paused.
               For long-term reuse, create a Snapshot instead.
             </>
@@ -5520,7 +5546,7 @@ export default function Dashboard() {
             <>
               Resume is a fresh boot of the same disk, not a restored session: the declared startup command runs
               again and Running is reported only after readiness passes. Anything the startup command doesn't launch
-              has to be restarted with Run Command. The Endpoint URL is unchanged, but its availability recovers
+              has to be restarted from the Terminal. The Endpoint URL is unchanged, but its availability recovers
               independently and may lag behind Running.
             </>
           ),
@@ -5676,8 +5702,8 @@ export default function Dashboard() {
         else setDrawer((d) => (d ? { ...d, tab } : d));
       }}
       tabHref={variant === "page" ? (t) => sandboxHref(inst.id, t) : undefined}
-      execHistory={execHistory[inst.id] ?? []}
-      setExecHistory={(fn) => setExecHistory((m) => ({ ...m, [inst.id]: fn(m[inst.id] ?? []) }))}
+      onConnectSandbox={connectSandbox}
+      tokenStale={!!tokenStale[inst.id]}
       onAction={handleAction}
       onPatchMetadata={patchMetadata}
       onClose={() => { if (variant === "page") setLocation("/dashboard"); else setDrawer(null); }}
@@ -5750,7 +5776,7 @@ export default function Dashboard() {
             { id: "deployments" as const, label: "My Agents", isNew: false, noApi: false },
             { id: "uses" as const, label: "Agents I Use", isNew: false, noApi: false },
             // No /snapshots endpoint in the R1 swagger.
-            { id: "snapshots" as const, label: "Snapshots", isNew: true, noApi: true },
+            { id: "snapshots" as const, label: "Snapshots", isNew: true, noApi: true, v21: true },
           ].map((t) => {
             const isActive = topTab === t.id;
             return (
@@ -5772,12 +5798,19 @@ export default function Dashboard() {
                 {t.label}
                 {t.isNew && <NewBadge />}
                 {(t as { v2?: boolean }).v2 && <V2Badge />}
+                {(t as { v21?: boolean }).v21 && <V21Badge />}
                 {t.noApi && <NoApiBadge />}
               </button>
             );
           })}
           </div>
-          <NotificationBell instances={instances} snapshots={snapshots} onOpenSnapshots={() => setTopTab("snapshots")} />
+          <NotificationBell
+            instances={instances}
+            snapshots={snapshots}
+            agents={allAgents}
+            onOpenSnapshots={() => setTopTab("snapshots")}
+            onOpenPublishStatus={() => setPublishStatusOpen(true)}
+          />
         </div>
 
         {topTab === "snapshots" && (
@@ -5883,10 +5916,11 @@ export default function Dashboard() {
               onProvision={handleProvision}
               onAction={handleAction}
               onOpenDetail={openDetail}
-              onExtend={setSandboxExpiry}
+              onExtend={setSandboxTimeout}
               activeInstanceId={drawer?.id ?? null}
               onRetryPrep={retryPreparation}
               onEditTemplate={handleEditTemplate}
+              onDismissSetup={dismissSetup}
               canConvert
             />
           ) : allAgents.length === 0 ? (
@@ -5941,6 +5975,9 @@ export default function Dashboard() {
         idcDefault={allAgents.find((a) => a.id === provisionForAgentId)?.region}
         onCancel={() => setProvisionForAgentId(null)}
         onSubmit={(cfg) => {
+          // v1.3 §C7 — check the balance before creating; short of credits the
+          // §D prompt takes over instead of a create that would fail.
+          if (!hasCredits) { setProvisionForAgentId(null); setShowInsufficient(true); return; }
           if (provisionForAgentId) actuallyProvision(provisionForAgentId, cfg);
         }}
       />
@@ -5966,6 +6003,43 @@ export default function Dashboard() {
           setListingState(row.id, "draft");
           pushToast("success", `${row.listingName} unpublished — removed from the Marketplace`);
         }}
+      />
+
+      {/* v1.3 §B1 — usage-billing notice, acknowledged once per browser */}
+      {showCostNotice && (
+        <CostNotice
+          body={
+            <>
+              AgentBox charges based on actual usage. Building an Agent is billed based on build time.
+              After deployment, sandboxes are billed while running, with model usage and storage charged separately.
+              <br />
+              No charges begin until you start a build or deploy a sandbox.
+            </>
+          }
+          onAcknowledge={() => { acknowledge("myagents"); setShowCostNotice(false); }}
+        />
+      )}
+
+      {/* v1.3 §D — credit gate. No balance/deposit/coupon endpoint exists yet. */}
+      {showInsufficient && (
+        <InsufficientCredits
+          onDeposit={() => { setShowInsufficient(false); setShowTopUp(true); }}
+          onCoupon={() => { setShowInsufficient(false); setShowCoupon(true); }}
+          onClose={() => setShowInsufficient(false)}
+        />
+      )}
+      {showTopUp && (
+        <TopUpCredits onClose={() => setShowTopUp(false)} onContinue={() => { setShowTopUp(false); setHasCredits(true); }} />
+      )}
+      {showCoupon && (
+        <RedeemCoupon onClose={() => setShowCoupon(false)} onApply={() => { setShowCoupon(false); setHasCredits(true); }} />
+      )}
+
+      {/* v1.3 §F — listing preview reuses the Browse Agents drawer */}
+      <AgentDrawer
+        claw={publicListing ? asCatalogClaw(publicListing) : null}
+        mode="listing"
+        onClose={() => setPublicListing(null)}
       />
 
       <Toaster toasts={toasts} />

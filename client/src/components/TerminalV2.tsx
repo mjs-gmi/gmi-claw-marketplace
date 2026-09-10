@@ -77,7 +77,7 @@ function respond(cmd: string, cwdRef: { cwd: string }): Responded {
 }
 
 export default function TerminalV2({
-  sandboxId, sandboxKey, domain, canConnect, blockedReason,
+  sandboxId, sandboxKey, domain, canConnect, blockedReason, onConnect,
 }: {
   sandboxId: string;
   sandboxKey: string;
@@ -85,8 +85,18 @@ export default function TerminalV2({
   /** Running only — a pending or suspended Sandbox has no TTY to attach to. */
   canConnect: boolean;
   blockedReason?: string;
+  /**
+   * Attaching a TTY requires POST /sandboxes/{id}/connect to exchange data-plane
+   * credentials, and that call carries a `timeout`. So opening this tab changes
+   * the sandbox's expiry — a control-plane side effect of a thing that looks
+   * purely local. Returns what it did so the notice below can state it, or null
+   * when the expiry was already further out and nothing moved.
+   */
+  onConnect?: () => { extendedToMins: number } | null;
 }) {
   const [conn, setConn] = useState<Conn>("connecting");
+  // What the connect call did to the expiry, if anything. Shown once per attach.
+  const [expiryNote, setExpiryNote] = useState<string | null>(null);
   const [lines, setLines] = useState<Line[]>([]);
   const [input, setInput] = useState("");
   const [histIdx, setHistIdx] = useState(-1);
@@ -118,6 +128,13 @@ export default function TerminalV2({
     setCwd("/home/user");
     const t = window.setTimeout(() => {
       setConn("connected");
+      // Announce the side effect at the moment it happens, not in a doc.
+      const moved = onConnect?.();
+      setExpiryNote(
+        moved
+          ? `Connecting extended this sandbox to ${moved.extendedToMins} minutes from now.`
+          : null,
+      );
       setLines([
         // Read the size at connect time, not at mount: on a full-width page the
         // ResizeObserver has already corrected it and printing the stale value
@@ -281,6 +298,20 @@ export default function TerminalV2({
         </span>
       ) : (
         <>
+          {/* Attaching is not free: connect carries a `timeout`, so opening this
+              tab moved the sandbox's expiry. Say it here, at the moment it
+              happened — a countdown that changed while the user was looking at
+              a terminal is otherwise unexplainable. */}
+          {expiryNote && (
+            <span
+              role="status"
+              style={{ display: "flex", alignItems: "flex-start", gap: 7, fontFamily: FONT, fontSize: 11.5, color: C.fg, lineHeight: "16px", background: "rgba(91,148,240,0.07)", border: "1px solid rgba(91,148,240,0.35)", borderRadius: 8, padding: "9px 11px" }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.link} strokeWidth="2" strokeLinecap="round" aria-hidden="true" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+              {expiryNote}
+            </span>
+          )}
+
           {/* The pane. Vertical resize is native and reports through the same
               control path a live channel would. */}
           <div
@@ -374,8 +405,7 @@ export default function TerminalV2({
             Ctrl-D or <span style={{ fontFamily: MONO }}>exit</span> closes. Drag the bottom edge to resize —
             the new size is sent as a <span style={{ fontFamily: MONO }}>resize</span> control message, so programs
             inside lay out correctly. <span style={{ color: C.fg }}>Close session really hangs up</span>; it does not
-            just hide this pane. For a single command with an exit code, use
-            <span style={{ color: C.fg }}> Run a command</span> above.
+            just hide this pane.
           </span>
         </>
       )}
