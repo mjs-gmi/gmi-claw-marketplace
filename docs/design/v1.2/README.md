@@ -143,6 +143,12 @@ Overview》（space IE, page 515375122）。两份是**互补**的：
 
 ## G · 真实 API 契约（bs-api Sandbox / Runloop）
 
+> **⚠️ 2026-09-09：本节的「覆盖范围」已过时。** 它转述的是 Confluence 摘要；直接读
+> swagger 后发现 `/snapshots`、`/sandboxes/{id}/actions`、`/shell*` 都存在，create
+> 也不止五个字段。逐条更正见 `docs/design/v1.3/README.md` §G 与文末的生命周期更正。
+> 本节仅 **pause / resume 不存在**这一条仍然成立。
+
+
 来源：Confluence《bs-api Sandbox (Runloop)》（space Elasticclo, page 495485321），
 契约以 swagger 为准（`GET /api/v2/ec/openapi.yaml`），2026-08-13 复测 24/24 PASS。
 
@@ -177,7 +183,11 @@ Overview》（space IE, page 515375122）。两份是**互补**的：
 1. **swagger 里没有 pause / snapshots / actions**（原文：「**没有**：pause/snapshots/actions、aliases、shell*（数据面）」）。
    而原型里 Pause / Resume / Snapshot 是**大块功能** —— Snapshots 顶部 tab、
    Create/Restore Snapshot 弹窗、Organization Snapshots、暂停盘费成本模型，
-   全部没有 API 支撑。**这是产品决策，不是我能定的。**
+   全部没有 API 支撑。
+
+   > **✅ 2026-09-09 已定：Pause / Resume / Snapshot 排进 Agentbox 2.1。**
+   > 界面全部保留，加挂 `V21Badge`（`client/src/components/V21Badge.tsx`）。
+   > 这个标识**默认可见**，不跟 `NO API` 一起藏进 review 模式 —— 见下。
 2. **没有 `/logs`、没有 `/usage`** —— 原型的 Analytics/Usage 面板同样没有后端。
 3. 示例里的 `request_id` 幂等语义在 swagger 里没有对应，只有 `X-Request-ID` 头和
    建模板的 `Idempotency-Key`。重写后的示例不再宣称幂等保证。
@@ -202,7 +212,12 @@ Overview》（space IE, page 515375122）。两份是**互补**的：
 `running` / `cancelled` 这两个态原来类型里就有、颜色也定了，但 `mockExec` 是同步返回成品的，
 **永远渲染不出来**。拆成 `mockExecStart` / `mockExecOutcome` 才让它们可达。
 
-去掉了原来那句「**Replaces** Open Shell」——§C 要的是两者并存。
+去掉了原来那句「**Replaces** Open Shell」。
+
+> **✅ 2026-09-09 已定：「Open Shell」这个词作废。** 契约里只有一套 shell 设施
+> （`POST /shell`、`POST /shell/control`、`wss …/shell/connect`），它就是 Terminal。
+> 「Open Shell」是 1.2 设计稿行菜单里的旧标签，指的是同一组端点 —— 保留两个说法
+> 只会让人以为要做两个入口。**统一叫 Terminal**，行菜单、文档、Confluence 一并改。
 
 ### Files —— `/files?path=`
 
