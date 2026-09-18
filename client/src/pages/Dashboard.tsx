@@ -16,7 +16,6 @@ import V2Badge from "@/components/V2Badge";
 import TerminalV2 from "@/components/TerminalV2";
 import NoApiBadge, { NoApiNote, NO_API_REASON } from "@/components/NoApiBadge";
 import V21Badge, { V21Note } from "@/components/V21Badge";
-import BuildStatus, { type BuildState, type BuildView } from "@/components/BuildStatus";
 import SdkPlaygroundV2 from "@/components/SdkPlaygroundV2";
 import OpenQuestionBadge from "@/components/OpenQuestionBadge";
 import { REVIEW_MODE } from "@/lib/reviewMode";
@@ -163,6 +162,41 @@ const MY_DEPLOYMENTS: MyAgent[] = SEED_AGENTS;
 // ─── Backend capability flags (capability-driven, provider-agnostic).
 // In production these ride on the instance read path (`capabilities`). Here they
 // are prototype constants so the UI is capability-gated rather than provider-aware.
+// ─── §A Entry switch ────────────────────────────────────────────────────────
+// GET /eligibility -> runtimes.sandbox.available. False means every Sandbox
+// surface is absent — not greyed out, not explained. An org without the runtime
+// should not learn it exists from a disabled button.
+const SANDBOX_ELIGIBILITY = { available: true };
+function sandboxAvailable(): boolean {
+  return SANDBOX_ELIGIBILITY.available;
+}
+
+// ─── §G Capabilities ────────────────────────────────────────────────────────
+// Which panes a sandbox gets is decided by the task's own `capabilities`, never
+// by matching on a runtime name. Container tasks report logs/metrics/ports;
+// Sandbox reports exec/shell/files/expiry and false for the rest.
+interface SandboxCapabilities {
+  exec: boolean;     // Run
+  shell: boolean;    // Terminal, and the inline >_ affordance
+  files: boolean;    // Files
+  expiry: boolean;   // the expiry countdown
+  logs?: boolean;
+  metrics?: boolean;
+  ports?: boolean;
+}
+const SANDBOX_CAPS: SandboxCapabilities = {
+  exec: true, shell: true, files: true, expiry: true,
+  logs: false, metrics: false, ports: false,
+};
+function capsOf(inst: Instance): SandboxCapabilities {
+  return inst.capabilities ?? SANDBOX_CAPS;
+}
+
+// ─── §J Upload permission ───────────────────────────────────────────────────
+// Writing files needs creator or org_owner; reading does not. One flag, because
+// the prototype has one viewer.
+const CAN_WRITE_FILES = true;
+
 const CAP = {
   // P-04 Snapshot retention is Conditional R1 — off until Q16 and commercial
   // review are approved. When off, snapshots have no auto-expiry (§4.3).
@@ -288,10 +322,47 @@ function endpointState(inst: Instance, ep: AgentEndpoint): EndpointState {
 // NOTE: POST /sandboxes does not accept a spec; it comes from the Template's
 // `resources`. Drawn here because the v1.3 set draws it and this is a
 // prototype — the control carries a NO API marker so the gap is visible.
-const LAUNCH_SPECS = [
-  { id: "small",  name: "Small",  pricePerHr: 0.0475, spec: "2 Core CPU · 4 GiB Memory · 10 GiB OS Storage (Ephemeral) · 30 GiB Data Storage" },
-  { id: "xsmall", name: "XSmall", pricePerHr: 0.0475, spec: "2 Core CPU · 4 GiB Memory · 10 GiB OS Storage (Ephemeral) · 30 GiB Data Storage" },
-] as const;
+// ─── §B/§D Spec catalogue ───────────────────────────────────────────────────
+// Register and Launch both need a Spec, and the catalogue is per IDC — the IDC
+// has to be chosen first, because it decides which rows exist. No price is
+// rendered anywhere: the field is there but always zero, and a $0.00/hr next to
+// a size reads as broken rather than free.
+interface SpecOption { id: string; vcpu: number; ramGb: number; diskGb: number }
+const SPEC_CATALOG: SpecOption[] = [
+  { id: "x-small", vcpu: 1,  ramGb: 2,  diskGb: 10 },
+  { id: "small",   vcpu: 2,  ramGb: 4,  diskGb: 20 },
+  { id: "medium",  vcpu: 4,  ramGb: 8,  diskGb: 40 },
+  { id: "large",   vcpu: 8,  ramGb: 16, diskGb: 80 },
+  { id: "x-large", vcpu: 16, ramGb: 32, diskGb: 160 },
+];
+/** Which specs each IDC actually offers. Missing rows are greyed, never hidden. */
+const SPECS_BY_IDC: Record<string, string[]> = {
+  "us-ia-iowa-1":    ["x-small", "small", "medium", "large", "x-large"],
+  "us-or-portland":  ["x-small", "small", "medium"],
+  "eu-de-frankfurt": ["small", "medium", "large"],
+  "ap-sg-singapore": ["x-small", "small"],
+};
+/**
+ * §D — some IDCs reject a Spec chosen at Launch (`sandbox_spec_not_supported`);
+ * there the picker collapses to a read-only echo of the registered Spec.
+ */
+const IDC_SPEC_LOCKED = ["eu-de-frankfurt"];
+
+function specLabel(id?: string): string {
+  const sp = SPEC_CATALOG.find((x) => x.id === id);
+  return sp ? `${sp.vcpu} vCPU · ${sp.ramGb} GB · ${sp.diskGb} GB` : "—";
+}
+function specName(id?: string): string {
+  return SPEC_CATALOG.find((x) => x.id === id)?.id ?? "—";
+}
+function specsForIdc(idc?: string): { spec: SpecOption; available: boolean }[] {
+  const offered = SPECS_BY_IDC[idc ?? ""] ?? [];
+  return SPEC_CATALOG.map((spec) => ({ spec, available: offered.includes(spec.id) }));
+}
+/** §B — the default is the smallest spec the IDC actually offers. */
+function smallestSpec(idc?: string): string | undefined {
+  return specsForIdc(idc).find((x) => x.available)?.spec.id;
+}
 
 // Region id → readable IDC label (mirrors Register's REGIONS). Falls back to the id.
 const REGION_LABELS: Record<string, string> = {
@@ -304,6 +375,20 @@ function regionLabel(region?: string): string {
   if (!region) return "—";
   return REGION_LABELS[region] ? `${REGION_LABELS[region]} · ${region}` : region;
 }
+/**
+ * Agents registered before the Spec catalogue existed carry a Container /
+ * Standard / Performance tier id. Map those forward rather than showing "—"
+ * for every seeded agent.
+ */
+const LEGACY_TIER_TO_SPEC: Record<string, string> = {
+  container: "small", standard: "medium", performance: "large",
+};
+function agentSpecId(agent?: { tier?: string }): string | undefined {
+  const t = agent?.tier;
+  if (!t) return undefined;
+  return SPEC_CATALOG.some((x) => x.id === t) ? t : LEGACY_TIER_TO_SPEC[t];
+}
+
 // Compute tier id → product SKU shown in Instance Details. Falls back to Container.
 const PRODUCT_BY_TIER: Record<string, string> = {
   container: "gmi.container.intel.x4660.large",
@@ -390,6 +475,7 @@ function metadataMatches(entries: MetaEntry[] | undefined, query: string): boole
 interface InstanceConfig {
   name?: string;         // rides along as metadata.name — create has no name field
   idc?: string;          // create parameter: idc_name
+  specId?: string;       // §D — chosen at Launch; MAY differ from the agent's
   envOverrides: { id: string; key: string; value: string }[];
   maxLifetime: string;   // e.g. "1h", "off"
   idleTimeout: string;   // e.g. "5min", "off"
@@ -403,6 +489,14 @@ interface Instance {
   agentId: string;
   status: TaskStatus;
   created: string;
+  /** §G — what this task can do. Absent falls back to the Sandbox set. */
+  capabilities?: SandboxCapabilities;
+  /**
+   * §D — the Spec this sandbox actually launched with. It MAY differ from the
+   * Agent's registered Spec (`instance_type MAY differ`), which is why it is
+   * stored per sandbox rather than read off the agent.
+   */
+  specId?: string;
   endpointUrl?: string;       // populated when status=running (per swagger F-03)
   config?: InstanceConfig;    // per-task override (PRD F-04 / F-09 — empty = template defaults)
   // ── Runtime 2.0 lifecycle (PRD §2) ──────────────────────────────────────
@@ -803,112 +897,117 @@ const usd = (n: number) => `$${n.toFixed(2)}`;
 // A Runtime Image is the Docker image an Agent references to create instances —
 // part of Agent configuration, not a navigable resource. Two internal state
 // machines gate Launch: image validation, then provider runtime preparation.
-type ImageValidation = "pending" | "validating" | "valid" | "incompatible" | "failed";
-type RuntimePrep = "not_started" | "preparing" | "ready" | "failed" | "stale";
+// ─── §C Template build ──────────────────────────────────────────────────────
+// `template_build_status` is ONE field with four known values, and it lives only
+// on the agent detail response — the list endpoint does not carry it, which is
+// why the left-hand agent list shows no build dot.
+//
+// The prototype used to derive a build state from two orthogonal fields
+// (`validation` + `preparation`). That was a guess made before the API was
+// readable; the real thing is a single status, there is no build-log endpoint,
+// and there is no rebuild endpoint. Recovery is editing the image and saving.
+type TemplateBuildStatus = "waiting" | "building" | "ready" | "error";
+/** Anything the backend sends that we do not recognise, plus "not sent at all". */
+type BuildView = TemplateBuildStatus | "unknown" | "missing";
+
 interface RuntimeImage {
   url: string;
   tag: string;
   digest: string;      // immutable digest
   registry: string;
   architecture: string;
-  validation: ImageValidation;
-  preparation: RuntimePrep;
+  /** Raw value off the wire. Undefined = the field was absent. */
+  buildStatus?: string;
+  /** The backend's own words. There is no log to open, so this is all there is. */
+  buildError?: string;
+  /** Anchor for the "waited mm:ss" counter. Builds run 21s to 3min+. */
+  buildStartedAt?: string;
   lastValidated: string;
-  compatibilityIssue?: string;
 }
-// Customer-facing copy (exact per spec).
-const VALIDATION_LABEL: Record<ImageValidation, string> = {
-  pending: "Pending validation", validating: "Validating image", valid: "Valid",
-  incompatible: "Incompatible", failed: "Unable to validate",
-};
-const PREP_LABEL: Record<RuntimePrep, string> = {
-  not_started: "Not started", preparing: "Preparing template", ready: "Ready",
-  failed: "Preparation failed", stale: "Revalidation required",
-};
-function validationColor(v: ImageValidation): string {
-  return v === "valid" ? C.ok : v === "incompatible" || v === "failed" ? C.err : C.warn;
-}
-function prepColor(p: RuntimePrep): string {
-  return p === "ready" ? C.ok : p === "failed" ? C.err : p === "stale" ? "#fb923c" : C.warn;
-}
-// Launch gate (F-01): image valid AND runtime prepared.
-// ─── RuntimeImage → BuildStatus's view object ───────────────────────────────
-// BuildStatus does not know what a RuntimeImage is, and should not: it renders
-// a build, wherever that build came from. The mapping lives here.
-//
-// Open item (see docs/frontend/build-status-design-record.md): the prototype
-// derives build state from two orthogonal fields, `validation` and
-// `preparation`, while the contract returns ONE state with five values. The two
-// most important of those — `error` (your template is wrong) and `failed` (the
-// build system broke) — were previously collapsed into a single "Build failed",
-// which sends the user down the wrong path half the time. This mapping keeps
-// them apart; converging the underlying fields is a larger change.
-function buildStateFor(img: RuntimeImage): BuildState {
-  if (isLaunchable(img)) return "ready";
-  // The user's template is at fault — a step failed, or the image cannot run here.
-  if (img.validation === "incompatible" || img.validation === "failed") return "error";
-  // Our builder is at fault.
-  if (img.preparation === "failed") return "failed";
-  if (img.preparation === "preparing" || img.validation === "validating") return "building";
-  return "waiting";
+const KNOWN_BUILD: TemplateBuildStatus[] = ["waiting", "building", "ready", "error"];
+
+/**
+ * §C — "构建中 + 已等待 mm:ss，不画进度条". The build reports no progress field
+ * and takes anywhere from 21s to several minutes, so a bar would be fiction.
+ * Elapsed time is the one true thing we can show.
+ */
+function BuildElapsed({ since }: { since?: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  if (!since) return null;
+  const started = Date.parse(since.replace(" ", "T"));
+  if (Number.isNaN(started)) return null;
+  const secs = Math.max(0, Math.floor((now - started) / 1000));
+  const mm = String(Math.floor(secs / 60)).padStart(2, "0");
+  const ss = String(secs % 60).padStart(2, "0");
+  return (
+    <span style={{ fontFamily: MONO, fontSize: 11, color: C.muted }} title="Time waited so far">
+      waited {mm}:{ss}
+    </span>
+  );
 }
 
-const BUILD_HINT: Partial<Record<BuildState, string>> = {
-  error: "Check the failing step below. If it is a package install, add the registry to the egress allowlist under Register → Networking, then rebuild.",
-  failed: "The build host dropped mid-run. Nothing in your template caused this — retry the build, and escalate if it repeats.",
-};
-
-function buildViewFor(img: RuntimeImage): BuildView {
-  const state = buildStateFor(img);
-  const head = [
-    `#1 [internal] load build definition`,
-    `#1 DONE 0.2s`,
-    `#2 [1/3] FROM ${img.url}:${img.tag}`,
-    `#2 DONE 3.1s`,
-    `#3 [2/3] RUN apt-get update`,
-    `#3 DONE 11.8s`,
-  ];
-  const log =
-    state === "waiting" ? ""
-    : state === "building" ? head.slice(0, 4).join("\n")
-    : state === "error"
-      ? [...head, "#4 [3/3] RUN pip install -r requirements.txt",
-         "WARNING: pypi.org is not in the egress allowlist",
-         "ERROR: Could not satisfy dependency torch==2.4.1",
-         "#4 ERROR: process did not complete successfully: exit code 1"].join("\n")
-    : state === "failed"
-      ? [...head.slice(0, 4), "#3 [2/3] RUN npm ci",
-         "builder: lost connection to build host after 41s"].join("\n")
-    : [...head, "#4 [3/3] RUN pip install -r requirements.txt", "#4 DONE 24.1s",
-       "#5 exporting layers", "#5 DONE 2.9s", "build succeeded"].join("\n");
-
-  return {
-    state,
-    log,
-    durationSec: state === "building" ? 42 : undefined,
-    hint: img.compatibilityIssue ?? BUILD_HINT[state],
-  };
+function buildView(img?: RuntimeImage): BuildView {
+  if (!img || img.buildStatus === undefined) return "missing";
+  const raw = img.buildStatus;
+  return (KNOWN_BUILD as string[]).includes(raw) ? (raw as TemplateBuildStatus) : "unknown";
 }
 
+/** Label + colour for the header chip. `missing` renders nothing at all. */
+function buildChip(v: BuildView, raw?: string): { label: string; color: string } | null {
+  switch (v) {
+    case "ready":    return { label: "Ready", color: C.ok };
+    case "building": return { label: "Building image", color: C.warn };
+    case "waiting":  return { label: "Waiting to build", color: C.warn };
+    case "error":    return { label: "Build failed", color: C.err };
+    // An unrecognised value is shown verbatim rather than mapped to a guess.
+    case "unknown":  return { label: raw ?? "Unknown", color: C.muted };
+    case "missing":  return null;
+  }
+}
+// ─── §C Launch gate ─────────────────────────────────────────────────────────
+// Ready launches. waiting/building/error do not. A MISSING or unrecognised
+// status does NOT block: the field is absent from some responses, and refusing
+// to launch because we did not understand a string would strand the user on our
+// own parsing bug. Let the call go and let 409 template_not_ready be the truth.
 function isLaunchable(img?: RuntimeImage): boolean {
-  return img?.validation === "valid" && img?.preparation === "ready";
+  const v = buildView(img);
+  return v === "ready" || v === "missing" || v === "unknown";
 }
+
+/** §C — why Launch is off, in the user's words. Null when it is not off. */
+function launchBlockedBy(img?: RuntimeImage): string | null {
+  switch (buildView(img)) {
+    case "waiting":
+    case "building": return "The image is still building — Launch opens when it reaches Ready.";
+    case "error":    return img?.buildError
+      ? `The image build failed — ${img.buildError}`
+      : "The image build failed. Edit the image address and save to build again.";
+    default:         return null;
+  }
+}
+
 const INITIAL_RUNTIME_IMAGES: Record<string, RuntimeImage> = {
   agent_hermes: {
     url: "ghcr.io/mjs-gmi/hermes-gmi", tag: "v5", digest: "sha256:0bf9bdf13d544665a7188cce1423ab11c0de",
-    registry: "ghcr.io", architecture: "linux/amd64", validation: "valid", preparation: "ready",
+    registry: "ghcr.io", architecture: "linux/amd64", buildStatus: "ready",
     lastValidated: _seedDaysAgo(2),
   },
   agent_hermes_mingjun: {
     url: "ghcr.io/mjs-gmi/hermes-gmi", tag: "v6-rc1", digest: "sha256:b73c1e082f4a4d198c6b5a9e0f21d7c4a1b2",
-    registry: "ghcr.io", architecture: "linux/amd64", validation: "valid", preparation: "ready",
+    registry: "ghcr.io", architecture: "linux/amd64", buildStatus: "ready",
     lastValidated: _seedMinsAgo(4),
   },
   agent_openclaw: {
     url: "ghcr.io/mjs-gmi/openclaw-gmi", tag: "v5-mode-none", digest: "sha256:d87723941a694cfd8b97f3c895db9e85aa10",
-    registry: "ghcr.io", architecture: "linux/arm64", validation: "incompatible", preparation: "not_started",
+    registry: "ghcr.io", architecture: "linux/arm64", buildStatus: "error",
     lastValidated: _seedMinsAgo(9),
-    compatibilityIssue: "Image architecture linux/arm64 is not supported by the selected region (needs linux/amd64).",
+    // The backend's own words. There is no log endpoint, so this is all the
+    // user gets — which is why it has to be shown verbatim, not summarised.
+    buildError: "image architecture linux/arm64 is not supported in this IDC (requires linux/amd64)",
   },
 };
 
@@ -1736,112 +1835,44 @@ function ListingActions({
 //   · extending is "set a new expiry", not "+30 min": competitors have people
 //     re-enter a duration, and an additive control teaches the wrong model
 //   · put Extend next to the expiry, not somewhere else
-function ExpiresCell({
-  inst, onSetExpiry,
-}: {
-  inst: Instance;
-  /** minutes FROM NOW — /timeout re-bases; it is not a total from creation. */
-  onSetExpiry: (id: string, minutesFromNow: number) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState("");
-  const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", away);
-    return () => document.removeEventListener("mousedown", away);
-  }, [open]);
+function ExpiresCell({ inst }: { inst: Instance }) {
+  // §G — an org whose tasks report expiry:false has no expiry to show at all.
+  if (!capsOf(inst).expiry) return <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>—</span>;
 
   const clock = lifecycleClock(inst);
   if (clock.unlimited) {
+    // §E — no `expires_at` means nothing will reap it on a timer. That is
+    // "no automatic limit", not "unknown": the previous wording made a normal
+    // configuration look like a fault.
     return (
-      <div
-        style={{ fontFamily: FONT, fontSize: 12, color: C.warn, whiteSpace: "nowrap" }}
-        title="No expiry reported by the control plane. Omitting `timeout` at create does not mean unlimited — the API substitutes 300 seconds."
-      >
-        Expiry unknown
-      </div>
+      <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, whiteSpace: "nowrap" }}>
+        No automatic limit
+      </span>
     );
   }
 
-  const urgent = clock.leftMins <= 10;
-  const warn = clock.leftMins <= 30;
-  const color = urgent ? C.err : warn ? C.warn : C.fg;
+  // §E — amber under five minutes. One threshold, because the only decision it
+  // drives is "act now or not", and a three-tier ramp implies a precision the
+  // auto-renew-on-read behaviour does not support.
+  const soon = clock.leftMins < 5;
+  const expired = clock.leftMins <= 0;
 
   return (
-    // No overflow:hidden here — this element is the popover's containing
-    // block, and clipping it made the whole Extend flow invisible and
-    // unclickable. Truncation belongs on the text, which already has it.
-    <div ref={ref} style={{ position: "relative", display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-        <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: urgent ? 600 : 500, color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {clock.leftMins <= 0 ? "Expired" : `Expires in ${remainingShort(clock.leftMins)}`}
-        </span>
-        <button
-          onClick={(e) => { e.stopPropagation(); setDraft(String(clock.totalMins)); setOpen((o) => !o); }}
-          title="Set a new expiry for this sandbox — new in V2"
-          style={{
-            fontFamily: FONT, fontSize: 10.5, fontWeight: 600,
-            color: C.fg, background: "transparent", border: `1px solid ${C.border}`,
-            borderRadius: 5, padding: "0 5px", cursor: "pointer", flexShrink: 0, lineHeight: "16px",
-          }}
-        >
-          Extend
-        </button>
-      </div>
-      {/* The consequence, not just a colour. */}
-      <span style={{ fontFamily: FONT, fontSize: 10.5, color: urgent ? C.err : C.muted, lineHeight: "14px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        {urgent ? "This sandbox and its files will be permanently deleted." : "Deleted with its files at the limit."}
+    <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+      <span
+        title={`Expires at ${inst.endAt}`}
+        style={{
+          fontFamily: FONT, fontSize: 12, fontWeight: soon ? 600 : 500,
+          color: soon ? C.warn : C.fg,
+          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+        }}
+      >
+        {expired ? "Expiring" : `Expires in ${remainingShort(clock.leftMins)}`}
       </span>
-      <div style={{ height: 3, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
-        <div style={{ width: `${clock.pct}%`, height: "100%", background: color, transition: "width .3s linear" }} />
-      </div>
-      {open && (
-        <div
-          onClick={(e) => e.stopPropagation()}
-          // The row is a role="button" with its own Enter/Space handler, and
-          // keydown bubbles: typing a number and pressing Enter navigated to
-          // the sandbox instead of setting the expiry.
-          onKeyDown={(e) => e.stopPropagation()}
-          style={{
-            position: "absolute", top: "calc(100% + 5px)", left: 0, zIndex: 40, width: 226,
-            background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 8, padding: "11px 12px",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column", gap: 8,
-          }}
-        >
-          <span style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 600, color: C.fg }}>Set a new expiry</span>
-          <label style={{ display: "flex", alignItems: "center", gap: 7 }}>
-            <input
-              type="number"
-              min={1}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              style={{ width: 78, background: C.pillBg, border: `1px solid ${C.border}`, color: C.fg, fontFamily: MONO, fontSize: 12, padding: "5px 8px", borderRadius: 6, outline: "none" }}
-            />
-            <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>minutes from now</span>
-          </label>
-          {/* /timeout re-bases from now — it is not a new total measured from
-              creation, and it can move the expiry EARLIER. Say so, because the
-              old wording promised the opposite. */}
-          <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted, lineHeight: "14px" }}>
-            Counted from now, replacing the current expiry — a smaller number brings it closer.
-            Currently expires in {remainingShort(clock.leftMins)}.
-          </span>
-          <button
-            onClick={() => {
-              const next = Math.max(1, Number(draft) || clock.leftMins);
-              setOpen(false);
-              onSetExpiry(inst.id, next);
-            }}
-            style={{ alignSelf: "flex-start", fontFamily: FONT, fontSize: 12, fontWeight: 600, background: C.lime, color: C.limeText, border: "none", borderRadius: 6, padding: "5px 12px", cursor: "pointer" }}
-          >
-            Set expiry
-          </button>
-        </div>
-      )}
+      {/* The consequence, not just a colour — expiry here deletes the disk. */}
+      <span style={{ fontFamily: FONT, fontSize: 10.5, color: soon ? C.warn : C.muted, lineHeight: "14px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        {soon ? "Sandbox and files will be deleted." : "Deleted with its files at the limit."}
+      </span>
     </div>
   );
 }
@@ -1873,6 +1904,15 @@ function InstanceRowMenu({
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
+
+  // §H/§I — Run and Terminal are reachable from the row, not just from inside
+  // the drawer. Both are capability-gated (§G) and Running-only: a stopped
+  // sandbox has nothing to exec against.
+  const caps = capsOf(inst);
+  const live = inst.status === "running";
+  const jumps: { tab: DrawerTab; label: string; icon: React.ReactNode; on: boolean }[] = [];
+  if (caps.exec)  jumps.push({ tab: "run",      label: "Run a command", icon: <IconPlay />,     on: live });
+  if (caps.shell) jumps.push({ tab: "terminal", label: "Terminal",      icon: <IconTerminal />, on: live });
 
   // Lifecycle actions by state — the §4.1 transition matrix is authoritative.
   type MenuAction = { action: RowAction; label: string; icon: React.ReactNode; release?: Release; danger?: boolean; title?: string; noApi?: boolean; v21?: boolean };
@@ -1938,6 +1978,21 @@ function InstanceRowMenu({
             display: "flex", flexDirection: "column",
           }}
         >
+          {jumps.map((j) => (
+            <button
+              key={j.tab}
+              disabled={!j.on}
+              title={j.on ? undefined : `The Sandbox is ${statusLabel(inst.status)} — this needs it Running.`}
+              onClick={() => { setOpen(false); onOpenDetail(inst.id, j.tab); }}
+              style={{ ...itemStyle(false), color: j.on ? C.fg : "#5a5a5a", cursor: j.on ? "pointer" : "not-allowed" }}
+            >
+              {j.icon}
+              <span style={{ flex: 1 }}>{j.label}</span>
+            </button>
+          ))}
+          {jumps.length > 0 && lifecycle.length > 0 && (
+            <div style={{ height: 1, background: C.borderSoft, margin: "4px 6px" }} />
+          )}
           {lifecycle.map((it) => (
             <button
               key={it.action}
@@ -2061,12 +2116,14 @@ function ConfirmDialog({
 
 // ─── Provision modal — per-task overrides (env + lifecycle) ─────────────
 function ProvisionModal({
-  open, agentName, agentVersion, image, endpoints, idcDefault, onCancel, onSubmit,
+  open, agentName, agentVersion, image, endpoints, idcDefault, specDefault, onCancel, onSubmit,
 }: {
   open: boolean;
   agentName: string;
-  /** The Template's own region — the IDC picker opens on it. */
+  /** §D — the agent's IDC. Fixed: the image is built per IDC, so Launch shows it. */
   idcDefault?: string;
+  /** §D — the Spec the agent registered with. The Launch picker opens on it. */
+  specDefault?: string;
   agentVersion: string;
   image?: string;
   endpoints: AgentEndpoint[];
@@ -2077,7 +2134,7 @@ function ProvisionModal({
   // idc_name is a create parameter, so it belongs here and nowhere else.
   const [idc, setIdc] = useState(idcDefault ?? "us-ia-iowa-1");
   // v1.3 §C3 / §C4 — Spec picker and the Add Model gate.
-  const [launchSpec, setLaunchSpec] = useState<string>(LAUNCH_SPECS[0].id);
+  const [launchSpec, setLaunchSpec] = useState<string>(() => specDefault ?? smallestSpec(idcDefault) ?? "small");
   const [addModel, setAddModel] = useState(false);
   // Always start with one empty editable row at the bottom (matches the
   // reference UI — user can start typing without clicking "+ key" first).
@@ -2112,7 +2169,8 @@ function ProvisionModal({
     // initializer ran while no agent was selected and idcDefault was undefined.
     // Without this, launching a Frankfurt agent silently records IOWA.
     setIdc(idcDefault ?? "us-ia-iowa-1");
-  }, [open, idcDefault]);
+    setLaunchSpec(specDefault ?? smallestSpec(idcDefault) ?? "small");
+  }, [open, idcDefault, specDefault]);
 
   // Reset on close
   if (!open) return null;
@@ -2161,6 +2219,7 @@ function ProvisionModal({
     onSubmit({
       name: name.trim() || undefined,
       idc,
+      specId: IDC_SPEC_LOCKED.includes(idc) ? specDefault : launchSpec,
       envOverrides: env.filter((e) => e.key.trim().length > 0),
       maxLifetime,
       idleTimeout,
@@ -2363,67 +2422,61 @@ function ProvisionModal({
 
           </>}
 
-          {/* IDC — a create parameter. Spec is not: it comes from the Template's
-              `resources`, so Launch shows it and cannot change it (§H). */}
+          {/* §D/§七.1 — this is the reverse of the previous build. The IDC is
+              FIXED: `sandbox_placement_fixed`, and the image is built per IDC,
+              so a sandbox cannot be placed anywhere else. The Spec is NOT fixed:
+              `instance_type MAY differ` from the registered one, so it is a real
+              choice here. We had these two exactly the wrong way round. */}
           <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
               <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>IDC</label>
               <V2Badge />
-              <span style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>idc_name</span>
             </div>
-            <select
-              value={idc}
-              onChange={(e) => setIdc(e.target.value)}
-              style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "pointer" }}
-            >
-              {Object.entries(REGION_LABELS).map(([id, label]) => (
-                <option key={id} value={id}>{label} · {id}</option>
-              ))}
-            </select>
+            <div style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, color: C.muted, cursor: "default", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+              <span>{regionLabel(idc)}</span>
+              <span style={{ fontFamily: FONT, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.05em", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 4, padding: "0 6px" }}>FIXED</span>
+            </div>
             <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-              Chosen per sandbox. Specs are listed per IDC
-              (<span style={{ fontFamily: MONO }}>/sandbox-product-specifications?idc_name=</span>), so the IDC
-              decides what this Template can run.
+              Set by the agent — its image is built for this IDC, so every Sandbox lands here.
             </span>
           </section>
 
-          {/* v1.3 §C3 — Spec picker. Drawn in the design set; create does not
-              take it (Spec is the Template's `resources`), hence the marker. */}
-          <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {/* Spec — a real create-time choice, defaulting to the registered one. */}
+          <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-              <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Compute Tier</label>
+              <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Spec</label>
               <V2Badge />
-              <NoApiBadge title="POST /sandboxes accepts template_id / idc_name / timeout / env_vars / metadata only — Spec comes from the Template's resources. Drawn in the v1.3 set." />
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              {LAUNCH_SPECS.map((t) => {
-                const on = launchSpec === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    onClick={() => setLaunchSpec(t.id)}
-                    style={{
-                      textAlign: "left", cursor: "pointer",
-                      background: on ? "rgba(221,234,77,0.05)" : "transparent",
-                      border: `1px solid ${on ? C.lime : C.border}`,
-                      borderRadius: 8, padding: "11px 13px",
-                      display: "flex", flexDirection: "column", gap: 6,
-                    }}
-                  >
-                    <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ width: 14, height: 14, borderRadius: 999, flexShrink: 0, border: `1.5px solid ${on ? C.lime : "#5a5a5a"}`, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-                          {on && <span style={{ width: 7, height: 7, borderRadius: 999, background: C.lime }} />}
-                        </span>
-                        <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, color: C.fg }}>{t.name}</span>
-                      </span>
-                      <span style={{ fontFamily: FONT, fontSize: 13, color: C.fg, whiteSpace: "nowrap" }}>${t.pricePerHr}/hr</span>
-                    </span>
-                    <span style={{ fontFamily: FONT, fontSize: 11, lineHeight: "15px", color: C.muted, paddingLeft: 22 }}>{t.spec}</span>
-                  </button>
-                );
-              })}
-            </div>
+            {IDC_SPEC_LOCKED.includes(idc) ? (
+              <>
+                <div style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, color: C.muted, cursor: "default" }}>
+                  {specName(specDefault)} · {specLabel(specDefault)}
+                </div>
+                <span style={{ fontFamily: FONT, fontSize: 11, color: C.warn, lineHeight: "15px" }}>
+                  This IDC does not accept a different Spec at Launch — the agent's registered Spec is used.
+                </span>
+              </>
+            ) : (
+              <>
+                <select
+                  value={launchSpec}
+                  onChange={(e) => setLaunchSpec(e.target.value)}
+                  style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "pointer" }}
+                >
+                  {/* Unavailable sizes stay in the list, disabled. Hiding them
+                      makes the catalogue look arbitrarily short and gives the
+                      reader no way to learn the size exists elsewhere. */}
+                  {specsForIdc(idc).map(({ spec, available }) => (
+                    <option key={spec.id} value={spec.id} disabled={!available}>
+                      {spec.id} · {specLabel(spec.id)}{available ? "" : " — not available in this IDC"}
+                    </option>
+                  ))}
+                </select>
+                <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
+                  Defaults to the agent's registered Spec. It may differ per Sandbox.
+                </span>
+              </>
+            )}
           </section>
 
           {/* Name — optional */}
@@ -2457,8 +2510,7 @@ function ProvisionModal({
               /* Collapsed — one-line summary + Customize (defaults-first) */
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                 <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "16px" }}>
-                  {durationLabel(maxLifetime)} from creation · deleted with its files at the limit
-                  <span style={{ color: C.borderSoft }}> · </span>Organization default
+                  Decided by the system · deleted with its files at the limit
                 </span>
                 <button
                   onClick={() => setShowLifecycle(true)}
@@ -2472,16 +2524,25 @@ function ProvisionModal({
               /* Expanded — the two editable controls + read-only policy rows */
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {/* Maximum active time (F-02) */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.fg }}>Maximum active time</span>
-                  <select value={maxLifetime} onChange={(e) => setMaxLifetime(e.target.value)} style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "pointer" }}>
+                {/* §E — bs-api takes a `timeout` at create, but the container
+                    server does not forward one, so whatever is picked here
+                    cannot reach the sandbox. The control stays visible and
+                    inert: the design is decided and waiting on passthrough, and
+                    deleting it would lose that. What it must not do is accept a
+                    number and silently drop it. */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, opacity: 0.72 }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>
+                    Maximum active time
+                    <NoApiBadge title="bs-api accepts `timeout` at create; the container server does not pass it through yet." />
+                  </span>
+                  <select value={maxLifetime} disabled style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "not-allowed", color: C.muted }}>
                     <option value="1h">1 hour</option>
                     <option value="6h">6 hours</option>
                     <option value="24h">24 hours</option>
                     <option value="48h">48 hours</option>
                   </select>
                   <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-                    {maxLifetime === "48h" ? "Maximum 48 hours · Set by your organization" : `${durationLabel(maxLifetime)} · Organization default`}
+                    Decided by the system for now — the expiry is reported back once the Sandbox is running.
                   </span>
                 </div>
 
@@ -3261,9 +3322,9 @@ function InstanceDrawer({
 }) {
   if (!inst) return null;
   const running = inst.status === "running";
-  const totalMins = durationMins(inst.maxActive);
-  const start = inst.lifecycleStartedAt ? new Date(inst.lifecycleStartedAt.replace(" ", "T")).getTime() : null;
-  const usedMins = start ? Math.max(0, Math.floor((Date.now() - start) / 60000)) : 0;
+  // §E — the control plane's `expires_at` is the only lifecycle number we can
+  // stand behind, so everything here derives from it.
+  const clock = lifecycleClock(inst);
   const health =
     running ? { label: "HEALTHY", color: C.ok }
     : inst.status === "error" ? { label: "UNHEALTHY", color: C.err }
@@ -3423,23 +3484,38 @@ function InstanceDrawer({
             {row("Model", modelDisplayName(inst.config?.model) + " · GMI_MODEL_ID")}
             {row("Health", <span style={{ display: "inline-flex", fontFamily: FONT, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", color: health.color, background: `${health.color}1f`, border: `1px solid ${health.color}55`, padding: "2px 8px", borderRadius: 6 }}>{health.label}</span>)}
             {row("IDC", idc)}
-            {row("Product", product, true)}
+            {row("Spec", specLabel(inst.specId) === "—" ? product : `${specName(inst.specId)} · ${specLabel(inst.specId)}`)}
             {row("Public IP", "—")}
             {row("Created at", inst.created, true)}
             {row("Updated at", inst.latestOperation?.at ?? inst.created, true)}
 
-            {/* Lifecycle (P-01 / P-02) */}
-            <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                <h4 style={{ fontFamily: FONT, fontSize: 13.5, fontWeight: 600, color: C.fg, margin: 0 }}>Lifecycle</h4>
-                <ReleaseBadge r="R1" />
+            {/* §E Lifecycle — the whole block is capability-gated, and what it
+                shows is what the control plane reports: an instant and the time
+                left. "Maximum active time" and "Active time used" are gone: the
+                requested duration stops describing anything once the lease
+                auto-renews on read, so a total and a used-so-far were two
+                numbers we could not stand behind. */}
+            {capsOf(inst).expiry && (
+              <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                  <h4 style={{ fontFamily: FONT, fontSize: 13.5, fontWeight: 600, color: C.fg, margin: 0 }}>Lifecycle</h4>
+                  <V2Badge />
+                </div>
+                {inst.endAt ? (
+                  <>
+                    <DetailRow label="Expires at" value={inst.endAt} />
+                    <DetailRow
+                      label="Time left"
+                      value={remainingLabel(Math.max(0, clock.leftMins))}
+                      accent={clock.leftMins < 5 ? C.warn : undefined}
+                    />
+                    <DetailRow label="At the limit" value="This Sandbox and its files are permanently deleted" accent={C.err} />
+                  </>
+                ) : (
+                  <DetailRow label="Expiry" value="No automatic limit" />
+                )}
               </div>
-              <DetailRow label="Maximum active time" value={durationLabel(inst.maxActive)} />
-              <DetailRow label="Active time used" value={totalMins ? `${usedMins} min` : "—"} />
-              <DetailRow label="Remaining" value={totalMins ? remainingLabel(totalMins - usedMins) : "Expiry unknown"} />
-              <DetailRow label="At the limit" value="Deleted — the Sandbox and its files go" accent={C.err} />
-              <DetailRow label="Inactivity policy" value={inst.config?.idleTimeout && inst.config.idleTimeout !== "off" ? `Pause after ${durationLabel(inst.config.idleTimeout)}` : "Off"} />
-            </div>
+            )}
 
             {/* Storage & billing (§4.5) */}
             <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -3556,12 +3632,11 @@ function InstanceDrawer({
 
 // ─── Monitor pane ─────────────────────────────────────────────────────────
 function MonitorPane({
-  agent, instances, onProvision, onAction, onOpenDetail, onExtend, activeInstanceId, canConvert = false,
+  agent, instances, onProvision, onAction, onOpenDetail, activeInstanceId, canConvert = false,
 }: {
   agent: MyAgent;
   instances: Instance[];
   /** §五 — set a new total lifetime for a sandbox, in minutes from creation. */
-  onExtend: (id: string, minutesFromNow: number) => void;
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
   // A row click opens the drawer. Terminal and Filesystem live there
@@ -3869,7 +3944,7 @@ function MonitorPane({
                         PRD v2.3: paused instances are never auto-deleted — no countdown. */}
                     {(() => {
                       if (inst.status === "running") {
-                        return <ExpiresCell inst={inst} onSetExpiry={onExtend} />;
+                        return <ExpiresCell inst={inst} />;
                       }
                       if (inst.status === "suspended") {
                         const label = `${pausedLifecycleLabel()} (≈$${pausedCostMo(inst)}/mo)`;
@@ -3986,7 +4061,7 @@ function MonitorPane({
                       <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 22px" }}>
                         {([
                           ["Host",     `${midId(inst.id)}.sandbox.gmi.cloud`],
-                          ["Spec",     productForTier(agent.tier)],
+                          ["Spec",     specLabel(agentSpecId(agent))],
                           ["IDC",      regionLabel(inst.config?.idc ?? agent.region)],
                           ["Template", agentVersionName(agent.id, agent.name)],
                         ] as [string, string][]).map(([k, v]) => (
@@ -4124,9 +4199,9 @@ function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instan
 
 // ─── Right detail pane ────────────────────────────────────────────────────
 function AgentDetailPane({
-  agent, instances, snapshots, image, onProvision, onAction, onOpenDetail, onExtend, activeInstanceId,
+  agent, instances, snapshots, image, onProvision, onAction, onOpenDetail, activeInstanceId,
   onPublishListing, onUnpublishListing,
-  onRetryPrep, onEditTemplate, onDismissSetup, canConvert = false,
+  onEditTemplate, onDismissSetup, canConvert = false,
 }: {
   agent: MyAgent;
   instances: Instance[];
@@ -4134,12 +4209,10 @@ function AgentDetailPane({
   image?: RuntimeImage;
   onPublishListing: (agentId: string) => void;
   onUnpublishListing: (agentId: string) => void;
-  onExtend: (id: string, minutesFromNow: number) => void;
   onProvision: (agentId: string) => void;
   onAction: (id: string, action: RowAction) => void;
   onOpenDetail: (id: string, tab?: DrawerTab) => void;
   activeInstanceId: string | null;
-  onRetryPrep: (agentId: string) => void;
   onEditTemplate: (agent: MyAgent) => void;
   /** Clears the first-run panel without configuring anything. */
   onDismissSetup: (agentId: string) => void;
@@ -4149,8 +4222,6 @@ function AgentDetailPane({
   // Launch gate: the Template must be Ready. That is the only gate now — the
   // saved-launch-configuration surface is gone, so a "confirm a model" block
   // would have had nowhere to send anyone.
-  // Disclosure state for the build log — presentation, local to this header.
-  const [buildLogOpen, setBuildLogOpen] = useState(false);
   const templateReady = isLaunchable(image);
   const launchable = templateReady;
   // + Sandbox + Listing ▼ now share the top-right of the agent header.
@@ -4159,17 +4230,7 @@ function AgentDetailPane({
   // A disabled launch button has to say WHICH step it is waiting on, and
   // whether waiting is even the right response — "no template at all" and
   // "template is still building" call for different things from the user.
-  const launchBlockedReason = !image
-    ? "This agent has no Sandbox Template yet."
-    : image.validation === "incompatible"
-      ? (image.compatibilityIssue ?? "The image is not compatible with this IDC.")
-      : image.validation === "failed"
-        ? "The image could not be validated. Open the build log for the reason."
-        : image.preparation === "failed"
-          ? "The template build failed. Open the build log, then retry the build."
-          : image.preparation === "preparing" || image.validation === "validating"
-            ? "The template is still building — this becomes available when it reaches Ready."
-            : "The template has not been built yet.";
+  const launchBlockedReason = launchBlockedBy(image) ?? "";
 
   const headerActions = (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -4283,12 +4344,8 @@ function AgentDetailPane({
           and the build state sits with it because §E wants a status label on
           the Agent header telling you whether a Sandbox can start. */}
       {image && (() => {
-        const ready = isLaunchable(image);
-        const state = ready
-          ? { label: "Ready", color: C.ok }
-          : image.validation === "incompatible" || image.preparation === "failed"
-            ? { label: image.validation === "incompatible" ? "Incompatible" : "Build failed", color: C.err }
-            : { label: image.preparation === "preparing" ? "Building" : VALIDATION_LABEL[image.validation], color: C.warn };
+        const view = buildView(image);
+        const state = buildChip(view, image.buildStatus);
         const field = (k: string, v: React.ReactNode) => (
           <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
             <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>{k}</span>
@@ -4298,39 +4355,38 @@ function AgentDetailPane({
         return (
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12, alignItems: "center", padding: "9px 0", borderTop: `1px solid ${C.borderSoft}`, borderBottom: `1px solid ${C.borderSoft}` }}>
             <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", minWidth: 0 }}>
-            {/* The badge is the disclosure for the build log. Before this it was
-                a dead label: a failed build said "Build failed" and gave the
-                reader nowhere to go. */}
-            <button
-              onClick={() => setBuildLogOpen((o) => !o)}
-              aria-expanded={buildLogOpen}
-              aria-controls={`build-log-${agent.id}`}
-              title={image.compatibilityIssue ?? (ready ? "Sandboxes can start from this Template" : "Sandboxes cannot start until the Template is ready")}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0, cursor: "pointer",
-                fontFamily: FONT, fontSize: 11, fontWeight: 600, letterSpacing: "0.04em",
-                color: state.color, background: `${state.color}1f`, border: `1px solid ${state.color}55`,
-                padding: "1px 8px", borderRadius: 5,
-              }}
-            >
-              {!ready && image.preparation === "preparing" && (
-                <span style={{ width: 6, height: 6, borderRadius: 999, background: state.color, animation: "pulse 1.2s ease-in-out infinite" }} />
-              )}
-              {state.label}
-              <V2Badge title="New in Agentbox v2 — the build log behind this badge" style={{ marginLeft: 1 }} />
-              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: buildLogOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}>
-                <path d="m6 9 6 6 6-6" />
-              </svg>
-            </button>
+            {/* A plain status label. There is no build log to open — the API has
+                no log endpoint — so this is not a disclosure, and pretending it
+                was one gave the reader a chevron that revealed invented output.
+                An unrecognised value renders verbatim; a missing one renders
+                nothing, because "we did not get the field" is not a state the
+                user should have to interpret. */}
+            {state && (
+              <span
+                title={view === "ready" ? "Sandboxes can start from this image" : undefined}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0,
+                  fontFamily: FONT, fontSize: 11, fontWeight: 600, letterSpacing: "0.04em",
+                  color: state.color, background: `${state.color}1f`, border: `1px solid ${state.color}55`,
+                  padding: "1px 8px", borderRadius: 5,
+                }}
+              >
+                {view === "building" && (
+                  <span style={{ width: 6, height: 6, borderRadius: 999, background: state.color, animation: "pulse 1.2s ease-in-out infinite" }} />
+                )}
+                {state.label}
+                <V2Badge style={{ marginLeft: 1 }} />
+              </span>
+            )}
+            {/* Builds run 21s to well past 3min and report no progress, so the
+                honest readout is time waited — never a bar that fakes a fraction. */}
+            {(view === "building" || view === "waiting") && <BuildElapsed since={image.buildStartedAt} />}
             {field("Template", agentVersionName(agent.id, agent.name))}
             {field("Image", `${image.url}:${image.tag}`)}
-            {field("Spec", productForTier(agent.tier))}
+            {field("Spec", `${specName(agentSpecId(agent))} · ${specLabel(agentSpecId(agent))}`)}
             {field("IDC", regionLabel(agent.region))}
             </div>
             <div style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-              {(image.preparation === "failed" || image.preparation === "stale") && (
-                <button onClick={() => onRetryPrep(agent.id)} style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 600, color: C.limeText, background: C.lime, border: "none", padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}>Retry build</button>
-              )}
               <button
                 onClick={() => onEditTemplate(agent)}
                 title="Change the image, Spec or default IDC — every future Sandbox picks them up"
@@ -4408,17 +4464,15 @@ function AgentDetailPane({
           </svg>
           <span>
             <span style={{ fontWeight: 600 }}>No sandbox can start yet.</span> {launchBlockedReason}
+            {buildView(image) === "error" && (
+              <span style={{ display: "block", marginTop: 4, color: C.muted }}>
+                There is no rebuild action — edit the image address and save, or register the agent again.
+              </span>
+            )}
           </span>
         </div>
       )}
 
-      {/* Build log — collapsed by default. A failed build does NOT auto-expand:
-          the header would jump under the reader without being asked. */}
-      {image && buildLogOpen && (
-        <div id={`build-log-${agent.id}`} style={{ paddingBottom: 4 }}>
-          <BuildStatus build={buildViewFor(image)} onRetry={() => onRetryPrep(agent.id)} />
-        </div>
-      )}
 
 
 
@@ -4442,7 +4496,6 @@ function AgentDetailPane({
           onProvision={onProvision}
           onAction={onAction}
           onOpenDetail={onOpenDetail}
-          onExtend={onExtend}
           activeInstanceId={activeInstanceId}
           canConvert={canConvert}
         />
@@ -5170,8 +5223,8 @@ export default function Dashboard() {
         digest: `sha256:${a.id.replace(/[^a-f0-9]/g, "").padEnd(36, "0").slice(0, 36)}`,
         registry: (raw.split("/")[0].includes(".") ? raw.split("/")[0] : "docker.io"),
         architecture: "linux/amd64",
-        validation: "pending",
-        preparation: "not_started",
+        buildStatus: "waiting",
+        buildStartedAt: fmtNow(),
         lastValidated: fmtNow(),
       };
     };
@@ -5180,12 +5233,12 @@ export default function Dashboard() {
       missing.forEach((a) => { next[a.id] = image(a); });
       return next;
     });
-    // Then let it build, so the build log and the Ready gate are reachable for
-    // an agent the user actually created — not just the three seeds.
+    // Then let it build, so the Ready gate is reachable for an agent the user
+    // actually created — not just the three seeds. Real builds run 21s to 3min+;
+    // compressed here, but the waiting -> building -> ready shape is the real one.
     missing.forEach((a) => {
-      setTimeout(() => patchImage(a.id, { validation: "validating" }), 700);
-      setTimeout(() => patchImage(a.id, { validation: "valid", preparation: "preparing" }), 1900);
-      setTimeout(() => patchImage(a.id, { preparation: "ready", lastValidated: fmtNow() }), 4200);
+      setTimeout(() => patchImage(a.id, { buildStatus: "building" }), 900);
+      setTimeout(() => patchImage(a.id, { buildStatus: "ready", lastValidated: fmtNow() }), 4200);
     });
   }, [registered, runtimeImages]);
   const [restoreSnapshot, setRestoreSnapshot] = useState<Snapshot | null>(null);
@@ -5289,8 +5342,11 @@ export default function Dashboard() {
       status: "pending",
       created: fmtNow(),
       config,
-      maxActive: config.maxLifetime,          // what was requested — display only
-      // The control plane decides the expiry; the UI reads it back, never derives it.
+      specId: config.specId,
+      capabilities: SANDBOX_CAPS,
+      // §E — the container server picks the lifetime; the console reads
+      // `expires_at` back and never derives it from what was asked for. Until
+      // `timeout` is passed through there is nothing to ask for.
       endAt: endAtFromNow(durationMins(config.maxLifetime) * 60),
       maxRuntimeAction: "suspend",            // P-01 default action at the limit
       latestOperation: { kind: "create", status: "in_progress", at: fmtNow() },
@@ -5353,45 +5409,17 @@ export default function Dashboard() {
     return { extendedToMins: CONNECT_FLOOR_MINS };
   };
 
-  // POST /sandboxes/{id}/timeout — "以当前时间为基准重设存活时长".
+  // §E — Extend is NOT wired up. bs-api has POST /sandboxes/{id}/timeout, but
+  // the container server does not pass it through: Launch takes no `timeout`,
+  // there is no /tasks/{id}/timeout, and the only thing it reports is
+  // `expires_at`. A control that cannot reach an endpoint is worse than no
+  // control, so the expiry is read-only everywhere until that lands.
   //
-  // Three things the swagger is explicit about, all of which the previous
-  // implementation got wrong:
-  //   · it re-bases from NOW. It is not a new total measured from creation.
-  //   · `timeout` <= 0 is silently replaced with 300s, so the caller cannot
-  //     derive the result — "以响应里的 new_end_at 为准".
-  //   · only a running sandbox may be retimed; anything else is 409.
-  //
-  // `minutes` is what the user picked; `new_end_at` is what actually took hold,
-  // and it is the only thing written to state.
-  const setSandboxTimeout = (id: string, minutes: number) => {
-    const inst = instances.find((i) => i.id === id);
-    if (!inst) return;
-    if (inst.status !== "running") {
-      pushToast("error", `Only a running sandbox can be retimed — this one is ${statusLabel(inst.status)}.`);
-      return;
-    }
-    const t = pushToast("progress", "Setting new expiry…");
-    setTimeout(() => {
-      // Stand-in for the response body: the server's authoritative new_end_at.
-      const newEndAt = endAtFromNow(minutes * 60);
-      setInstances((prev) => prev.map((i) => (i.id === id ? { ...i, endAt: newEndAt } : i)));
-      const mins = Math.max(0, Math.ceil((Date.parse(newEndAt.replace(" ", "T")) - Date.now()) / 60000));
-      // The token is bound to the sandbox lifetime, so extending invalidates it:
-      // "延长 sandbox 存活时需重新调用 connect 接口获取新的令牌".
-      settleToast(t, "success", `Expires in ${remainingShort(mins)} — reconnect to pick up a fresh access token`);
-      setTokenStale((prev) => ({ ...prev, [id]: true }));
-    }, 600);
-  };
-
-  const retryPreparation = (agentId: string) => {
-    const t = pushToast("progress", "Preparing template…");
-    patchImage(agentId, { preparation: "preparing" });
-    setTimeout(() => {
-      patchImage(agentId, { preparation: "ready" });
-      settleToast(t, "success", "Template ready — Launch enabled");
-    }, 1600);
-  };
+  // When it does: re-base from NOW (not a total from creation), honour the
+  // response's new_end_at rather than the requested number (<= 0 becomes 300s),
+  // running-only, and mark the access token stale — extending invalidates it.
+  // Reading a task also auto-renews its lease today; whether that survives
+  // passthrough decides whether a user-set expiry can even hold.
 
   // ── Runtime 2.0 lifecycle mutations (PRD §2). Simulated provider timing. ──
   const patchInstance = (id: string, patch: Partial<Instance>) =>
@@ -5916,9 +5944,7 @@ export default function Dashboard() {
               onProvision={handleProvision}
               onAction={handleAction}
               onOpenDetail={openDetail}
-              onExtend={setSandboxTimeout}
               activeInstanceId={drawer?.id ?? null}
-              onRetryPrep={retryPreparation}
               onEditTemplate={handleEditTemplate}
               onDismissSetup={dismissSetup}
               canConvert
@@ -5973,6 +5999,7 @@ export default function Dashboard() {
         image={(allAgents.find((a) => a.id === provisionForAgentId) as any)?.dockerImage}
         endpoints={endpointsForAgent(allAgents.find((a) => a.id === provisionForAgentId))}
         idcDefault={allAgents.find((a) => a.id === provisionForAgentId)?.region}
+        specDefault={agentSpecId(allAgents.find((a) => a.id === provisionForAgentId))}
         onCancel={() => setProvisionForAgentId(null)}
         onSubmit={(cfg) => {
           // v1.3 §C7 — check the balance before creating; short of credits the

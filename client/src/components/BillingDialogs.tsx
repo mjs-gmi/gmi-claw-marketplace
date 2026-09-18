@@ -277,7 +277,7 @@ export function TopUpCredits({ onClose, onContinue }: { onClose: () => void; onC
       )}
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 22 }}>
-        <button style={btnGhost} onClick={onClose}>Cancle</button>
+        <button style={btnGhost} onClick={onClose}>Cancel</button>
         <button style={btnLime} onClick={() => onContinue(parseFloat(amount) || 0)}>Continue</button>
       </div>
     </Modal>
