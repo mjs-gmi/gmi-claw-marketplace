@@ -1,5 +1,6 @@
 import React from "react";
 import { Link, useLocation } from "wouter";
+import { SANDBOX_AVAILABLE } from "@/lib/eligibility";
 
 // ─── Icons (pixel-style SVGs matching GMI Console) ───────────────────────────
 
@@ -205,11 +206,18 @@ export default function Navbar() {
         <NavItem href="https://console.gmicloud.ai/team" label="Team Space" icon={IcoTeamSpace} external />
         <NavItem href="https://console.gmicloud.ai/media" label="My Media" icon={IcoMyMedia} external />
 
-        {/* Agentbox */}
-        <SectionLabel>Agentbox</SectionLabel>
-        <NavItem href="/marketplace" label="Browse Agents" icon={IcoClawMarketplace} active={isActive("/marketplace")} />
-        <NavItem href="/dashboard" label="My Agents" icon={IcoDashboard} active={isActive("/dashboard")} />
-        <NavItem href="/deploy" label="Register Template" icon={IcoDeployList} active={isActive("/deploy")} />
+        {/* §A — GET /eligibility -> runtimes.sandbox.available. An org without
+            the runtime gets no Agentbox section at all: not greyed out, not
+            explained. A disabled nav item teaches people that a product they
+            cannot buy exists, and invites a support ticket we cannot answer. */}
+        {SANDBOX_AVAILABLE && (
+          <>
+            <SectionLabel>Agentbox</SectionLabel>
+            <NavItem href="/marketplace" label="Browse Agents" icon={IcoClawMarketplace} active={isActive("/marketplace")} />
+            <NavItem href="/dashboard" label="My Agents" icon={IcoDashboard} active={isActive("/dashboard")} />
+            <NavItem href="/deploy" label="Register Template" icon={IcoDeployList} active={isActive("/deploy")} />
+          </>
+        )}
 
       </nav>
 

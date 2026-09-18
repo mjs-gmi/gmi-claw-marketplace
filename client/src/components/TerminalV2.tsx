@@ -2,24 +2,21 @@
 // A persistent session, not a command submitter. The data plane backs it with a
 // real TTY:
 //
-//   POST /shell                                     open the session
-//   wss://{sandbox_key}.{domain}/shell/connect      the stream itself
-//   POST /shell/control {action:"resize",cols,rows} propagate the size
-//   POST /shell/control {action:"close"}            actually hang up
+//   POST /shell                                open the session
+//   wss://{sandbox_key}.{domain}/shell/connect the stream itself
+//   POST /shell/control {action:"close"}       hang up
 //
-// Two of those matter to the UI in ways easy to get wrong, and §C calls both
-// out: dragging the pane must really send a resize (otherwise programs inside
-// render at the wrong width), and closing must really send close (otherwise the
-// session leaks while the UI just hid it).
+// §I — the session OUTLIVES this pane. Closing the drawer does not kill it, and
+// reconnecting lands back in the same PTY, so the reconnect path must never warn
+// that running work will be lost: it will not be. That is the opposite of what
+// this component used to say.
 //
-// The session. Running one command with an exit code sits above it on the same
-// surface — Vercel's dashboard does this: one Connect tab holds the shell and
-// commands rather than a tab each, and neither E2B nor Daytona has a Run tab at
-// all. Both controls are visible at once, so neither hides behind the other.
+// Whether the control channel carries cols/rows is unconfirmed, so there is no
+// drag-to-resize here. A handle that silently failed to propagate would render
+// every program inside at the wrong width while looking like it worked.
 //
 // This is a prototype: the transport is simulated, but every state the real
-// stream produces has a rendering, and resize/close go through the same code
-// path a live control channel would.
+// stream produces has a rendering.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { C, FONT, MONO } from "@/lib/tokens";
 import V2Badge from "@/components/V2Badge";
@@ -312,14 +309,16 @@ export default function TerminalV2({
             </span>
           )}
 
-          {/* The pane. Vertical resize is native and reports through the same
-              control path a live channel would. */}
+          {/* §I — no drag handle. Whether /shell/control carries cols/rows is
+              unconfirmed, and a resize that does not reach the PTY leaves every
+              program inside laid out for the old width while the handle implies
+              it worked. Put it back once the protocol is confirmed. */}
           <div
             ref={paneRef}
             onClick={() => inputRef.current?.focus()}
             style={{
               height: paneH, minHeight: 140, maxHeight: 620,
-              resize: "vertical", overflow: "hidden",
+              overflow: "hidden",
               background: "#000",
               border: `1px solid ${conn === "connected" ? C.border : C.borderSoft}`,
               borderRadius: 8, padding: "8px 10px",
@@ -401,11 +400,10 @@ export default function TerminalV2({
           </div>
 
           <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-            A persistent session: <span style={{ fontFamily: MONO }}>cd</span> is retained, Ctrl-C interrupts,
-            Ctrl-D or <span style={{ fontFamily: MONO }}>exit</span> closes. Drag the bottom edge to resize —
-            the new size is sent as a <span style={{ fontFamily: MONO }}>resize</span> control message, so programs
-            inside lay out correctly. <span style={{ color: C.fg }}>Close session really hangs up</span>; it does not
-            just hide this pane.
+            A persistent session: <span style={{ fontFamily: MONO }}>cd</span> is retained, Ctrl-C interrupts.
+            <span style={{ color: C.fg }}> Leaving this pane does not end the session</span> — come back and you
+            land in the same shell, with whatever you started still running.
+            <span style={{ color: C.fg }}> Close session</span> really hangs up; use it when you mean to.
           </span>
         </>
       )}

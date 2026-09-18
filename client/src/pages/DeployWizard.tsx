@@ -82,6 +82,40 @@ interface ComputeTier {
   id: string; name: string; sub: string;
   cpu: string; ram: string; storage: string; pricePerHr: number;
 }
+// ─── §B Spec catalogue ──────────────────────────────────────────────────────
+// Both IDC and Spec are required at Register (`sandbox_requires_idc_and_spec`),
+// and the catalogue is per IDC — so the IDC has to be picked first, and the
+// Spec defaults to the smallest size that IDC offers. Sizes it does not offer
+// stay in the list, disabled: hiding them makes the catalogue look arbitrary.
+//
+// No price. The field exists and is always zero, and "$0.0000/hr" beside a size
+// reads as a bug rather than as free.
+interface SandboxSpec { id: string; vcpu: number; ramGb: number; diskGb: number }
+const SANDBOX_SPECS: SandboxSpec[] = [
+  { id: "x-small", vcpu: 1,  ramGb: 2,  diskGb: 10 },
+  { id: "small",   vcpu: 2,  ramGb: 4,  diskGb: 20 },
+  { id: "medium",  vcpu: 4,  ramGb: 8,  diskGb: 40 },
+  { id: "large",   vcpu: 8,  ramGb: 16, diskGb: 80 },
+  { id: "x-large", vcpu: 16, ramGb: 32, diskGb: 160 },
+];
+const SANDBOX_SPECS_BY_IDC: Record<string, string[]> = {
+  "us-ia-iowa-1":    ["x-small", "small", "medium", "large", "x-large"],
+  "us-or-portland":  ["x-small", "small", "medium"],
+  "eu-de-frankfurt": ["small", "medium", "large"],
+  "ap-sg-singapore": ["x-small", "small"],
+};
+function sandboxSpecLabel(id: string): string {
+  const sp = SANDBOX_SPECS.find((x) => x.id === id);
+  return sp ? `${sp.vcpu} vCPU · ${sp.ramGb} GB · ${sp.diskGb} GB` : "—";
+}
+function sandboxSpecsFor(idc: string): { spec: SandboxSpec; available: boolean }[] {
+  const offered = SANDBOX_SPECS_BY_IDC[idc] ?? [];
+  return SANDBOX_SPECS.map((spec) => ({ spec, available: offered.includes(spec.id) }));
+}
+function smallestSandboxSpec(idc: string): string {
+  return sandboxSpecsFor(idc).find((x) => x.available)?.spec.id ?? "small";
+}
+
 const COMPUTE_TIERS: ComputeTier[] = [
   { id: "container", name: "Container", sub: "Sandbox type for the Agentbox marketplace",
     cpu: "0.5 Core CPU", ram: "800 MiB Memory", storage: "10 GiB OS Storage (Ephemeral)", pricePerHr: 0.0098 },
@@ -1634,10 +1668,13 @@ function StepReview({
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Cost Estimate</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {/* §B — no compute price. The field exists and is always 0, and a
+              "$0.0000/hr" reads as a bug rather than as free. Model usage below
+              is metered for real, so that half stays. */}
           <div style={costCard}>
-            <div style={costLabel}>Compute cost</div>
-            <div style={bigNum}>~${computeRate.toFixed(4)}<span style={unit}>/hr</span></div>
-            <div style={{ ...bigNum, fontSize: 16, color: C.muted }}>~${dayRate.toFixed(2)}<span style={unit}>/day</span></div>
+            <div style={costLabel}>Compute</div>
+            <div style={{ ...bigNum, fontSize: 18 }}>Included</div>
+            <div style={{ fontSize: 12, color: C.muted, textAlign: "right" }}>Sandbox compute is not billed separately</div>
           </div>
           <div style={costCard}>
             <div style={costLabel}>Default model</div>
@@ -1745,11 +1782,11 @@ function EditCostPanel({
   return (
     <aside style={{ display: "flex", flexDirection: "column", gap: 14, position: "sticky", top: 48 }}>
       <div style={{ background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Live Cost Estimate</div>
-        <div style={{ fontFamily: FONT, fontSize: 28, fontWeight: 700, color: C.fg, letterSpacing: "-0.02em", lineHeight: "32px" }}>
-          ${computeRate.toFixed(4)}<span style={{ fontSize: 15, fontWeight: 500, color: C.muted }}>/hr</span>
+        <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Cost</div>
+        <div style={{ fontFamily: FONT, fontSize: 20, fontWeight: 700, color: C.fg, letterSpacing: "-0.02em", lineHeight: "26px" }}>
+          Compute included
         </div>
-        <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Container tier · per active sandbox</div>
+        <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Sandbox compute is not billed separately</div>
         <div style={{ borderTop: `1px solid ${C.borderSoft}`, marginTop: 4, paddingTop: 10, display: "flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 12, color: C.muted }}>
           <span style={{ width: 8, height: 8, borderRadius: 2, background: C.lime, display: "inline-block", flexShrink: 0 }} />
           MaaS: pay per token used
@@ -2025,48 +2062,50 @@ function RuntimeSection({
         </div>
       )}
 
-      {/* Region — the Template's default IDC. Launch overrides it per sandbox. */}
+      {/* §B — IDC first, because it decides which Specs exist. */}
       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-        <FieldLabel required>Region <V2Badge /></FieldLabel>
+        <FieldLabel required>IDC <V2Badge /></FieldLabel>
         <RegionSelect value={region} onChange={setRegion} options={REGIONS} />
         <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>
-          The default for this Agent. <span style={{ color: C.fg }}>Each Sandbox picks its own IDC at Launch</span> —
-          it is a create parameter (<span style={{ fontFamily: MONO }}>idc_name</span>).
+          The image is built for this IDC, and <span style={{ color: C.fg }}>every Sandbox lands here</span> —
+          Launch cannot place one elsewhere.
         </span>
       </div>
 
-      {/* Spec — the Template's `resources`. Not a create parameter, so it can
-          only be changed here; Launch shows it read-only. */}
+      {/* §B — the Spec used to build the image. Launch usually can change it. */}
       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
         <FieldLabel required>Spec <V2Badge /></FieldLabel>
         <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>
-          Fixed on this Agent's Template (<span style={{ fontFamily: MONO }}>resources</span>) and the same for
-          every Sandbox it launches. <span style={{ color: C.fg }}>Launch cannot override it</span> — to change the
-          size later, change the Template.
+          The size the image is built with. <span style={{ color: C.fg }}>Launch can usually pick a different one</span> —
+          a few IDCs pin it to this value.
         </span>
         {!region ? (
           <div style={{ fontFamily: FONT, fontSize: 13, color: C.muted, background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px" }}>
-            Select an IDC first — Specs are listed per IDC
+            Choose an IDC first — Specs are listed per IDC.
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8 }}>
-            {COMPUTE_TIERS.map((t) => {
-              const isActive = computeTier === t.id;
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8 }}>
+            {sandboxSpecsFor(region).map(({ spec, available }) => {
+              const isActive = computeTier === spec.id;
               return (
                 <button
-                  key={t.id}
-                  onClick={() => setComputeTier(t.id)}
+                  key={spec.id}
+                  disabled={!available}
+                  onClick={() => setComputeTier(spec.id)}
+                  title={available ? undefined : "Not available in this IDC"}
                   style={{
                     background: isActive ? C.selectedYel : C.cardSolid,
                     border: `1px solid ${isActive ? C.selectedYelB : C.border}`,
-                    borderRadius: 8, padding: "12px 14px", textAlign: "left",
-                    display: "flex", flexDirection: "column", gap: 4,
-                    cursor: "pointer", fontFamily: FONT,
+                    borderRadius: 8, padding: "11px 13px", textAlign: "left",
+                    display: "flex", flexDirection: "column", gap: 3,
+                    cursor: available ? "pointer" : "not-allowed",
+                    opacity: available ? 1 : 0.4,
+                    fontFamily: FONT,
                   }}
                 >
-                  <div style={{ fontSize: 13, fontWeight: 600, color: C.fg, lineHeight: "18px" }}>{t.name}</div>
-                  <div style={{ fontSize: 11, fontWeight: 400, color: C.muted, lineHeight: "14px" }}>{t.cpu} · {t.ram}</div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: C.lime, marginTop: 4 }}>${t.pricePerHr.toFixed(4)}/hr</div>
+                  <div style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 600, color: available ? C.fg : C.muted }}>{spec.id}</div>
+                  <div style={{ fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>{sandboxSpecLabel(spec.id)}</div>
+                  {!available && <div style={{ fontSize: 10.5, color: C.muted }}>Not in this IDC</div>}
                 </button>
               );
             })}
@@ -2081,8 +2120,7 @@ function RuntimeSection({
           <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
         </svg>
         <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "18px" }}>
-          <span style={{ color: C.fg, fontWeight: 600 }}>Sandbox lifecycle is configured per sandbox at Launch</span> — maximum active time, inactivity, and disk retention use your Organization default and can be customized when you launch a sandbox (not here).{" "}
-          <span style={{ color: C.muted }}>Register defines how the Agent runs; Launch defines how long each sandbox runs.</span>
+          <span style={{ color: C.fg, fontWeight: 600 }}>Sandbox lifetime is decided by the system</span> — it is not set here and, for now, not at Launch either. Each Sandbox reports its own expiry once it is running.
         </span>
       </div>
 
@@ -2198,7 +2236,8 @@ export default function DeployWizard() {
   const [registryUser, setRegistryUser] = useState("");
   const [registryToken, setRegistryToken] = useState("");
   const [region, setRegion] = useState("us-ia-iowa-1");
-  const [computeTier, setComputeTier] = useState("container");
+  // §B — the default is the smallest Spec the chosen IDC offers.
+  const [computeTier, setComputeTier] = useState(() => smallestSandboxSpec("us-ia-iowa-1"));
   const [addModels, setAddModels] = useState(true);
   const [selectedModel, setSelectedModel] = useState("deepseek-v4-flash");
 
@@ -2257,6 +2296,14 @@ export default function DeployWizard() {
     setComputeTier("container");
     setSelectedModel("claude-opus-48");
   }, []);
+
+  // Changing the IDC can strand a Spec that IDC does not offer — fall back to
+  // its smallest rather than submitting one the backend will reject.
+  useEffect(() => {
+    if (!region) return;
+    const offered = SANDBOX_SPECS_BY_IDC[region] ?? [];
+    if (!offered.includes(computeTier)) setComputeTier(smallestSandboxSpec(region));
+  }, [region, computeTier]);
 
   const tierInfo = useMemo(() => COMPUTE_TIERS.find((t) => t.id === computeTier) || null, [computeTier]);
   const modelInfo = useMemo(() => getModel(selectedModel) ?? null, [selectedModel]);
@@ -2321,13 +2368,8 @@ export default function DeployWizard() {
           { label: "Project Name", value: projectName.trim() || "—" },
           { label: "Runtime", value: dockerImage.trim() || "—" },
           { label: "Requires sign-in", value: enableCreds ? "Private registry" : "Public image" },
-          { label: "Region", value: regionInfo ? `${regionInfo.name} · ${regionInfo.sub}` : "—" },
-          {
-            label: "Port Mappings",
-            value: ports.length
-              ? ports.map((p) => `${p.protocol} :${p.internalPort || "?"} (${p.name || "web"})`).join(", ")
-              : "—",
-          },
+          { label: "IDC", value: regionInfo ? `${regionInfo.name} · ${regionInfo.sub}` : "—" },
+          { label: "Spec", value: `${computeTier} · ${sandboxSpecLabel(computeTier)}` },
           { label: "Custom Env Vars", value: customEnvs.length ? `${customEnvs.length} configured` : "—" },
         ]
       : [
@@ -2549,13 +2591,22 @@ export default function DeployWizard() {
                       />
                     </SectionCard>
 
+                    {/* §B — the port mapper is gone. The backend returns one
+                        `endpoint_url` with no port in it, so there was nothing
+                        for the mapping to reach: asking someone to declare
+                        :8080 and then never using it is worse than not asking.
+                        Shared storage and public IP go for the same reason —
+                        neither exists on this create call.
+
+                        Env vars stay, inert: the container server does not
+                        forward `env_vars` yet, so a value typed here would be
+                        silently dropped. §四 tracks the passthrough. */}
                     <SectionCard
                       icon={<IconGlobe size={16} />}
-                      title="Public Access"
+                      title="Environment"
                       optional
-                      subtitle="Allow users and external services to reach your agent, and declare the environment it needs."
+                      subtitle="Declare the variables your agent expects. Values are supplied per Sandbox."
                     >
-                      <StepNetworking ports={ports} setPorts={setPorts} forkedFromTemplate={!!forkedFrom} />
                       <StepEnvVars customEnvs={customEnvs} setCustomEnvs={setCustomEnvs} forkedFromTemplate={!!forkedFrom} />
                     </SectionCard>
                   </>

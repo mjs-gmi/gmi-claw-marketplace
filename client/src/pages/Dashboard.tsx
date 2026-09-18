@@ -30,6 +30,8 @@ import {
   hasAcknowledged, acknowledge,
 } from "@/components/BillingDialogs";
 import { ALL_CLAWS, TYPE_LABELS, type Claw, type TypeLabel } from "@/lib/clawData";
+import { SANDBOX_AVAILABLE } from "@/lib/eligibility";
+import NotFound from "@/pages/NotFound";
 
 // ─── Tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const C = {
@@ -162,15 +164,6 @@ const MY_DEPLOYMENTS: MyAgent[] = SEED_AGENTS;
 // ─── Backend capability flags (capability-driven, provider-agnostic).
 // In production these ride on the instance read path (`capabilities`). Here they
 // are prototype constants so the UI is capability-gated rather than provider-aware.
-// ─── §A Entry switch ────────────────────────────────────────────────────────
-// GET /eligibility -> runtimes.sandbox.available. False means every Sandbox
-// surface is absent — not greyed out, not explained. An org without the runtime
-// should not learn it exists from a disabled button.
-const SANDBOX_ELIGIBILITY = { available: true };
-function sandboxAvailable(): boolean {
-  return SANDBOX_ELIGIBILITY.available;
-}
-
 // ─── §G Capabilities ────────────────────────────────────────────────────────
 // Which panes a sandbox gets is decided by the task's own `capabilities`, never
 // by matching on a runtime name. Container tasks report logs/metrics/ports;
@@ -2895,10 +2888,18 @@ const FILES_DEFAULT_DIR = "/home/user/";
 const MOCK_OVERSIZE_MB = 100;
 
 // The three failures the API actually distinguishes, plus what to do about each.
-function uploadFailure(path: string, sizeMb: number): { reason: string; hint: string } | null {
-  if (!path.startsWith("/")) {
-    return { reason: "Invalid path", hint: "Give an absolute path, e.g. /home/user/in.json" };
+/** §J — absolute, and no `.` or `..` segment. Catchable before the round trip. */
+function badPath(path: string): string | null {
+  if (!path.startsWith("/")) return "Give an absolute path, e.g. /home/user/in.json";
+  if (path.split("/").some((seg) => seg === "." || seg === "..")) {
+    return "Paths cannot contain . or .. segments — give the full path.";
   }
+  return null;
+}
+
+function uploadFailure(path: string, sizeMb: number): { reason: string; hint: string } | null {
+  const bad = badPath(path);
+  if (bad) return { reason: "Invalid path", hint: bad };
   if (/^\/(proc|sys|dev)\//.test(path) || path.startsWith("/root/")) {
     return { reason: "Permission denied", hint: "The sandbox user cannot write here. Try somewhere under /home/user/." };
   }
@@ -2912,9 +2913,8 @@ function uploadFailure(path: string, sizeMb: number): { reason: string; hint: st
 }
 
 function downloadFailure(path: string): { reason: string; hint: string } | null {
-  if (!path.startsWith("/")) {
-    return { reason: "Invalid path", hint: "Give an absolute path, e.g. /home/user/result.json" };
-  }
+  const bad = badPath(path);
+  if (bad) return { reason: "Invalid path", hint: bad };
   if (/\/$/.test(path)) {
     return { reason: "Not a file", hint: "There is no directory listing — name the file, not the folder." };
   }
@@ -2939,8 +2939,12 @@ function FilesSection({ inst }: { inst: Instance }) {
   // Why the whole section is inert, in the sandbox's own words.
   const blocked =
     creating ? "The Sandbox is still being created — file transfer opens once it reports Running."
-  : !running  ? `File transfer is available only while the Sandbox is Running (this one is ${statusLabel(inst.status)}). Suspend and Delete cancel an in-flight transfer.`
+  : !running  ? `File transfer is available only while the Sandbox is Running (this one is ${statusLabel(inst.status)}). Pause and Delete cancel an in-flight transfer.`
   : null;
+  // §J — writing needs creator or org_owner; reading needs neither. So a
+  // read-only viewer loses the upload block and KEEPS download, rather than
+  // having the whole pane taken away.
+  const canWrite = CAN_WRITE_FILES;
 
   const startUpload = (file: File) => {
     const target = upPath.endsWith("/") ? `${upPath}${file.name}` : upPath;
@@ -3025,21 +3029,26 @@ function FilesSection({ inst }: { inst: Instance }) {
         </span>
       )}
 
-      {/* Upload */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+      {/* Upload — §J: gated on write permission, which download is not. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 7, opacity: canWrite ? 1 : 0.6 }}>
         <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>Upload</span>
+        {!canWrite && (
+          <span style={{ fontFamily: FONT, fontSize: 11, color: C.warn, lineHeight: "15px" }}>
+            You can download from this Sandbox but not upload to it — writing needs the creator or an organization owner.
+          </span>
+        )}
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <input
             value={upPath}
-            disabled={!running}
+            disabled={!running || !canWrite}
             onChange={(e) => { setUpPath(e.target.value); setUp({ kind: "idle" }); }}
             placeholder="/home/user/"
             style={inputStyle_}
           />
-          <label style={btnStyle(true)}>
+          <label style={{ ...btnStyle(true), ...(canWrite ? null : { color: "#5a5a5a", background: "transparent", border: `1px solid ${C.border}`, cursor: "not-allowed" }) }}>
             <input
               type="file"
-              disabled={!running}
+              disabled={!running || !canWrite}
               onChange={(e) => { const f = e.target.files?.[0]; if (f) startUpload(f); e.target.value = ""; }}
               style={{ display: "none" }}
             />
@@ -3048,6 +3057,7 @@ function FilesSection({ inst }: { inst: Instance }) {
         </div>
         <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted }}>
           End the path with <span style={{ fontFamily: MONO }}>/</span> to keep the file's own name, or give a full path to rename it.
+          {" "}<span style={{ color: C.warn }}>An existing file at that path is overwritten.</span>
         </span>
         {feedback(up)}
       </div>
@@ -3069,8 +3079,8 @@ function FilesSection({ inst }: { inst: Instance }) {
       </div>
 
       <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-        One file at a time, by full path — <span style={{ color: C.fg }}>there is no directory browser</span>.
-        Use <span style={{ fontFamily: MONO }}>ls</span> from the Terminal tab to see what is there.
+        One file at a time, by full path — <span style={{ color: C.fg }}>directory browsing isn&apos;t available yet</span>.
+        Use <span style={{ fontFamily: MONO }}>ls</span> from the Terminal to see what is there.
         A failed upload leaves no partial file; a failed download errors rather than silently truncating.
       </span>
       {/* Points at Download, the control directly above, because it is the only
@@ -3083,173 +3093,66 @@ function FilesSection({ inst }: { inst: Instance }) {
   );
 }
 
-function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEndpoint[] }) {
-  const [rotating, setRotating] = useState<AgentEndpoint | null>(null);
-  const [rotated, setRotated] = useState<string | null>(null); // one-time new token to show
-  const [tokenOwner, setTokenOwner] = useState<string | null>(null); // which endpoint it belongs to
-  // F-06 — access may be tightened without restarting the Runtime. Declared
-  // visibility is a default, not a lock: a launcher may only make it stricter.
-  // Going Public needs Agent policy, Organization policy, and permission.
-  const [visOverride, setVisOverride] = useState<Record<string, EndpointVisibility>>({});
-  const [deleted, setDeleted] = useState<string[]>([]);
-  const [confirmDelete, setConfirmDelete] = useState<AgentEndpoint | null>(null);
-
-  const linkBtn = (label: string, enabled: boolean, onClick?: () => void, primary = false): React.ReactNode => (
-    <button
-      disabled={!enabled}
-      onClick={onClick}
-      style={{
-        fontFamily: FONT, fontSize: 12, fontWeight: 600,
-        background: primary && enabled ? C.lime : "transparent",
-        color: !enabled ? "#5a5a5a" : primary ? C.limeText : C.fg,
-        border: `1px solid ${primary && enabled ? C.lime : C.border}`,
-        padding: "5px 12px", borderRadius: 7, cursor: enabled ? "pointer" : "not-allowed",
-      }}
-    >
-      {label}
-    </button>
-  );
+// ─── §K Access ──────────────────────────────────────────────────────────────
+// The backend hands back one `endpoint_url` — no port, no scheme choice, no
+// visibility toggle. So the only branch that matters is whether that field came
+// back at all; there is nothing to ask the user and nothing to assemble.
+//
+// No Credential block. The console never holds the sandbox token: it is minted
+// by /connect for the data plane and is not ours to reveal, copy or rotate. The
+// previous version offered all three, which promised a capability the frontend
+// does not have.
+function AccessSection({ inst }: { inst: Instance; endpoints?: AgentEndpoint[] }) {
+  const running = inst.status === "running";
+  if (!inst.endpointUrl) return null;   // §K — no address, no section
 
   return (
-    <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 10 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ color: C.muted, display: "inline-flex" }}><IconNetwork size={14} /></span>
         <h4 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: 0 }}>Access</h4>
-        <ReleaseBadge r="R1" />
-        <span style={{ marginLeft: "auto", fontFamily: FONT, fontSize: 11, color: C.muted }}>{endpoints.length} endpoint{endpoints.length === 1 ? "" : "s"}</span>
+        <V2Badge />
       </div>
 
-      {endpoints.map((ep) => {
-        const url = endpointUrlFor(inst.id, ep);
-        const visibility = visOverride[ep.id] ?? ep.visibility;
-        const isPublic = visibility === "public";
-        const tightened = visibility !== ep.visibility;
-        const st = deleted.includes(ep.id) ? "revoked" : endpointState(inst, ep); // F-06 — independent of Runtime state
-        const meta = ENDPOINT_STATE_META[st];
-        const canOpen = st === "available";
-        const revoked = st === "revoked";
-        // curl with GMI authentication — "copy an authenticated request".
-        const authRequest = `curl ${url} \\\n  -H "Authorization: Bearer $GMI_ENDPOINT_TOKEN"`;
-        const note =
-          deleted.includes(ep.id) ? "Deleted — the route, authenticated access, and any signed links are revoked. This URL is never reused for another tenant." :
-          revoked ? "Revoked — this endpoint was torn down with the sandbox." :
-          (st === "unavailable" && (inst.status === "suspended" || inst.status === "suspending"))
-            ? "Unavailable while the sandbox is suspended. The URL will remain unchanged after it resumes." :
-          st === "unavailable" ? `Service unavailable — check the app is listening on 0.0.0.0:${ep.internalPort}.` :
-          st === "pending" ? "Route is starting — the URL is reserved and becomes reachable shortly." :
-          st === "error" ? "Endpoint error — route or tunnel failed. The URL is unchanged; retrying automatically." :
-          null;
-        return (
-          <div key={ep.id} style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8, opacity: revoked ? 0.6 : 1 }}>
-            {/* Header: name + two SEPARATE badges — Visibility · Endpoint state */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>{ep.name}</span>
-              <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", color: isPublic ? "#fbbf24" : "#7dd3fc", background: isPublic ? "rgba(251,191,36,0.14)" : "rgba(125,211,252,0.14)", border: `1px solid ${isPublic ? "rgba(251,191,36,0.45)" : "rgba(125,211,252,0.45)"}`, padding: "1px 7px", borderRadius: 5 }}>{isPublic ? "Public" : "Private"}</span>
-              <span title="Endpoint state — independent of the sandbox's state" style={{ fontFamily: FONT, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", color: meta.color, background: `${meta.color}1f`, border: `1px solid ${meta.color}55`, padding: "1px 7px", borderRadius: 5 }}>{meta.label}</span>
-            </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>Endpoint</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ flex: 1, minWidth: 0, background: C.pillBg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 11px", fontFamily: MONO, fontSize: 12, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {inst.endpointUrl}
+          </span>
+          <CopyButton value={inst.endpointUrl} />
+          <a
+            href={running ? inst.endpointUrl : undefined}
+            target="_blank"
+            rel="noreferrer"
+            aria-disabled={!running}
+            title={running ? "Open in a new tab" : `The Sandbox is ${statusLabel(inst.status)} — the endpoint answers only while it is Running.`}
+            style={{
+              flexShrink: 0, textDecoration: "none",
+              fontFamily: FONT, fontSize: 12, fontWeight: 600,
+              background: running ? C.lime : "transparent",
+              color: running ? C.limeText : "#5a5a5a",
+              border: running ? "none" : `1px solid ${C.border}`,
+              borderRadius: 7, padding: "7px 14px",
+              cursor: running ? "pointer" : "not-allowed",
+              pointerEvents: running ? "auto" : "none",
+            }}
+          >
+            Open
+          </a>
+        </div>
+      </div>
 
-            {/* URL + copy */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ flex: 1, minWidth: 0, fontFamily: "'GeistMono', monospace", fontSize: 12, color: revoked ? C.muted : C.fg, textDecoration: revoked ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{url}</span>
-              {!revoked && <MiniCopy value={url} />}
-            </div>
-            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>Internal port {ep.internalPort} · {ep.protocol}</span>
+      {/* The one thing about this URL the operator has to know. */}
+      <span style={{ display: "flex", alignItems: "flex-start", gap: 7, fontFamily: FONT, fontSize: 11, color: C.warn, lineHeight: "16px", background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: 8, padding: "8px 11px" }}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg>
+        Anyone with this link can reach the Sandbox. There is no sign-in in front of it.
+      </span>
 
-            {isPublic && !revoked && (
-              <div style={{ fontFamily: FONT, fontSize: 11, color: "#fbbf24", lineHeight: "15px" }}>
-                ⚠ Anyone with this URL can access the service.
-              </div>
-            )}
-
-            {note && (
-              <div style={{ fontFamily: FONT, fontSize: 11, color: st === "error" ? C.err : C.muted, lineHeight: "16px" }}>{note}</div>
-            )}
-
-            {!isPublic && !revoked && (
-              /* Private → GMI-managed authentication (D-11). Reset invalidates
-                 existing access without changing the URL. */
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontFamily: FONT, fontSize: 11, color: C.muted }}>
-                <span>GMI authentication · token ending in <span style={{ fontFamily: MONO, color: C.fg }}>••••{tokenTail(ep.id)}</span></span>
-                <button onClick={() => setRotating(ep)} title="Invalidates existing authenticated access. The URL does not change." style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.fg, background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}>Reset access</button>
-              </div>
-            )}
-
-            {/* Actions — Open needs Available; visibility can only be tightened */}
-            {!revoked && (
-              <div style={{ display: "flex", gap: 8, marginTop: 2, flexWrap: "wrap" }}>
-                {linkBtn("Open endpoint", canOpen, () => window.open(url, "_blank"), true)}
-                {!isPublic && linkBtn("Copy authenticated request", true, () => { try { navigator.clipboard?.writeText(authRequest); } catch { /* ignore */ } })}
-                {isPublic
-                  ? linkBtn("Make Private", true, () => setVisOverride((v) => ({ ...v, [ep.id]: "private" })))
-                  : linkBtn("Make Public", false, undefined)}
-                {linkBtn("Delete endpoint", true, () => setConfirmDelete(ep))}
-              </div>
-            )}
-
-            {!revoked && !isPublic && ep.visibility === "private" && (
-              <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-                Making this Endpoint Public requires Agent policy, Organization policy, and sufficient permission — access can always be tightened, never loosened, from here.
-                Signed links with an explicit expiry are conditional in R1.
-              </span>
-            )}
-            {tightened && (
-              <span style={{ fontFamily: FONT, fontSize: 11, color: C.ok, lineHeight: "15px" }}>
-                Tightened to Private for this Sandbox — applied without a restart. The Agent's declared default is unchanged.
-              </span>
-            )}
-
-            {/* Inline confirmations — the drawer is already a panel, so these
-                never open a second dialog on top of it. */}
-            {rotating?.id === ep.id && (
-              <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
-                <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "17px" }}>
-                  Reset access? Existing authenticated access stops working immediately, including anything already issued. The URL does not change.
-                </span>
-                <div style={{ display: "flex", gap: 8 }}>
-                  {linkBtn("Reset access", true, () => { setRotated(newToken()); setTokenOwner(ep.id); setRotating(null); }, true)}
-                  {linkBtn("Cancel", true, () => setRotating(null))}
-                </div>
-              </div>
-            )}
-            {confirmDelete?.id === ep.id && (
-              <div style={{ background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.35)", borderRadius: 8, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
-                <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "17px" }}>
-                  Delete <span style={{ fontFamily: MONO }}>{ep.name}</span>? The route, authenticated access, and any signed links are revoked.
-                  The URL is never reused for another tenant, and the Sandbox keeps running.
-                </span>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button
-                    onClick={() => { setDeleted((d) => [...d, ep.id]); setConfirmDelete(null); }}
-                    style={{ fontFamily: FONT, fontSize: 12, fontWeight: 600, background: C.err, color: "#0a0a0a", border: "none", padding: "5px 12px", borderRadius: 7, cursor: "pointer" }}
-                  >
-                    Delete endpoint
-                  </button>
-                  {linkBtn("Cancel", true, () => setConfirmDelete(null))}
-                </div>
-              </div>
-            )}
-            {rotated && rotating === null && confirmDelete === null && tokenOwner === ep.id && (
-              <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
-                <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.05em", textTransform: "uppercase" }}>New access token</span>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ flex: 1, minWidth: 0, fontFamily: MONO, fontSize: 12, color: C.fg, overflow: "hidden", textOverflow: "ellipsis" }}>{rotated}</span>
-                  <MiniCopy value={rotated} />
-                </div>
-                <span style={{ fontFamily: FONT, fontSize: 11, color: C.warn, lineHeight: "16px" }}>
-                  Copy this token now — you will not be able to view it again.
-                </span>
-                <div style={{ display: "flex" }}>{linkBtn("Done", true, () => { setRotated(null); setTokenOwner(null); })}</div>
-              </div>
-            )}
-          </div>
-        );
-      })}
-
-      <p style={{ fontFamily: FONT, fontSize: 11, color: C.muted, margin: 0, lineHeight: "15px" }}>
-        Endpoints are declared on the Agent (Register → Networking) and versioned with it — declaration changes affect only new Sandboxes.
-        Listening on an undeclared port never exposes it. The URL, visibility, and authentication survive Pause/Resume; Delete revokes them.
-      </p>
-
+      <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
+        If the page does not load, the Sandbox is running but your program may not be listening yet — check it started
+        from the <span style={{ color: C.fg }}>Terminal</span>.
+      </span>
     </div>
   );
 }
@@ -3275,25 +3178,234 @@ function AccessSection({ inst, endpoints }: { inst: Instance; endpoints: AgentEn
 // (no /usage, no /logs), so two of five tabs were dead. They stay in the union
 // only so an existing /dashboard/sandbox/:id/logs URL still resolves — TAB_ALIAS
 // redirects them to Overview rather than 404ing someone's bookmark.
+// ─── §H Run ─────────────────────────────────────────────────────────────────
+// POST /tasks/{id}/exec. The status code IS the protocol:
+//   200 — the command finished inside the wait window; the body is the result
+//   202 — still running; poll until it settles
+// There is no `cwd` parameter and no per-command timeout, so this form has no
+// advanced section to hide. `wait_timeout` is a long-poll ceiling, not a command
+// timeout: passing it does not kill anything, which is why there is no timed-out
+// state here. A command that outlives the window simply keeps running.
+type ExecState = "running" | "cancelling" | "cancelled" | "succeeded" | "failed";
+
+interface Execution {
+  id: string;
+  command: string;
+  state: ExecState;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  stdoutTruncated?: boolean;
+  startedAt: number;
+  endedAt?: number;
+}
+
+/**
+ * The backend spells cancellation with one L in some places and two in others,
+ * and an unrecognised status must never be treated as terminal — polling has to
+ * continue or the UI strands a command that is still running.
+ */
+function normalizeExecState(raw: string): ExecState | null {
+  const v = raw.toLowerCase();
+  if (v === "cancelling" || v === "canceling") return "cancelling";
+  if (v === "cancelled" || v === "canceled") return "cancelled";
+  if (v === "running" || v === "in_progress") return "running";
+  if (v === "succeeded" || v === "success" || v === "completed") return "succeeded";
+  if (v === "failed" || v === "error") return "failed";
+  return null;   // unknown → keep polling
+}
+
+function execSeconds(ex: Execution): string {
+  const ms = (ex.endedAt ?? Date.now()) - ex.startedAt;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+// Mock outcomes. Long-running commands stay running so Cancel is reachable.
+function mockExec(cmd: string): { state: ExecState; exitCode: number; stdout: string; stderr: string; truncated?: boolean; ms: number } {
+  const c = cmd.trim();
+  if (/^ls\b/.test(c))     return { state: "succeeded", exitCode: 0, stdout: "main.py\nrequirements.txt\ndata/\nout/", stderr: "", ms: 400 };
+  if (/^pwd\b/.test(c))    return { state: "succeeded", exitCode: 0, stdout: "/home/user", stderr: "", ms: 300 };
+  if (/^cat\b/.test(c))    return { state: "succeeded", exitCode: 0, stdout: Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n"), stderr: "", truncated: true, ms: 600 };
+  if (/^python|^node|^\.\//.test(c)) return { state: "succeeded", exitCode: 0, stdout: "loaded 1,284 rows\nwrote out/result.json", stderr: "", ms: 2600 };
+  if (/^pip |^npm /.test(c)) return { state: "succeeded", exitCode: 0, stdout: "Successfully installed 4 packages", stderr: "", ms: 3400 };
+  return { state: "failed", exitCode: 127, stdout: "", stderr: `sh: 1: ${c.split(" ")[0]}: not found`, ms: 500 };
+}
+function mockIsLongRunning(cmd: string): boolean {
+  return /\bsleep\b|\btrain\b|\bwatch\b|\btail -f\b/.test(cmd.trim());
+}
+
+function RunPane({
+  inst, history, setHistory,
+}: {
+  inst: Instance;
+  history: Execution[];
+  setHistory: (fn: (prev: Execution[]) => Execution[]) => void;
+}) {
+  const [cmd, setCmd] = useState("");
+  const timers = useRef<number[]>([]);
+  useEffect(() => () => { timers.current.forEach(window.clearTimeout); }, []);
+  const after = (ms: number, fn: () => void) => { timers.current.push(window.setTimeout(fn, ms)); };
+
+  const running = inst.status === "running";
+  const live = history.find((h) => h.state === "running" || h.state === "cancelling");
+
+  const patch = (id: string, p: Partial<Execution>) =>
+    setHistory((prev) => prev.map((h) => (h.id === id ? { ...h, ...p } : h)));
+
+  const submit = () => {
+    const c = cmd.trim();
+    if (!c || !running || live) return;
+    const id = `exec_${Math.random().toString(16).slice(2, 10)}`;
+    setHistory((prev) => [{ id, command: c, state: "running", exitCode: null, stdout: "", stderr: "", startedAt: Date.now() }, ...prev]);
+    setCmd("");
+    if (mockIsLongRunning(c)) return;      // stays running so Cancel is reachable
+    const out = mockExec(c);
+    after(out.ms, () => patch(id, {
+      state: out.state, exitCode: out.exitCode,
+      stdout: out.stdout, stderr: out.stderr,
+      stdoutTruncated: out.truncated, endedAt: Date.now(),
+    }));
+  };
+
+  const cancel = (ex: Execution) => {
+    patch(ex.id, { state: "cancelling" });
+    after(700, () => patch(ex.id, { state: "cancelled", endedAt: Date.now() }));
+  };
+
+  const blocked = !running
+    ? `Run needs a Running Sandbox — this one is ${statusLabel(inst.status)}.`
+    : null;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <h4 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: 0 }}>Run a command</h4>
+        <V2Badge />
+        <span style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>POST /exec</span>
+      </div>
+
+      {blocked && (
+        <span style={{ display: "flex", alignItems: "flex-start", gap: 7, fontFamily: FONT, fontSize: 11.5, color: C.warn, lineHeight: "16px", background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: 8, padding: "8px 11px" }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg>
+          {blocked}
+        </span>
+      )}
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <span style={{ fontFamily: MONO, fontSize: 13, color: C.lime, flexShrink: 0 }}>$</span>
+        <input
+          value={cmd}
+          disabled={!running || !!live}
+          onChange={(e) => setCmd(e.target.value)}
+          onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") submit(); }}
+          placeholder="python main.py --input data/in.json"
+          style={{
+            flex: 1, minWidth: 0,
+            background: running ? C.pillBg : "rgba(255,255,255,0.02)",
+            border: `1px solid ${C.border}`, color: running ? C.fg : C.muted,
+            fontFamily: MONO, fontSize: 12.5, padding: "8px 11px", borderRadius: 8, outline: "none",
+          }}
+        />
+        <button
+          onClick={submit}
+          disabled={!running || !!live || cmd.trim() === ""}
+          title={live ? "One command at a time — the current one is still running." : undefined}
+          style={{
+            flexShrink: 0, fontFamily: FONT, fontSize: 12.5, fontWeight: 600,
+            background: running && !live && cmd.trim() ? C.lime : "transparent",
+            color: running && !live && cmd.trim() ? C.limeText : "#5a5a5a",
+            border: running && !live && cmd.trim() ? "none" : `1px solid ${C.border}`,
+            borderRadius: 8, padding: "8px 16px",
+            cursor: running && !live && cmd.trim() ? "pointer" : "not-allowed",
+          }}
+        >
+          Run
+        </button>
+      </div>
+
+      <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
+        One command at a time. <span style={{ color: C.fg }}>For an interactive session, use the Terminal.</span>{" "}
+        There is no working directory or per-command timeout — a command that outlives the response keeps running in the background.
+      </span>
+
+      {history.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {history.map((ex) => {
+            const bad = ex.state === "failed" || (ex.exitCode !== null && ex.exitCode !== 0);
+            const inFlight = ex.state === "running" || ex.state === "cancelling";
+            const head =
+              ex.state === "running"    ? { text: "Running…", color: C.warn }
+            : ex.state === "cancelling" ? { text: "Cancelling…", color: C.warn }
+            : ex.state === "cancelled"  ? { text: `Cancelled · ${execSeconds(ex)}`, color: C.muted }
+            : bad                       ? { text: `exit ${ex.exitCode ?? "—"} · ${execSeconds(ex)}`, color: C.err }
+            :                             { text: `exit ${ex.exitCode} · ${execSeconds(ex)}`, color: C.ok };
+            return (
+              <div key={ex.id} style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 11px", background: "rgba(255,255,255,0.02)", borderBottom: `1px solid ${C.borderSoft}` }}>
+                  <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.lime, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>$ {ex.command}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 11, color: head.color, flexShrink: 0 }}>{head.text}</span>
+                  {/* §H — Cancel is a plain button on a running command, not a
+                      menu item. It is the only thing anyone wants at that moment. */}
+                  {inFlight && ex.state === "running" && (
+                    <button
+                      onClick={() => cancel(ex)}
+                      style={{ flexShrink: 0, fontFamily: FONT, fontSize: 11, fontWeight: 600, background: "transparent", color: C.fg, border: `1px solid ${C.border}`, borderRadius: 6, padding: "2px 9px", cursor: "pointer" }}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+                {(ex.stdout || ex.stderr) && (
+                  <pre style={{ margin: 0, background: "#000", color: "#d4d4d4", fontFamily: MONO, fontSize: 11.5, lineHeight: "18px", padding: "9px 11px", maxHeight: 220, overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                    {ex.stdout}
+                    {ex.stderr && <span style={{ color: "#fca5a5" }}>{ex.stdout ? "\n" : ""}{ex.stderr}</span>}
+                  </pre>
+                )}
+                {ex.stdoutTruncated && (
+                  <div style={{ padding: "6px 11px", borderTop: `1px solid ${C.borderSoft}`, fontFamily: FONT, fontSize: 11, color: C.muted }}>
+                    Output was truncated by the server — redirect to a file and download it for the whole thing.
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 type DrawerTab = "overview" | "metrics" | "logs" | "terminal" | "files" | "work" | "access" | "run" | "config";
 // Old links keep resolving.
 const TAB_ALIAS: Partial<Record<DrawerTab, DrawerTab>> = {
-  run: "terminal", work: "terminal", access: "overview", config: "overview",
+  // `run` and `access` are real tabs again (§H/§K), so they no longer redirect.
+  work: "terminal", config: "overview",
   // Retired 2026-09-09 — no /logs and no /usage endpoint exists, so both tabs
   // were permanently empty. Old links land on Overview instead of 404ing.
   metrics: "overview", logs: "overview",
 };
-const DRAWER_TABS: { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean; noApi?: boolean; question?: string }[] = [
-  { key: "overview", label: "Overview" },
-  { key: "terminal", label: "Terminal", runningOnly: true, v2: true },
-  // Both E2B and Daytona call it Filesystem.
-  { key: "files",    label: "Filesystem", v2: true },
-];
+interface DrawerTabDef { key: DrawerTab; label: string; runningOnly?: boolean; v2?: boolean }
+/**
+ * §G — which panes exist is a property of the task, read off `capabilities`.
+ * Matching on a runtime name would put a Files tab on anything we happened to
+ * call a sandbox, and hide one on anything we did not. Access is extra: it
+ * appears only when the backend actually handed back an endpoint (§K).
+ */
+function drawerTabsFor(inst: Instance): DrawerTabDef[] {
+  const caps = capsOf(inst);
+  const tabs: DrawerTabDef[] = [{ key: "overview", label: "Overview" }];
+  if (caps.exec)  tabs.push({ key: "run",      label: "Run",        runningOnly: true, v2: true });
+  if (caps.shell) tabs.push({ key: "terminal", label: "Terminal",   runningOnly: true, v2: true });
+  if (caps.files) tabs.push({ key: "files",    label: "Filesystem", v2: true });
+  if (inst.endpointUrl) tabs.push({ key: "access", label: "Access" });
+  return tabs;
+}
 const DRAWER_WIDTH = 560;
 
 function InstanceDrawer({
   inst, deploymentName, agentVersion, endpoints, idc, product, tab, onTab,
   variant = "drawer", tabHref, onConnectSandbox, tokenStale = false,
+  execHistory, setExecHistory,
   onAction, onPatchMetadata, onClose,
 }: {
   inst: Instance | null;
@@ -3316,6 +3428,10 @@ function InstanceDrawer({
   variant?: "drawer" | "page";
   /** Tabs are links in page mode, so the URL is the state. */
   tabHref?: (t: DrawerTab) => string;
+  /** §H — kept at page level and keyed by sandbox, so switching tabs does not
+      throw away a result the user is still reading. */
+  execHistory: Execution[];
+  setExecHistory: (fn: (prev: Execution[]) => Execution[]) => void;
   onAction: (id: string, action: RowAction) => void;
   onPatchMetadata: (id: string, next: MetaEntry[]) => void;
   onClose: () => void;
@@ -3368,7 +3484,7 @@ function InstanceDrawer({
     </button>
   );
 
-  const visibleTabs = DRAWER_TABS.filter((t) => !t.runningOnly || running);
+  const visibleTabs = drawerTabsFor(inst).filter((t) => !t.runningOnly || running);
   const resolvedTab = TAB_ALIAS[tab] ?? tab;
   const activeTab = visibleTabs.some((t) => t.key === resolvedTab) ? resolvedTab : "overview";
 
@@ -3468,8 +3584,6 @@ function InstanceDrawer({
             >
               {t.label}
               {t.v2 && <V2Badge />}
-              {t.noApi && <NoApiBadge />}
-              {t.question && <OpenQuestionBadge title={t.question} />}
             </Tag>
           );
         })}
@@ -3542,10 +3656,8 @@ function InstanceDrawer({
 
 
         {activeTab === "files"  && <FilesSection inst={inst} />}
-        {/* No competitor ships an Access tab, so this is not in the product.
-            §六.E does specify content for one and the decision is open, so it
-            stays reachable for review instead of becoming dead code. */}
-        {REVIEW_MODE && activeTab === "overview" && <AccessSection inst={inst} endpoints={endpoints} />}
+        {activeTab === "run"    && <RunPane inst={inst} history={execHistory} setHistory={setExecHistory} />}
+        {activeTab === "access" && <AccessSection inst={inst} endpoints={endpoints} />}
         {activeTab === "terminal" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             {/* Retired 2026-09-09 — the one-shot "Run Command" pane is gone. No
@@ -3893,9 +4005,9 @@ function MonitorPane({
                       return (
                         <div
                           title={
-                            inst.status === "suspended" ? "Endpoint is unavailable while suspended"
-                            : pending ? "The address exists once the Sandbox reports Running. It is never reachable on its own — the system exchanges a token for you."
-                            : `${inst.endpointUrl ?? ""} — not reachable on its own; the system exchanges a token when you open the Terminal`
+                            inst.status === "suspended" ? "Unavailable while paused"
+                            : pending ? "The address appears once the Sandbox reports Running."
+                            : `${inst.endpointUrl ?? ""} — anyone with this link can reach it`
                           }
                           style={{
                             fontFamily: plain ? FONT : "'GeistMono', monospace",
@@ -3959,20 +4071,38 @@ function MonitorPane({
                     <div style={{ color: C.muted }}>{agoLabel(inst.created)}</div>
                     {/* Row actions stop propagation so they never double as "open detail" */}
                     <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
-                      {/* §D — the data-plane URL is not open. Reaching a Sandbox
-                          needs the token POST /sandboxes/{id}/connect returns, so a
-                          bare link would 401. This opens the Terminal, which does
-                          the exchange. */}
-                      {/* Terminal and Files are the two things people open a
-                          sandbox to do, so they are buttons, not ⋮ entries.
-                          Terminal also carries §D: the data-plane URL is not
-                          reachable directly — the token comes from
-                          POST /sandboxes/{id}/connect, which happens in there. */}
+                      {/* §K — Open is a plain link to `endpoint_url`. It appears
+                          only when the backend gave one, and is greyed only while
+                          the Sandbox is not Running: that is the single disabled
+                          state in this row. No port to pick, no visibility to
+                          set — the backend returns one address or none. */}
+                      {inst.endpointUrl && (
+                        <a
+                          href={inst.status === "running" ? inst.endpointUrl : undefined}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          title={inst.status === "running"
+                            ? `Open ${inst.endpointUrl} in a new tab`
+                            : `The Sandbox is ${statusLabel(inst.status)} — the endpoint answers only while it is Running.`}
+                          style={{
+                            ...rowBtnGhost,
+                            textDecoration: "none",
+                            color: inst.status === "running" ? C.fg : "#5a5a5a",
+                            cursor: inst.status === "running" ? "pointer" : "not-allowed",
+                            pointerEvents: inst.status === "running" ? "auto" : "none",
+                          }}
+                        >
+                          <IconExternalLink size={11} /> Open
+                        </a>
+                      )}
+                      {/* Terminal and Files are what people open a sandbox to do,
+                          so they are buttons rather than ⋮ entries. */}
                       {inst.status === "running" && (
                         <>
                           <button
                             onClick={(e) => { e.stopPropagation(); onOpenDetail(inst.id, "terminal"); }}
-                            title={`${inst.endpointUrl ?? "This sandbox"} is not reachable by URL — access needs a token from POST /sandboxes/{id}/connect, which opening the Terminal performs.`}
+                            title="Open an interactive shell"
                             style={rowBtnGhost}
                           >
                             <IconTerminal /> Terminal
@@ -5070,6 +5200,9 @@ function NotificationBell({
 
 // ─── Page ─────────────────────────────────────────────────────────────────
 export default function Dashboard() {
+  // §A — the route has to refuse too, not just the nav link: an org without the
+  // runtime may still land here from a bookmark or a shared URL.
+  if (!SANDBOX_AVAILABLE) return <NotFound />;
   const [, setLocation] = useLocation();
   const [topTab, setTopTab] = useState<"deployments" | "uses" | "snapshots">("deployments");
   const [filter, setFilter] = useState("");
@@ -5392,6 +5525,9 @@ export default function Dashboard() {
   // connect 接口获取新的令牌". Tracked per sandbox so the UI can say the token
   // in the user's hand is stale, rather than letting them find out on a 401.
   const [tokenStale, setTokenStale] = useState<Record<string, boolean>>({});
+  // §H — results stay retrievable by execution id, so switching tabs or panes
+  // must not discard them.
+  const [execHistory, setExecHistory] = useState<Record<string, Execution[]>>({});
 
   const CONNECT_FLOOR_MINS = 30;
   const connectSandbox = (id: string): { extendedToMins: number } | null => {
@@ -5465,71 +5601,36 @@ export default function Dashboard() {
     }, 1500);
   };
   const performDelete = (id: string) => {
-    // F-04: any non-terminal state → deleting → deleted. Delete intent is durable
-    // and preempts the lifecycle lock, so a Runtime under an accepted Delete never
-    // returns to Running. Deleted is reported only once release is confirmed, and
-    // that is when metering stops and the final usage record is emitted.
-    const t = pushToast("progress", "Delete accepted — releasing compute and disk…");
-    patchInstance(id, { status: "deleting", unconfirmed: false, latestOperation: { kind: "delete", status: "in_progress", at: fmtNow() } });
-    setTimeout(() => {
-      patchInstance(id, { status: "deleted", endpointUrl: undefined, latestOperation: { kind: "delete", status: "succeeded", at: fmtNow() } });
-      settleToast(t, "success", "Deleted — all billing stopped, final usage recorded");
-      setTimeout(() => setInstances((prev) => prev.filter((i) => i.id !== id)), 1500);
-    }, 1200);
+    // §L — DELETE returns 204 immediately. There is no "deleting" state to poll
+    // for and none to render: the row goes, now. Animating a deletion the
+    // backend already finished only teaches people to distrust the list.
+    setInstances((prev) => prev.filter((i) => i.id !== id));
+    pushToast("success", "Sandbox deleted — its files are gone with it");
   };
   // ── Expiry reaper ────────────────────────────────────────────────────────
-  // The whole lifecycle story is "wall-clock from creation, deleted at the
-  // limit". Before this, hitting zero only changed the label to "Expired" and
-  // the row sat there forever — a sandbox the UI promised was gone, still
-  // listed, still offering Terminal. The reaper makes the promise true.
+  // §E — "过期即从列表消失，没有 expired 态可以展示". There is no expired status
+  // in the enum and nothing to poll: a sandbox that reaches its limit is simply
+  // gone on the next read, files and all. So one stage, not two — the row goes
+  // and a toast says why, which is the only trace the operator ever gets.
   //
-  // Runs off the same 1 Hz tick the countdown uses. Only touches sandboxes that
-  // actually have a limit and are still live; anything already deleting/deleted
-  // is left alone so this can never fight performDelete.
+  // Runs off the same 1 Hz tick the countdown uses, and only touches sandboxes
+  // that actually carry an expiry.
   useEffect(() => {
     const t = window.setInterval(() => {
       setInstances((prev) => {
-        const expired = prev.filter((i) =>
-          durationMins(i.maxActive) > 0 &&
-          lifecycleClock(i).leftMins <= 0 &&
-          i.status !== "deleting" && i.status !== "deleted",
-        );
+        const expired = prev.filter((i) => i.endAt && lifecycleClock(i).leftMins <= 0);
         if (expired.length === 0) return prev;
-        // Toast outside the updater would fire twice under StrictMode; queue it.
+        // A toast raised inside the updater fires twice under StrictMode.
         queueMicrotask(() => {
           expired.forEach((i) =>
             pushToast("unconfirmed", `${midId(i.id)} reached its limit — deleted with its files`),
           );
         });
-        return prev.map((i) =>
-          expired.some((e) => e.id === i.id)
-            ? { ...i, status: "deleting" as const, endpointUrl: undefined,
-                latestOperation: { kind: "delete" as const, status: "in_progress" as const, at: fmtNow() } }
-            : i,
-        );
+        return prev.filter((i) => !expired.some((e) => e.id === i.id));
       });
     }, 1000);
     return () => clearInterval(t);
   }, []);
-
-  // Second stage: a sandbox the reaper put into `deleting` settles to `deleted`,
-  // then leaves the list — the same two-step performDelete uses, so an expiry
-  // and a manual delete look identical to the operator.
-  useEffect(() => {
-    const reaped = instances.filter(
-      (i) => i.status === "deleting" && i.latestOperation?.kind === "delete" && i.latestOperation.status === "in_progress",
-    );
-    if (reaped.length === 0) return;
-    const t = window.setTimeout(() => {
-      setInstances((prev) => prev.map((i) =>
-        reaped.some((r) => r.id === i.id)
-          ? { ...i, status: "deleted" as const, latestOperation: { kind: "delete" as const, status: "succeeded" as const, at: fmtNow() } }
-          : i,
-      ));
-      setTimeout(() => setInstances((prev) => prev.filter((i) => !reaped.some((r) => r.id === i.id))), 1500);
-    }, 1200);
-    return () => clearTimeout(t);
-  }, [instances]);
 
   const performRetry = (id: string) => {
     // Failed creation or unconfirmed outcome → re-attempt (§4.2 / F-01).
@@ -5721,6 +5822,8 @@ export default function Dashboard() {
       inst={inst}
       deploymentName={agent?.name ?? ""}
       agentVersion={agentVersionName(inst.agentId, agent?.name)}
+      execHistory={execHistory[inst.id] ?? []}
+      setExecHistory={(fn) => setExecHistory((m) => ({ ...m, [inst.id]: fn(m[inst.id] ?? []) }))}
       endpoints={endpointsForAgent(agent)}
       idc={regionLabel(inst.config?.idc ?? agent?.region)}
       product={productForTier(agent?.tier)}
