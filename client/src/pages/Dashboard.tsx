@@ -177,10 +177,25 @@ interface SandboxCapabilities {
   metrics?: boolean;
   ports?: boolean;
 }
+/**
+ * §H — the default set, for the Runloop substrate that is the primary line.
+ * `shell` is FALSE: the substrate has no daemon inside the sandbox, our middle
+ * layer has no PTY translation, and while the task response advertises
+ * shell:true nobody has connected one end to end. Drawing a Terminal tab that
+ * cannot open is worse than not drawing it, so most sandboxes will not have
+ * one — the component is built and the tab appears the moment the capability
+ * flips, which is the point of driving tabs off capabilities at all.
+ */
 const SANDBOX_CAPS: SandboxCapabilities = {
-  exec: true, shell: true, files: true, expiry: true,
+  exec: true, shell: false, files: true, expiry: true,
   logs: false, metrics: false, ports: false,
 };
+/**
+ * The E2B line does have a shell. Seeded on one sandbox so the Terminal stays
+ * reviewable, and so the tab bar is exercised at both 3 and 4 tabs — §F says
+ * the design has to hold 1 to 4.
+ */
+const SANDBOX_CAPS_WITH_SHELL: SandboxCapabilities = { ...SANDBOX_CAPS, shell: true };
 function capsOf(inst: Instance): SandboxCapabilities {
   return inst.capabilities ?? SANDBOX_CAPS;
 }
@@ -336,10 +351,13 @@ const SPECS_BY_IDC: Record<string, string[]> = {
   "ap-sg-singapore": ["x-small", "small"],
 };
 /**
- * §D — some IDCs reject a Spec chosen at Launch (`sandbox_spec_not_supported`);
- * there the picker collapses to a read-only echo of the registered Spec.
+ * §四 — the backend does NOT advertise which IDCs refuse a Launch-time Spec.
+ * The only way to find out is to send one and get `sandbox_spec_not_supported`
+ * back, so the picker is always live and the refusal is handled as an error
+ * that reverts to the registered Spec. This list is the mock's stand-in for
+ * that server behaviour, never consulted to disable anything up front.
  */
-const IDC_SPEC_LOCKED = ["eu-de-frankfurt"];
+const IDC_REFUSES_SPEC_CHANGE = ["eu-de-frankfurt"];
 
 function specLabel(id?: string): string {
   const sp = SPEC_CATALOG.find((x) => x.id === id);
@@ -1904,7 +1922,7 @@ function InstanceRowMenu({
   const caps = capsOf(inst);
   const live = inst.status === "running";
   const jumps: { tab: DrawerTab; label: string; icon: React.ReactNode; on: boolean }[] = [];
-  if (caps.exec)  jumps.push({ tab: "run",      label: "Run a command", icon: <IconPlay />,     on: live });
+  if (caps.exec)  jumps.push({ tab: "run",      label: "Run Command", icon: <IconPlay />,     on: live });
   if (caps.shell) jumps.push({ tab: "terminal", label: "Terminal",      icon: <IconTerminal />, on: live });
 
   // Lifecycle actions by state — the §4.1 transition matrix is authoritative.
@@ -2128,6 +2146,8 @@ function ProvisionModal({
   const [idc, setIdc] = useState(idcDefault ?? "us-ia-iowa-1");
   // v1.3 §C3 / §C4 — Spec picker and the Add Model gate.
   const [launchSpec, setLaunchSpec] = useState<string>(() => specDefault ?? smallestSpec(idcDefault) ?? "small");
+  /** Set when the server answered `sandbox_spec_not_supported`; holds the Spec it fell back to. */
+  const [specRejected, setSpecRejected] = useState<string | null>(null);
   const [addModel, setAddModel] = useState(false);
   // Always start with one empty editable row at the bottom (matches the
   // reference UI — user can start typing without clicking "+ key" first).
@@ -2209,10 +2229,19 @@ function ProvisionModal({
   const canCreate = model !== "";
   const submit = () => {
     if (!canCreate) return;
+    // §四 — stand-in for `sandbox_spec_not_supported`. The panel stays open, the
+    // Spec falls back to the registered one, and the reason appears beside the
+    // control. Closing on a rejected create would leave the user guessing why
+    // nothing appeared in the list.
+    if (specDefault && launchSpec !== specDefault && IDC_REFUSES_SPEC_CHANGE.includes(idc)) {
+      setLaunchSpec(specDefault);
+      setSpecRejected(specDefault);
+      return;
+    }
     onSubmit({
       name: name.trim() || undefined,
       idc,
-      specId: IDC_SPEC_LOCKED.includes(idc) ? specDefault : launchSpec,
+      specId: launchSpec,
       envOverrides: env.filter((e) => e.key.trim().length > 0),
       maxLifetime,
       idleTimeout,
@@ -2440,35 +2469,35 @@ function ProvisionModal({
               <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Spec</label>
               <V2Badge />
             </div>
-            {IDC_SPEC_LOCKED.includes(idc) ? (
-              <>
-                <div style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, color: C.muted, cursor: "default" }}>
-                  {specName(specDefault)} · {specLabel(specDefault)}
-                </div>
-                <span style={{ fontFamily: FONT, fontSize: 11, color: C.warn, lineHeight: "15px" }}>
-                  This IDC does not accept a different Spec at Launch — the agent's registered Spec is used.
+            <select
+              value={launchSpec}
+              onChange={(e) => { setSpecRejected(null); setLaunchSpec(e.target.value); }}
+              style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "pointer" }}
+            >
+              {/* Unavailable sizes stay in the list, disabled. Hiding them makes
+                  the catalogue look arbitrarily short and gives the reader no way
+                  to learn the size exists elsewhere. */}
+              {specsForIdc(idc).map(({ spec, available }) => (
+                <option key={spec.id} value={spec.id} disabled={!available}>
+                  {spec.id} · {specLabel(spec.id)}{available ? "" : " — not available in this IDC"}
+                </option>
+              ))}
+            </select>
+            {/* §四 — the refusal arrives as an error, not as a disabled control:
+                nothing tells us beforehand which IDCs reject a Spec change, so
+                the picker stays live and this says what happened afterwards. */}
+            {specRejected ? (
+              <span style={{ display: "flex", alignItems: "flex-start", gap: 7, fontFamily: FONT, fontSize: 11, color: C.warn, lineHeight: "16px", background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: 7, padding: "7px 10px" }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 2 }}><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg>
+                <span>
+                  This IDC does not support changing the Spec at Launch — it has been put back to
+                  {" "}<span style={{ fontFamily: MONO, color: C.fg }}>{specRejected}</span>. Launch again to continue.
                 </span>
-              </>
+              </span>
             ) : (
-              <>
-                <select
-                  value={launchSpec}
-                  onChange={(e) => setLaunchSpec(e.target.value)}
-                  style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "pointer" }}
-                >
-                  {/* Unavailable sizes stay in the list, disabled. Hiding them
-                      makes the catalogue look arbitrarily short and gives the
-                      reader no way to learn the size exists elsewhere. */}
-                  {specsForIdc(idc).map(({ spec, available }) => (
-                    <option key={spec.id} value={spec.id} disabled={!available}>
-                      {spec.id} · {specLabel(spec.id)}{available ? "" : " — not available in this IDC"}
-                    </option>
-                  ))}
-                </select>
-                <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-                  Defaults to the agent's registered Spec. It may differ per Sandbox.
-                </span>
-              </>
+              <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
+                Defaults to the agent's registered Spec. It may differ per Sandbox.
+              </span>
             )}
           </section>
 
@@ -2529,13 +2558,15 @@ function ProvisionModal({
                     <NoApiBadge title="bs-api accepts `timeout` at create; the container server does not pass it through yet." />
                   </span>
                   <select value={maxLifetime} disabled style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, cursor: "not-allowed", color: C.muted }}>
+                    <option value="15min">15 minutes</option>
+                    <option value="30min">30 minutes</option>
                     <option value="1h">1 hour</option>
-                    <option value="6h">6 hours</option>
-                    <option value="24h">24 hours</option>
-                    <option value="48h">48 hours</option>
+                    <option value="4h">4 hours</option>
+                    <option value="custom">Custom…</option>
                   </select>
                   <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
                     Decided by the system for now — the expiry is reported back once the Sandbox is running.
+                    These steps are ours: the API takes any number of seconds and states no minimum or maximum.
                   </span>
                 </div>
 
@@ -2868,27 +2899,32 @@ function MiniCopy({ value }: { value: string }) {
   );
 }
 
-// F-03 Basic File I/O — single-file upload/download on a Running Runtime. No
-// directory browser. Files follow the Runtime disk lifecycle (not persistence).
-// ─── Files — v1.2 §G / Confluence §G ───────────────────────────────────────
-// The data plane gives POST/GET /files?path=… and nothing else: one file, by
-// explicit path, no listing endpoint. So this is a transfer form, not a file
-// manager, and it says so — otherwise people hunt for a tree that cannot exist.
+// ─── §I Files ───────────────────────────────────────────────────────────────
+// A directory browser, not a path box. The backend exposes only single-file
+// upload and download by absolute path — no list, delete, rename or stat — but
+// the gap is in OUR middle layer, not the substrate: the substrate can list.
+// Every competitor we could verify (E2B, Daytona, Vercel) ships a file browser,
+// and "type the full path of a file you cannot see" is not a product.
 //
-// Upload and download are separate blocks with separate paths: a single shared
-// path field cannot tell you which direction it belongs to.
+// So the browser is the design, and the listing is assembled in the meantime by
+// running one `ls` through the exec API. That is slower — about a second or two
+// per level — which is why every navigation has a real loading state instead of
+// pretending to be instant. When the list endpoint lands, only `listDir` below
+// changes; nothing in the UI moves.
+type FileKind = "dir" | "file";
+interface DirEntry { name: string; kind: FileKind; sizeBytes?: number }
+
 type TransferState =
   | { kind: "idle" }
   | { kind: "busy"; pct: number; name: string }
   | { kind: "done"; msg: string }
   | { kind: "error"; reason: string; hint: string };
 
-const FILES_DEFAULT_DIR = "/home/user/";
+const FILES_ROOT = "/home/user";
 /** Mock-only. Not a documented limit — see uploadFailure(). */
 const MOCK_OVERSIZE_MB = 100;
 
-// The three failures the API actually distinguishes, plus what to do about each.
-/** §J — absolute, and no `.` or `..` segment. Catchable before the round trip. */
+/** §I — absolute, and no `.` or `..` segment. Catchable before the round trip. */
 function badPath(path: string): string | null {
   if (!path.startsWith("/")) return "Give an absolute path, e.g. /home/user/in.json";
   if (path.split("/").some((seg) => seg === "." || seg === "..")) {
@@ -2905,85 +2941,122 @@ function uploadFailure(path: string, sizeMb: number): { reason: string; hint: st
   }
   // The threshold is a MOCK trigger so the rejected state is reachable in the
   // prototype — the contract does not state a per-file limit and neither does
-  // this copy. Put the real number back only once the swagger names one.
+  // this copy. Put the real number back once the swagger names one.
   if (sizeMb > MOCK_OVERSIZE_MB) {
     return { reason: "File too large", hint: "The upload was rejected before anything was written — there is no partial file." };
   }
   return null;
 }
 
-function downloadFailure(path: string): { reason: string; hint: string } | null {
-  const bad = badPath(path);
-  if (bad) return { reason: "Invalid path", hint: bad };
-  if (/\/$/.test(path)) {
-    return { reason: "Not a file", hint: "There is no directory listing — name the file, not the folder." };
-  }
-  if (!/\.[A-Za-z0-9]+$/.test(path)) {
-    return { reason: "No such file", hint: "Nothing at that path. Run `ls` from the Terminal tab to check." };
-  }
-  return null;
+function fmtSize(bytes?: number): string {
+  if (bytes === undefined) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Mock filesystem. Keyed by absolute directory path.
+const MOCK_TREE: Record<string, DirEntry[]> = {
+  "/home/user": [
+    { name: "data", kind: "dir" },
+    { name: "out", kind: "dir" },
+    { name: "main.py", kind: "file", sizeBytes: 4213 },
+    { name: "requirements.txt", kind: "file", sizeBytes: 287 },
+    { name: ".env.example", kind: "file", sizeBytes: 142 },
+  ],
+  "/home/user/data": [
+    { name: "raw", kind: "dir" },
+    { name: "input.json", kind: "file", sizeBytes: 1_842_112 },
+    { name: "labels.csv", kind: "file", sizeBytes: 90_233 },
+  ],
+  "/home/user/data/raw": [
+    { name: "batch-001.ndjson", kind: "file", sizeBytes: 12_884_901 },
+  ],
+  "/home/user/out": [
+    { name: "result.json", kind: "file", sizeBytes: 5_120 },
+    { name: "run.log", kind: "file", sizeBytes: 71_338 },
+  ],
+};
+
+/**
+ * The one function that changes when the list endpoint lands. Today it stands in
+ * for "run `ls` over exec and parse it", which is why it is slow and why it can
+ * fail on an image with no shell.
+ */
+function listDir(path: string): Promise<DirEntry[]> {
+  return new Promise((resolve, reject) => {
+    window.setTimeout(() => {
+      const rows = MOCK_TREE[path];
+      if (!rows) reject(new Error("no such directory"));
+      else resolve(rows);
+    }, 1100 + Math.random() * 700);   // §四 — a level costs 1–2 seconds
+  });
 }
 
 function FilesSection({ inst }: { inst: Instance }) {
   const running = inst.status === "running";
-  const creating = inst.status === "pending";
-  const [upPath, setUpPath] = useState(FILES_DEFAULT_DIR);
-  const [downPath, setDownPath] = useState(`${FILES_DEFAULT_DIR}result.json`);
+  const creating = inst.status === "pending" || inst.status === "creating";
+  const [cwd, setCwd] = useState(FILES_ROOT);
+  const [entries, setEntries] = useState<DirEntry[] | null>(null);
+  const [listing, setListing] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
   const [up, setUp] = useState<TransferState>({ kind: "idle" });
   const [down, setDown] = useState<TransferState>({ kind: "idle" });
   const timers = useRef<number[]>([]);
   useEffect(() => () => { timers.current.forEach(window.clearTimeout); }, []);
-
   const after = (ms: number, fn: () => void) => { timers.current.push(window.setTimeout(fn, ms)); };
 
-  // Why the whole section is inert, in the sandbox's own words.
-  const blocked =
-    creating ? "The Sandbox is still being created — file transfer opens once it reports Running."
-  : !running  ? `File transfer is available only while the Sandbox is Running (this one is ${statusLabel(inst.status)}). Pause and Delete cancel an in-flight transfer.`
-  : null;
-  // §J — writing needs creator or org_owner; reading needs neither. So a
-  // read-only viewer loses the upload block and KEEPS download, rather than
-  // having the whole pane taken away.
+  // §I — writing needs creator or org_owner; reading needs neither. So a
+  // read-only viewer loses upload and KEEPS download.
   const canWrite = CAN_WRITE_FILES;
 
+  useEffect(() => {
+    if (!running) { setEntries(null); return; }
+    let cancelled = false;
+    setListing(true);
+    setListError(null);
+    listDir(cwd)
+      .then((rows) => { if (!cancelled) setEntries(rows); })
+      .catch(() => { if (!cancelled) { setEntries(null); setListError(`Could not list ${cwd}.`); } })
+      .finally(() => { if (!cancelled) setListing(false); });
+    return () => { cancelled = true; };
+  }, [cwd, running]);
+
+  const blocked =
+    creating ? "The Sandbox is still being created — files open once it reports Running."
+  : !running  ? `Files are available only while the Sandbox is Running (this one is ${statusLabel(inst.status)}).`
+  : null;
+
   const startUpload = (file: File) => {
-    const target = upPath.endsWith("/") ? `${upPath}${file.name}` : upPath;
+    const target = `${cwd}/${file.name}`;
     const sizeMb = file.size / (1024 * 1024);
     const fail = uploadFailure(target, sizeMb);
+    const clash = entries?.some((e) => e.kind === "file" && e.name === file.name);
     setUp({ kind: "busy", pct: 0, name: file.name });
     [18, 44, 71, 93].forEach((pct, i) => after(140 * (i + 1), () => setUp((s0) => (s0.kind === "busy" ? { ...s0, pct } : s0))));
     after(760, () => {
-      if (fail) setUp({ kind: "error", ...fail });
-      else setUp({ kind: "done", msg: `Uploaded ${file.name} → ${target} · ${sizeMb < 1 ? `${Math.max(1, Math.round(file.size / 1024))} KB` : `${sizeMb.toFixed(1)} MB`}` });
+      if (fail) { setUp({ kind: "error", ...fail }); return; }
+      setUp({ kind: "done", msg: `${clash ? "Replaced" : "Uploaded"} ${file.name} in ${cwd}` });
+      setEntries((prev) => {
+        const rows = prev ?? [];
+        if (rows.some((e) => e.name === file.name)) {
+          return rows.map((e) => (e.name === file.name ? { ...e, sizeBytes: file.size } : e));
+        }
+        return [...rows, { name: file.name, kind: "file" as const, sizeBytes: file.size }];
+      });
     });
   };
 
-  const startDownload = () => {
-    const fail = downloadFailure(downPath);
-    const name = downPath.split("/").filter(Boolean).pop() || "file";
+  const startDownload = (name: string) => {
     setDown({ kind: "busy", pct: 0, name });
-    [22, 58, 88].forEach((pct, i) => after(150 * (i + 1), () => setDown((s0) => (s0.kind === "busy" ? { ...s0, pct } : s0))));
-    after(700, () => {
-      if (fail) setDown({ kind: "error", ...fail });
-      else setDown({ kind: "done", msg: `Downloaded ${name} from ${downPath}` });
-    });
+    // No total size comes back, so there is no honest percentage — the bar is
+    // indeterminate on purpose.
+    [30, 66, 90].forEach((pct, i) => after(150 * (i + 1), () => setDown((s0) => (s0.kind === "busy" ? { ...s0, pct } : s0))));
+    after(700, () => setDown({ kind: "done", msg: `Downloaded ${name}` }));
   };
 
-  const inputStyle_: React.CSSProperties = {
-    flex: 1, minWidth: 0,
-    background: running ? C.pillBg : "rgba(255,255,255,0.02)",
-    border: `1px solid ${C.border}`,
-    color: running ? C.fg : C.muted,
-    fontFamily: MONO, fontSize: 12, padding: "7px 10px", borderRadius: 8, outline: "none",
-  };
-  const btnStyle = (primary = false): React.CSSProperties => ({
-    fontFamily: FONT, fontSize: 12, fontWeight: 600,
-    background: !running ? "transparent" : primary ? C.lime : "transparent",
-    color: !running ? "#5a5a5a" : primary ? C.limeText : C.fg,
-    border: primary && running ? "none" : `1px solid ${C.border}`,
-    borderRadius: 8, padding: "7px 12px",
-    cursor: running ? "pointer" : "not-allowed", whiteSpace: "nowrap",
-  });
+  const segments = cwd.split("/").filter(Boolean);
+  const crumb = (i: number) => `/${segments.slice(0, i + 1).join("/")}`;
 
   const feedback = (st: TransferState) => {
     if (st.kind === "idle") return null;
@@ -3014,12 +3087,10 @@ function FilesSection({ inst }: { inst: Instance }) {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <h4 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: 0 }}>Files</h4>
-        <ReleaseBadge r="R1" />
         <V2Badge />
-        <span style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>/files?path=</span>
       </div>
 
       {blocked && (
@@ -3029,66 +3100,120 @@ function FilesSection({ inst }: { inst: Instance }) {
         </span>
       )}
 
-      {/* Upload — §J: gated on write permission, which download is not. */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 7, opacity: canWrite ? 1 : 0.6 }}>
-        <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>Upload</span>
-        {!canWrite && (
-          <span style={{ fontFamily: FONT, fontSize: 11, color: C.warn, lineHeight: "15px" }}>
-            You can download from this Sandbox but not upload to it — writing needs the creator or an organization owner.
+      {running && (
+        <>
+          {/* Breadcrumb — every segment is a way back up. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", fontFamily: MONO, fontSize: 12 }}>
+            {segments.map((seg, i) => {
+              const target = crumb(i);
+              const last = i === segments.length - 1;
+              return (
+                <span key={target} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ color: C.borderSoft }}>/</span>
+                  <button
+                    disabled={last || listing}
+                    onClick={() => setCwd(target)}
+                    style={{
+                      background: "transparent", border: "none", padding: 0,
+                      fontFamily: MONO, fontSize: 12,
+                      color: last ? C.fg : C.link,
+                      cursor: last || listing ? "default" : "pointer",
+                    }}
+                  >
+                    {seg}
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 90px 90px", gap: 10, padding: "7px 12px", background: "rgba(255,255,255,0.02)", borderBottom: `1px solid ${C.borderSoft}`, fontFamily: FONT, fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>
+              <div>Name</div><div>Type</div><div style={{ textAlign: "right" }}>Size</div>
+            </div>
+
+            {/* §四 — a level costs a second or two while the listing is pieced
+                together from a command, so the wait is shown rather than hidden. */}
+            {listing ? (
+              <div style={{ padding: "18px 12px", display: "flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 12, color: C.muted }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: C.warn, animation: "pulse 1.2s ease-in-out infinite" }} />
+                Listing {cwd}…
+              </div>
+            ) : listError ? (
+              <div style={{ padding: "14px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontFamily: FONT, fontSize: 12, color: C.err }}>{listError}</span>
+                <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+                  Listings are assembled by running a command inside the Sandbox, so an image without a shell cannot be browsed.
+                  You can still download by full path below.
+                </span>
+              </div>
+            ) : entries && entries.length === 0 ? (
+              <div style={{ padding: "18px 12px", fontFamily: FONT, fontSize: 12, color: C.muted }}>This folder is empty.</div>
+            ) : (
+              (entries ?? []).map((e) => (
+                <button
+                  key={e.name}
+                  onClick={() => (e.kind === "dir" ? setCwd(`${cwd}/${e.name}`) : startDownload(e.name))}
+                  title={e.kind === "dir" ? `Open ${e.name}` : `Download ${e.name}`}
+                  style={{
+                    width: "100%", textAlign: "left", cursor: "pointer",
+                    display: "grid", gridTemplateColumns: "minmax(0,1fr) 90px 90px", gap: 10,
+                    alignItems: "center", padding: "8px 12px",
+                    background: "transparent", border: "none",
+                    borderBottom: `1px solid ${C.borderSoft}`,
+                  }}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                    <span style={{ color: e.kind === "dir" ? C.lime : C.muted, flexShrink: 0, display: "inline-flex" }}>
+                      {e.kind === "dir"
+                        ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+                        : <IconFile size={13} />}
+                    </span>
+                    <span style={{ fontFamily: MONO, fontSize: 12, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.name}</span>
+                  </span>
+                  <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>{e.kind === "dir" ? "Folder" : "File"}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.muted, textAlign: "right" }}>{e.kind === "dir" ? "—" : fmtSize(e.sizeBytes)}</span>
+                </button>
+              ))
+            )}
+          </div>
+          {feedback(down)}
+
+          {/* Upload lands in the folder being looked at — no second path field
+              to keep in sync with the breadcrumb. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 7, opacity: canWrite ? 1 : 0.6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <label style={{ ...(canWrite
+                ? { background: C.lime, color: C.limeText, border: "none", cursor: "pointer" }
+                : { background: "transparent", color: "#5a5a5a", border: `1px solid ${C.border}`, cursor: "not-allowed" }),
+                fontFamily: FONT, fontSize: 12, fontWeight: 600, padding: "7px 12px", borderRadius: 8 }}>
+                <input
+                  type="file"
+                  disabled={!canWrite}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) startUpload(f); e.target.value = ""; }}
+                  style={{ display: "none" }}
+                />
+                Upload to this folder
+              </label>
+              <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>
+                Goes to <span style={{ fontFamily: MONO, color: C.fg }}>{cwd}/</span> ·{" "}
+                <span style={{ color: C.warn }}>an existing file with the same name is replaced</span>
+              </span>
+            </div>
+            {!canWrite && (
+              <span style={{ fontFamily: FONT, fontSize: 11, color: C.warn, lineHeight: "15px" }}>
+                You can browse and download here but not upload — writing needs the creator or an organization owner.
+              </span>
+            )}
+            {feedback(up)}
+          </div>
+
+          <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
+            Click a file to download it. No delete, rename or preview yet.
+            Files live on this Sandbox — <span style={{ color: C.fg }}>deleting it deletes them permanently</span>.
           </span>
-        )}
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input
-            value={upPath}
-            disabled={!running || !canWrite}
-            onChange={(e) => { setUpPath(e.target.value); setUp({ kind: "idle" }); }}
-            placeholder="/home/user/"
-            style={inputStyle_}
-          />
-          <label style={{ ...btnStyle(true), ...(canWrite ? null : { color: "#5a5a5a", background: "transparent", border: `1px solid ${C.border}`, cursor: "not-allowed" }) }}>
-            <input
-              type="file"
-              disabled={!running || !canWrite}
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) startUpload(f); e.target.value = ""; }}
-              style={{ display: "none" }}
-            />
-            Choose file…
-          </label>
-        </div>
-        <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted }}>
-          End the path with <span style={{ fontFamily: MONO }}>/</span> to keep the file's own name, or give a full path to rename it.
-          {" "}<span style={{ color: C.warn }}>An existing file at that path is overwritten.</span>
-        </span>
-        {feedback(up)}
-      </div>
-
-      {/* Download */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-        <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>Download</span>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input
-            value={downPath}
-            disabled={!running}
-            onChange={(e) => { setDownPath(e.target.value); setDown({ kind: "idle" }); }}
-            placeholder="/home/user/result.json"
-            style={inputStyle_}
-          />
-          <button disabled={!running} onClick={startDownload} style={btnStyle()}>Download</button>
-        </div>
-        {feedback(down)}
-      </div>
-
-      <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-        One file at a time, by full path — <span style={{ color: C.fg }}>directory browsing isn&apos;t available yet</span>.
-        Use <span style={{ fontFamily: MONO }}>ls</span> from the Terminal to see what is there.
-        A failed upload leaves no partial file; a failed download errors rather than silently truncating.
-      </span>
-      {/* Points at Download, the control directly above, because it is the only
-          way to get a file off this sandbox today. Snapshot is 2.1 and there is
-          no export feature — neither belongs in a line about not losing data. */}
-      <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-        Files live on this Sandbox. Deleting it deletes them permanently — download anything you need to keep first.
-      </span>
+        </>
+      )}
     </div>
   );
 }
@@ -3186,7 +3311,7 @@ function AccessSection({ inst }: { inst: Instance; endpoints?: AgentEndpoint[] }
 // advanced section to hide. `wait_timeout` is a long-poll ceiling, not a command
 // timeout: passing it does not kill anything, which is why there is no timed-out
 // state here. A command that outlives the window simply keeps running.
-type ExecState = "running" | "cancelling" | "cancelled" | "succeeded" | "failed";
+type ExecState = "pending" | "running" | "cancelling" | "cancelled" | "succeeded" | "failed";
 
 interface Execution {
   id: string;
@@ -3209,6 +3334,7 @@ function normalizeExecState(raw: string): ExecState | null {
   const v = raw.toLowerCase();
   if (v === "cancelling" || v === "canceling") return "cancelling";
   if (v === "cancelled" || v === "canceled") return "cancelled";
+  if (v === "pending") return "pending";
   if (v === "running" || v === "in_progress") return "running";
   if (v === "succeeded" || v === "success" || v === "completed") return "succeeded";
   if (v === "failed" || v === "error") return "failed";
@@ -3247,7 +3373,7 @@ function RunPane({
   const after = (ms: number, fn: () => void) => { timers.current.push(window.setTimeout(fn, ms)); };
 
   const running = inst.status === "running";
-  const live = history.find((h) => h.state === "running" || h.state === "cancelling");
+  const live = history.find((h) => h.state === "pending" || h.state === "running" || h.state === "cancelling");
 
   const patch = (id: string, p: Partial<Execution>) =>
     setHistory((prev) => prev.map((h) => (h.id === id ? { ...h, ...p } : h)));
@@ -3279,7 +3405,7 @@ function RunPane({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <h4 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: 0 }}>Run a command</h4>
+        <h4 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: 0 }}>Run Command</h4>
         <V2Badge />
         <span style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>POST /exec</span>
       </div>
@@ -3332,9 +3458,10 @@ function RunPane({
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {history.map((ex) => {
             const bad = ex.state === "failed" || (ex.exitCode !== null && ex.exitCode !== 0);
-            const inFlight = ex.state === "running" || ex.state === "cancelling";
+            const inFlight = ex.state === "pending" || ex.state === "running" || ex.state === "cancelling";
             const head =
-              ex.state === "running"    ? { text: "Running…", color: C.warn }
+              ex.state === "pending"    ? { text: "Queued…", color: C.warn }
+            : ex.state === "running"    ? { text: "Running…", color: C.warn }
             : ex.state === "cancelling" ? { text: "Cancelling…", color: C.warn }
             : ex.state === "cancelled"  ? { text: `Cancelled · ${execSeconds(ex)}`, color: C.muted }
             : bad                       ? { text: `exit ${ex.exitCode ?? "—"} · ${execSeconds(ex)}`, color: C.err }
@@ -3344,9 +3471,12 @@ function RunPane({
                 <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 11px", background: "rgba(255,255,255,0.02)", borderBottom: `1px solid ${C.borderSoft}` }}>
                   <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.lime, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>$ {ex.command}</span>
                   <span style={{ fontFamily: MONO, fontSize: 11, color: head.color, flexShrink: 0 }}>{head.text}</span>
+                  {(ex.stdout || ex.stderr) && (
+                    <CopyButton value={[ex.stdout, ex.stderr].filter(Boolean).join("\n")} />
+                  )}
                   {/* §H — Cancel is a plain button on a running command, not a
                       menu item. It is the only thing anyone wants at that moment. */}
-                  {inFlight && ex.state === "running" && (
+                  {inFlight && (ex.state === "pending" || ex.state === "running") && (
                     <button
                       onClick={() => cancel(ex)}
                       style={{ flexShrink: 0, fontFamily: FONT, fontSize: 11, fontWeight: 600, background: "transparent", color: C.fg, border: `1px solid ${C.border}`, borderRadius: 6, padding: "2px 9px", cursor: "pointer" }}
@@ -3394,7 +3524,7 @@ interface DrawerTabDef { key: DrawerTab; label: string; runningOnly?: boolean; v
 function drawerTabsFor(inst: Instance): DrawerTabDef[] {
   const caps = capsOf(inst);
   const tabs: DrawerTabDef[] = [{ key: "overview", label: "Overview" }];
-  if (caps.exec)  tabs.push({ key: "run",      label: "Run",        runningOnly: true, v2: true });
+  if (caps.exec)  tabs.push({ key: "run",      label: "Run Command", runningOnly: true, v2: true });
   if (caps.shell) tabs.push({ key: "terminal", label: "Terminal",   runningOnly: true, v2: true });
   if (caps.files) tabs.push({ key: "files",    label: "Filesystem", v2: true });
   if (inst.endpointUrl) tabs.push({ key: "access", label: "Access" });
@@ -3969,8 +4099,10 @@ function MonitorPane({
                     </button>
                     <div style={{ minWidth: 0 }}>
                       <div
-                        title={inst.config?.name || inst.id}
-                        style={{ color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                        title={inst.config?.name
+                          ? `${inst.config.name} · ${inst.id}`
+                          : `${inst.id} — this Sandbox has no name yet; the API does not return one`}
+                        style={{ color: inst.config?.name ? C.fg : C.muted, fontFamily: inst.config?.name ? FONT : MONO, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                       >
                         {inst.config?.name || midId(inst.id)}
                       </div>
@@ -4068,7 +4200,12 @@ function MonitorPane({
                       }
                       return <div style={{ fontSize: 12, color: C.muted }}>—</div>;
                     })()}
-                    <div style={{ color: C.muted }}>{agoLabel(inst.created)}</div>
+                    <div
+                      style={{ color: C.muted }}
+                      title={inst.created ? inst.created : "The API does not return a creation time for this Sandbox"}
+                    >
+                      {inst.created ? agoLabel(inst.created) : "—"}
+                    </div>
                     {/* Row actions stop propagation so they never double as "open detail" */}
                     <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
                       {/* §K — Open is a plain link to `endpoint_url`. It appears
