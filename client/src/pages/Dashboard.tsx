@@ -579,6 +579,10 @@ const INITIAL_INSTANCES: Instance[] = [
     status: "running",
     created: _seedDaysAgo(5),
     endpointUrl: endpointFor("8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36"),
+    // On the E2B line, so it has a shell: Overview / Run Command / Terminal /
+    // Files / Access — the four-tab case.
+    capabilities: SANDBOX_CAPS_WITH_SHELL,
+    specId: "small",
     maxActive: "1h",
     endAt: _seedMinsIn(7),      // near-expiry state §五.1 calls for
     maxRuntimeAction: "suspend",
@@ -598,6 +602,10 @@ const INITIAL_INSTANCES: Instance[] = [
     status: "running",
     created: _seedDaysAgo(6),
     endpointUrl: endpointFor("1e1bd452-9a3c-4b8e-bf21-7d40c9e6095a"),
+    // On the Runloop line: no Terminal tab, which is what most sandboxes will
+    // look like until the PTY translation is built.
+    capabilities: SANDBOX_CAPS,
+    specId: "medium",
     maxActive: "2h",
     endAt: _seedMinsIn(96),     // the long-lived one
     maxRuntimeAction: "suspend",
@@ -2607,7 +2615,7 @@ function ProvisionModal({
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT, fontSize: 12 }}>
                     <span style={{ color: C.muted }}>Clock</span>
-                    <span style={{ color: C.fg }}>Wall-clock from creation · work inside does not reset it</span>
+                    <span style={{ color: C.fg }}>Set by the system for now</span>
                   </div>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
                     <V2Badge />
@@ -3571,11 +3579,6 @@ function InstanceDrawer({
   // §E — the control plane's `expires_at` is the only lifecycle number we can
   // stand behind, so everything here derives from it.
   const clock = lifecycleClock(inst);
-  const health =
-    running ? { label: "HEALTHY", color: C.ok }
-    : inst.status === "error" ? { label: "UNHEALTHY", color: C.err }
-    : { label: "—", color: C.muted };
-
   const lockedEnv = [
     { key: "GMI_MODELS",        value: "58e99bbf-78ba-4807-9be5-53e762de9212" },
     { key: "GMI_MAAS_API_KEY",  value: "gmi_••••••••••••••••" },
@@ -3726,7 +3729,6 @@ function InstanceDrawer({
             {row("Deployment", deploymentName || "—")}
             {row("Agent Version", agentVersion, true)}
             {row("Model", modelDisplayName(inst.config?.model) + " · GMI_MODEL_ID")}
-            {row("Health", <span style={{ display: "inline-flex", fontFamily: FONT, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", color: health.color, background: `${health.color}1f`, border: `1px solid ${health.color}55`, padding: "2px 8px", borderRadius: 6 }}>{health.label}</span>)}
             {row("IDC", idc)}
             {row("Spec", specLabel(inst.specId) === "—" ? product : `${specName(inst.specId)} · ${specLabel(inst.specId)}`)}
             {row("Public IP", "—")}
@@ -3771,7 +3773,7 @@ function InstanceDrawer({
               />
               <DetailRow
                 label="Clock"
-                value="Wall-clock from creation · work inside does not extend it; opening a Terminal does"
+                value="Set by the system; the Sandbox reports the instant it expires"
               />
               <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px", marginTop: 2 }}>
                 Starting, pausing, and resuming time is not billed. Compute metering starts when Running is confirmed and stops on a
