@@ -178,24 +178,26 @@ interface SandboxCapabilities {
   ports?: boolean;
 }
 /**
- * §H — the default set, for the Runloop substrate that is the primary line.
- * `shell` is FALSE: the substrate has no daemon inside the sandbox, our middle
- * layer has no PTY translation, and while the task response advertises
- * shell:true nobody has connected one end to end. Drawing a Terminal tab that
- * cannot open is worse than not drawing it, so most sandboxes will not have
- * one — the component is built and the tab appears the moment the capability
- * flips, which is the point of driving tabs off capabilities at all.
+ * §H — the default set. `shell` is TRUE here, which is the DESIGNED state, not
+ * today's state: the primary substrate has no PTY translation in our middle
+ * layer yet, and the task response advertising shell:true has never been
+ * connected end to end.
+ *
+ * The prototype draws the target anyway, because that is what it is for — the
+ * same call as drawing the Launch duration picker the backend cannot accept.
+ * When the capability arrives it is already wired; when review needs to see the
+ * degraded case, one sandbox is seeded without it (below).
  */
 const SANDBOX_CAPS: SandboxCapabilities = {
-  exec: true, shell: false, files: true, expiry: true,
+  exec: true, shell: true, files: true, expiry: true,
   logs: false, metrics: false, ports: false,
 };
 /**
- * The E2B line does have a shell. Seeded on one sandbox so the Terminal stays
- * reviewable, and so the tab bar is exercised at both 3 and 4 tabs — §F says
- * the design has to hold 1 to 4.
+ * One sandbox with no shell, so the case most users will actually hit until the
+ * PTY work lands stays reviewable, and the tab bar gets exercised at both
+ * widths — §F says the design has to hold 1 to 4 tabs.
  */
-const SANDBOX_CAPS_WITH_SHELL: SandboxCapabilities = { ...SANDBOX_CAPS, shell: true };
+const SANDBOX_CAPS_NO_SHELL: SandboxCapabilities = { ...SANDBOX_CAPS, shell: false };
 function capsOf(inst: Instance): SandboxCapabilities {
   return inst.capabilities ?? SANDBOX_CAPS;
 }
@@ -579,9 +581,8 @@ const INITIAL_INSTANCES: Instance[] = [
     status: "running",
     created: _seedDaysAgo(5),
     endpointUrl: endpointFor("8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36"),
-    // On the E2B line, so it has a shell: Overview / Run Command / Terminal /
-    // Files / Access — the four-tab case.
-    capabilities: SANDBOX_CAPS_WITH_SHELL,
+    // The full set: Overview / Run Command / Terminal / Files / Access.
+    capabilities: SANDBOX_CAPS,
     specId: "small",
     maxActive: "1h",
     endAt: _seedMinsIn(7),      // near-expiry state §五.1 calls for
@@ -602,9 +603,9 @@ const INITIAL_INSTANCES: Instance[] = [
     status: "running",
     created: _seedDaysAgo(6),
     endpointUrl: endpointFor("1e1bd452-9a3c-4b8e-bf21-7d40c9e6095a"),
-    // On the Runloop line: no Terminal tab, which is what most sandboxes will
-    // look like until the PTY translation is built.
-    capabilities: SANDBOX_CAPS,
+    // No shell — what a sandbox looks like until the PTY translation is built.
+    // Kept so the narrower tab bar stays reviewable.
+    capabilities: SANDBOX_CAPS_NO_SHELL,
     specId: "medium",
     maxActive: "2h",
     endAt: _seedMinsIn(96),     // the long-lived one
@@ -3756,6 +3757,24 @@ function InstanceDrawer({
                       accent={clock.leftMins < 5 ? C.warn : undefined}
                     />
                     <DetailRow label="At the limit" value="This Sandbox and its files are permanently deleted" accent={C.err} />
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
+                      <button
+                        disabled
+                        title="Extending needs POST /tasks/{id}/timeout, which the container server does not expose yet."
+                        style={{
+                          fontFamily: FONT, fontSize: 12, fontWeight: 600,
+                          background: "transparent", color: "#5a5a5a",
+                          border: `1px solid ${C.border}`, borderRadius: 7,
+                          padding: "5px 14px", cursor: "not-allowed",
+                        }}
+                      >
+                        Extend
+                      </button>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
+                        <NoApiBadge title="bs-api has POST /sandboxes/{id}/timeout; the container server does not pass it through." />
+                        Sets a new expiry counted from now — not added to the current one.
+                      </span>
+                    </div>
                   </>
                 ) : (
                   <DetailRow label="Expiry" value="No automatic limit" />
