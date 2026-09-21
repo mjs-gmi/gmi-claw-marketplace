@@ -11,6 +11,7 @@ import ListClaw from "./pages/ListClaw";
 import DeployWizard from "./pages/DeployWizard";
 import Plans from "./pages/Plans";
 import UsageBilling from "./pages/UsageBilling";
+import Quotas from "./pages/Quotas";
 // Task-first pages (RunTask / Tasks / TaskDetail) are parked — the product follows
 // the existing Console structure (Browse Agents / My Agents / Register Template).
 
@@ -32,7 +33,8 @@ function Router() {
       {/* Settings › Usage & Billing. The agent drill-down is its own URL so a
           cost someone is questioning can be linked to directly. */}
       <Route path={"/settings/usage"} component={UsageBilling} />
-      <Route path={"/settings/usage/agentbox/:agentId"} component={UsageBilling} />
+      <Route path={"/settings/usage/agentbox/:sandboxId"} component={UsageBilling} />
+      <Route path={"/settings/quotas"} component={Quotas} />
       <Route component={NotFound} />
     </Switch>
   );

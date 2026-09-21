@@ -32,6 +32,7 @@ import {
 import { ALL_CLAWS, TYPE_LABELS, type Claw, type TypeLabel } from "@/lib/clawData";
 import { SANDBOX_AVAILABLE } from "@/lib/eligibility";
 import NotFound from "@/pages/NotFound";
+import { STANDARD_SPECS, runningRate, pausedRate, money4 } from "@/lib/billingModel";
 
 // ─── Tokens — shared base from @/lib/tokens, plus a few page-local keys.
 const C = {
@@ -2492,6 +2493,21 @@ function ProvisionModal({
                 </option>
               ))}
             </select>
+            {/* §7 — the minimum disclosure: both prices, beside the choice that
+                sets them. Paused is about 1% of running, and that ratio is the
+                whole reason Pause exists, so it belongs here rather than being
+                discovered on the bill. */}
+            {(() => {
+              const sp = STANDARD_SPECS[launchSpec];
+              if (!sp) return null;
+              return (
+                <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>
+                  <span>Running <span style={{ fontFamily: MONO, color: C.fg }}>{money4(runningRate(sp, launchSpec))}</span>/h</span>
+                  <span>Paused <span style={{ fontFamily: MONO, color: C.fg }}>{money4(pausedRate(sp, launchSpec))}</span>/h</span>
+                  <Link href="/settings/usage" style={{ color: C.link, textDecoration: "none" }}>Usage &amp; billing →</Link>
+                </div>
+              );
+            })()}
             {/* §四 — the refusal arrives as an error, not as a disabled control:
                 nothing tells us beforehand which IDCs reject a Spec change, so
                 the picker stays live and this says what happened afterwards. */}
@@ -5808,14 +5824,14 @@ export default function Dashboard() {
     const shortId = midId(id);
     switch (action) {
       case "suspend": {
-        const cost = inst ? pausedCostMo(inst) : 4;
         setConfirm({
           title: "Pause sandbox?",
           body: (
             <>
-              Compute billing stops and the sandbox keeps its ID and files until you Resume or Delete —
-              storage keeps billing ≈${cost}/mo. Memory, running processes, and live connections are lost,
-              and any command running now is cancelled.
+              Only disk is billed while paused — vCPU and memory stop. The reduced rate starts once the
+              sandbox <span style={{ color: C.fg }}>reaches</span> paused, not when you ask for it.
+              The sandbox keeps its ID and files until you Resume or Delete. Memory, running processes and
+              live connections are lost, and any command running now is cancelled.
               Endpoint URLs survive but return the unavailable response while paused.
               For long-term reuse, create a Snapshot instead.
             </>

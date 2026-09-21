@@ -1,13 +1,22 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useLocation, useRoute, Link } from "wouter";
 import { C, FONT, MONO } from "@/lib/tokens";
 import V2Badge from "@/components/V2Badge";
 import {
-  USAGE_PERIOD, INFERENCE_MODELS, INFERENCE_MODELS_MORE, INFERENCE_TOTAL,
-  INFERENCE_ROWS, STUDIO_TOTAL, STUDIO_ROWS, inferenceSeries,
-  AGENTBOX_TOP, AGENTBOX_TOP_TOTAL, AGENTBOX_RUNS, AGENTBOX_MONTH, AGENTBOX_MONTHS,
-  agentTotal, agentUsageById, sessionsFor, tokenCallsFor, usd,
-  type UsageScope, type AgentUsage,
+  BILLING_ITEMS, ITEM_LABEL, ITEM_COLOR, ITEM_BLURB, ACCOUNT_LEVEL, RATE,
+  money2, money4, rate6, round4, sumRounded, specDetail, durationLabel,
+  type BillingItem,
+} from "@/lib/billingModel";
+import {
+  USAGE_PERIOD, BILLING_MONTH, DATA_AS_OF, ACCOUNT_DISCOUNT,
+  INFERENCE_MODELS, INFERENCE_MODELS_MORE, INFERENCE_TOTAL, INFERENCE_ROWS,
+  STUDIO_TOTAL, STUDIO_ROWS, inferenceSeries,
+  SANDBOXES, sandboxById, sandboxTotal, sandboxItemTotal, segmentAmount,
+  segmentBreakdown, isAccruing, itemTotal, periodTotal,
+  snapshotsFor, snapshotCost, snapshotGBmo, templateGBmo, egressUsedGB,
+  snapshotBillableGBmo, templateBillableGBmo, egressBillableGB,
+  SNAPSHOT_FREE_GB, TEMPLATE_FREE_GB, EGRESS_FREE_GB,
+  usd, type UsageScope, type SandboxState,
 } from "@/lib/billingUsage";
 
 // ─── Settings › Usage & Billing ─────────────────────────────────────────────
@@ -229,213 +238,234 @@ function TokenScopeView({ total, rows }: { total: number; rows: typeof INFERENCE
 }
 
 // ── Agentbox ────────────────────────────────────────────────────────────────
-const CONTAINER_COLOR = "#2dd4bf";
-const TOKEN_COLOR = C.lime;
+// §4 — two aggregations must both be reachable, because they answer different
+// questions: "which sandbox cost me money" and "what did I spend it on". The
+// second is the only place Template storage and Egress can appear at all, since
+// neither belongs to a sandbox.
+type AgentboxView = "sandbox" | "item";
 
-function Agentbox({ onOpen }: { onOpen: (a: AgentUsage) => void }) {
-  const [range, setRange] = useState<(typeof RANGES)[number]>("30d");
-  const [month, setMonth] = useState(AGENTBOX_MONTHS[0]);
-  const max = Math.max(...AGENTBOX_TOP.map(agentTotal));
+function AllowanceBar({ label, used, free, unit, note }: {
+  label: string; used: number; free: number; unit: string; note?: string;
+}) {
+  const pct = Math.min(100, (used / free) * 100);
+  const over = used > free;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+        <span style={{ fontFamily: FONT, fontSize: 12.5, color: C.fg }}>{label}</span>
+        <span style={{ fontFamily: MONO, fontSize: 12, color: over ? C.warn : C.muted }}>
+          {used.toFixed(used < 10 ? 1 : 0)} / {free} {unit}
+        </span>
+      </div>
+      <div style={{ height: 5, borderRadius: 999, background: "rgba(255,255,255,0.07)", overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: over ? C.warn : C.lime }} />
+      </div>
+      {note && <span style={{ fontFamily: FONT, fontSize: 11, color: over ? C.warn : C.muted, lineHeight: "15px" }}>{note}</span>}
+    </div>
+  );
+}
+
+function BillingEmptyState() {
+  return (
+    <Card>
+      <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, marginBottom: 4 }}>
+        No Agentbox usage yet
+      </div>
+      <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 16px", lineHeight: "18px" }}>
+        These are the five things Agentbox bills for. Nothing else is charged — registering a template and building it are free.
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+        {BILLING_ITEMS.map((it) => (
+          <div key={it} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: ITEM_COLOR[it], flexShrink: 0, marginTop: 5 }} />
+            <div>
+              <div style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, color: C.fg }}>{ITEM_LABEL[it]}</div>
+              <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px" }}>{ITEM_BLURB[it]}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <a href="/plans" style={{ display: "inline-block", marginTop: 16, fontFamily: FONT, fontSize: 12.5, fontWeight: 600, color: C.lime, textDecoration: "none" }}>
+        See full pricing →
+      </a>
+    </Card>
+  );
+}
+
+function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
+  const [view, setView] = useState<AgentboxView>("sandbox");
+  const [range, setRange] = useState<string>(BILLING_MONTH.label);
+  const [stateFilter, setStateFilter] = useState("All states");
+
+  const total = periodTotal();
+  const itemTotals = BILLING_ITEMS.map((it) => ({ item: it, amount: itemTotal(it) }));
+  const maxItem = Math.max(...itemTotals.map((x) => x.amount), 0.0001);
+
+  const rows = useMemo(() => {
+    const list = [...SANDBOXES].sort((a, b) => sandboxTotal(b) - sandboxTotal(a));
+    if (stateFilter === "All states") return list;
+    return list.filter((s) => s.state === stateFilter.toLowerCase());
+  }, [stateFilter]);
+
+  const maxSandbox = Math.max(...SANDBOXES.map(sandboxTotal), 0.0001);
+  const accruing = SANDBOXES.filter(isAccruing).length;
+
+  if (SANDBOXES.length === 0) return <BillingEmptyState />;
 
   return (
     <>
       <Card>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 22 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 20 }}>
           <div>
             <div style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg }}>
-              Top agents by cost · <span style={{ fontFamily: MONO }}>{usd(AGENTBOX_TOP_TOTAL)}</span>
+              Total · <span style={{ fontFamily: MONO }}>{money2(total)}</span>
             </div>
             <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, marginTop: 3 }}>
-              {AGENTBOX_RUNS} runs · {USAGE_PERIOD.from} – {USAGE_PERIOD.to}
+              {BILLING_MONTH.label} · {BILLING_MONTH.start} – {BILLING_MONTH.end}
+              {accruing > 0 && (
+                <> · <span style={{ color: C.warn }}>{accruing} sandbox{accruing === 1 ? "" : "es"} still accruing</span></>
+              )}
             </div>
           </div>
-          <Segmented value={range} options={RANGES} onChange={setRange} size="sm" />
+          <Segmented value={range} options={[BILLING_MONTH.label, "30d", "7d", "24hr"]} onChange={setRange} size="sm" />
         </div>
 
-        {/* One row per agent, split by what it actually spent on. The split is
-            the point: these two are metered on different clocks, and a stacked
-            bar is the only way to see that one agent's cost is all tokens. */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {AGENTBOX_TOP.map((a) => {
-            const total = agentTotal(a);
-            return (
-              <div key={a.agentId} style={{ display: "grid", gridTemplateColumns: "150px minmax(0,1fr) 110px", gap: 14, alignItems: "center" }}>
-                <button
-                  onClick={() => onOpen(a)}
-                  title={`Open ${a.name}`}
-                  style={{ background: "transparent", border: "none", padding: 0, textAlign: "right", fontFamily: FONT, fontSize: 13, color: C.fg, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                >
-                  {a.name}
-                </button>
-                <div style={{ display: "flex", height: 11, borderRadius: 2, overflow: "hidden", background: "rgba(255,255,255,0.03)" }}>
-                  <div style={{ width: `${(total / max) * 100}%`, display: "flex", minWidth: 3 }}>
-                    <div title={`Container ${usd(a.container)}`} style={{ width: `${total ? (a.container / total) * 100 : 0}%`, background: CONTAINER_COLOR, minWidth: a.container > 0 ? 3 : 0 }} />
-                    <div title={`Token ${usd(a.token)}`} style={{ width: `${total ? (a.token / total) * 100 : 0}%`, background: TOKEN_COLOR }} />
-                  </div>
-                </div>
-                <span style={{ fontFamily: MONO, fontSize: 13, color: C.fg, textAlign: "right" }}>{usd(total)}</span>
+        {/* §2.1 — the legend is the five billing items now, not models. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 13 }}>
+          {itemTotals.map(({ item, amount }) => (
+            <div key={item} style={{ display: "grid", gridTemplateColumns: "150px minmax(0,1fr) 110px", gap: 14, alignItems: "center" }}>
+              <span style={{ fontFamily: FONT, fontSize: 13, color: C.fg, textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={ITEM_BLURB[item]}>
+                {ITEM_LABEL[item]}
+              </span>
+              <div style={{ height: 11, borderRadius: 2, background: "rgba(255,255,255,0.03)" }}>
+                <div style={{ width: `${(amount / maxItem) * 100}%`, height: "100%", background: ITEM_COLOR[item], borderRadius: 2, minWidth: amount > 0 ? 3 : 0 }} />
               </div>
-            );
-          })}
+              <span style={{ fontFamily: MONO, fontSize: 13, color: amount > 0 ? C.fg : C.muted, textAlign: "right" }}>{money2(amount)}</span>
+            </div>
+          ))}
         </div>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 16, marginTop: 18 }}>
-          {[["Container Amount", CONTAINER_COLOR], ["Token Amount", TOKEN_COLOR]].map(([label, color]) => (
-            <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 11.5, color: C.fg }}>
-              <span style={{ width: 8, height: 8, borderRadius: 2, background: color as string }} />
-              {label}
+        {/* §4 — allowance and estimated charge only make sense for a whole
+            calendar month at account scope. Anything narrower is usage only,
+            and the page says which it is showing. */}
+        <div style={{ marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.borderSoft}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 13 }}>
+            <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Free allowances</span>
+            <Link href="/settings/quotas" style={{ fontFamily: FONT, fontSize: 12, color: C.link, textDecoration: "none" }}>Quotas →</Link>
+          </div>
+          {range === BILLING_MONTH.label ? (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 20 }}>
+              <AllowanceBar label="Snapshot storage" used={snapshotGBmo} free={SNAPSHOT_FREE_GB} unit="GB·mo"
+                note={snapshotBillableGBmo > 0 ? `${snapshotBillableGBmo.toFixed(1)} GB·mo billable` : "Within the free allowance"} />
+              <AllowanceBar label="Template storage" used={templateGBmo} free={TEMPLATE_FREE_GB} unit="GB·mo"
+                note={templateBillableGBmo > 0 ? `${templateBillableGBmo.toFixed(2)} GB·mo billable` : "Within the free allowance"} />
+              <AllowanceBar label="Egress" used={egressUsedGB} free={EGRESS_FREE_GB} unit="GB"
+                note={`Resets ${BILLING_MONTH.end.slice(0, 10)} · inbound is always free`} />
+            </div>
+          ) : (
+            <span style={{ display: "flex", alignItems: "flex-start", gap: 7, fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px" }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 2 }}><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
+              Allowance and estimated charge are shown for the full month at account level. This range shows usage only.
             </span>
-          ))}
+          )}
         </div>
       </Card>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 0 12px" }}>
-        <Dropdown value={month} options={AGENTBOX_MONTHS} onChange={setMonth} width={210} />
-        <span style={{ marginLeft: "auto" }}><ExportButton /></span>
-      </div>
-
-      <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={thStyle}>Agent</th>
-              <th style={{ ...thStyle, width: 110 }}>Runs</th>
-              <th style={{ ...thStyle, width: 150, textAlign: "right" }}>Container</th>
-              <th style={{ ...thStyle, width: 170, textAlign: "right" }}>Token</th>
-              <th style={{ ...thStyle, width: 170, textAlign: "right" }}>Total</th>
-              <th style={{ ...thStyle, width: 44 }} />
-            </tr>
-          </thead>
-          <tbody>
-            {AGENTBOX_MONTH.map((a) => (
-              <tr
-                key={a.agentId}
-                onClick={() => onOpen(a)}
-                style={{ cursor: "pointer" }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(221,234,77,0.05)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-              >
-                <td style={tdStyle}>{a.name}</td>
-                <td style={{ ...tdStyle, fontFamily: MONO }}>{a.runs}</td>
-                <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{usd(a.container)}</td>
-                {/* A zero here is a fact, not a gap: the agent made no model
-                    calls. Rendering it muted keeps the eye on the ones that did. */}
-                <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: a.token > 0 ? C.fg : C.muted }}>{usd(a.token)}</td>
-                <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{usd(agentTotal(a))}</td>
-                <td style={{ ...tdStyle, textAlign: "right" }}><Chevron /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </>
-  );
-}
-
-// ── Agent drill-down ────────────────────────────────────────────────────────
-function AgentDetail({ agentId }: { agentId: string }) {
-  const [tab, setTab] = useState<"Container Sessions" | "Token Calls">("Container Sessions");
-  const agent = agentUsageById(agentId);
-  const sessions = sessionsFor(agentId);
-  const calls = tokenCallsFor(agentId);
-  if (!agent) return <div style={{ fontFamily: FONT, color: C.muted }}>No usage recorded for this agent.</div>;
-
-  const total = tab === "Container Sessions"
-    ? sessions.reduce((a, s) => a + s.amount, 0)
-    : calls.reduce((a, c) => a + c.amount, 0);
-
-  const statusColor = (s: string) => (s === "Running" ? C.ok : s === "Failed" ? C.err : C.muted);
-
-  return (
-    <>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-        <div>
-          <h1 style={{ fontFamily: FONT, fontSize: 24, fontWeight: 700, color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>{agent.name}</h1>
-          <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, marginTop: 5 }}>
-            Template ID: <span style={{ fontFamily: MONO, color: C.fg }}>{agent.templateId}</span>
-            {"  "}Period: <span style={{ fontFamily: MONO, color: C.fg }}>09/01/2026 – 09/30/2026</span>
-          </div>
-        </div>
-        <button style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 13, fontWeight: 500, background: C.pillBg, color: C.fg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 14px", cursor: "pointer" }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-          </svg>
-          Download
-        </button>
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, margin: "20px 0 14px", flexWrap: "wrap" }}>
-        <Segmented value={tab} options={["Container Sessions", "Token Calls"] as const} onChange={setTab} size="sm" />
-        <span style={{ fontFamily: FONT, fontSize: 13, color: C.muted }}>
-          Total: <span style={{ fontFamily: MONO, color: C.fg }}>{usd(total)}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 0 12px", flexWrap: "wrap" }}>
+        <Segmented value={view === "sandbox" ? "By sandbox" : "By billing item"}
+                   options={["By sandbox", "By billing item"] as const}
+                   onChange={(v) => setView(v === "By sandbox" ? "sandbox" : "item")} size="sm" />
+        {view === "sandbox" && (
+          <Dropdown value={stateFilter} options={["All states", "Running", "Paused", "Deleted"]} onChange={setStateFilter} width={160} />
+        )}
+        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Data updated as of {DATA_AS_OF}</span>
+          <ExportButton />
         </span>
       </div>
 
       <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
-        {tab === "Container Sessions" ? (
-          sessions.length === 0 ? (
-            <div style={{ padding: "26px 18px", fontFamily: FONT, fontSize: 13, color: C.muted }}>
-              No container sessions in this period.
-            </div>
-          ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th style={thStyle}>Session ID</th>
-                  <th style={thStyle}>IDC</th>
-                  <th style={thStyle}>Instance Type</th>
-                  <th style={thStyle}>Started</th>
-                  <th style={thStyle}>Duration</th>
-                  <th style={thStyle}>Status</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>Amount</th>
+        {view === "sandbox" ? (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={thStyle}>Sandbox</th>
+                <th style={thStyle}>Template</th>
+                <th style={thStyle}>Spec</th>
+                <th style={thStyle}>State</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Running</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Paused</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Total</th>
+                <th style={{ ...thStyle, width: 44 }} />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((sb) => (
+                <tr
+                  key={sb.id}
+                  onClick={() => onOpen(sb.id)}
+                  style={{ cursor: "pointer" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(221,234,77,0.05)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                >
+                  <td style={tdStyle}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ display: "inline-block", width: 3, height: 26, borderRadius: 2, background: `${(sandboxTotal(sb) / maxSandbox) > 0.5 ? C.lime : C.border}` }} />
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sb.name}</div>
+                        <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>{sb.id}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td style={{ ...tdStyle, color: C.muted }}>{sb.templateName}</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>
+                    {/* §2.1 — a short code for a standard spec, quantities for a
+                        custom one, because a custom spec has no code to show. */}
+                    {sb.legacy ? sb.legacy.instanceType : sb.productName ?? specDetail(sb.spec)}
+                  </td>
+                  <td style={tdStyle}><StateChip state={sb.state} /></td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money2(sandboxItemTotal(sb, "running"))}</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: sandboxItemTotal(sb, "paused") > 0 ? C.fg : C.muted }}>
+                    {money2(sandboxItemTotal(sb, "paused"))}
+                  </td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>
+                    {money2(sandboxTotal(sb))}
+                    {isAccruing(sb) && <div style={{ fontFamily: FONT, fontSize: 10.5, color: C.warn }}>In progress</div>}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}><Chevron /></td>
                 </tr>
-              </thead>
-              <tbody>
-                {sessions.map((s) => (
-                  <tr key={s.id}>
-                    <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>{s.id}</td>
-                    <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>{s.idc}</td>
-                    <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>{s.instanceType}</td>
-                    <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>{s.started}</td>
-                    <td style={tdStyle}>{s.duration}</td>
-                    <td style={tdStyle}>
-                      <span style={{ display: "inline-flex", fontFamily: FONT, fontSize: 11.5, color: statusColor(s.status), background: `${statusColor(s.status)}1f`, border: `1px solid ${statusColor(s.status)}55`, padding: "2px 9px", borderRadius: 5 }}>
-                        {s.status}
-                      </span>
-                    </td>
-                    <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{usd(s.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )
-        ) : calls.length === 0 ? (
-          // §Agentbox — an agent that never calls a model is normal, and the
-          // empty state has to say which of the two meters it is, or it reads
-          // as a loading failure.
-          <div style={{ padding: "26px 18px", fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "20px" }}>
-            This agent made no model calls in this period.<br />
-            Its cost is all container time — see <span style={{ color: C.fg }}>Container Sessions</span>.
-          </div>
+              ))}
+            </tbody>
+          </table>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                <th style={thStyle}>Model</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>Calls</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>Input tokens</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>Output tokens</th>
+                <th style={thStyle}>Billing item</th>
+                <th style={thStyle}>Scope</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Quantity</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Unit price</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Amount</th>
               </tr>
             </thead>
             <tbody>
-              {calls.map((c) => (
-                <tr key={c.id}>
-                  <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>{c.model}</td>
-                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{c.calls.toLocaleString()}</td>
-                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{c.inputTokens.toLocaleString()}</td>
-                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{c.outputTokens.toLocaleString()}</td>
-                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{usd(c.amount)}</td>
+              {itemTotals.map(({ item, amount }) => (
+                <tr key={item}>
+                  <td style={tdStyle}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: ITEM_COLOR[item] }} />
+                      {ITEM_LABEL[item]}
+                    </span>
+                    <div style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, marginTop: 2 }}>{ITEM_BLURB[item]}</div>
+                  </td>
+                  {/* §4 — Template storage and Egress are account-level: they
+                      have no sandbox, and saying so is the point of this view. */}
+                  <td style={{ ...tdStyle, color: C.muted }}>
+                    {ACCOUNT_LEVEL.includes(item) ? "Account" : `${SANDBOXES.filter((s) => sandboxItemTotal(s, item) > 0).length} sandboxes`}
+                  </td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: C.muted }}>{itemQuantity(item)}</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: C.muted }}>{itemUnitPrice(item)}</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money2(amount)}</td>
                 </tr>
               ))}
             </tbody>
@@ -446,22 +476,223 @@ function AgentDetail({ agentId }: { agentId: string }) {
   );
 }
 
+function itemQuantity(item: BillingItem): string {
+  switch (item) {
+    case "running":
+    case "paused": {
+      const secs = SANDBOXES.flatMap((s) => s.segments).filter((sg) => sg.state === item).reduce((a, sg) => a + sg.seconds, 0);
+      return `${(secs / 3600).toFixed(2)} h`;
+    }
+    case "snapshot_storage":  return `${snapshotBillableGBmo.toFixed(2)} GB·mo billable`;
+    case "template_storage":  return `${templateBillableGBmo.toFixed(2)} GB·mo billable`;
+    case "egress":            return `${egressBillableGB.toFixed(2)} GB billable`;
+  }
+}
+function itemUnitPrice(item: BillingItem): string {
+  switch (item) {
+    case "running":          return "per resource";
+    case "paused":           return `${rate6(RATE.diskGBHr)}/GB·h`;
+    case "snapshot_storage":
+    case "template_storage": return `${rate6(RATE.storageGBMonth)}/GB·mo`;
+    case "egress":           return `${rate6(RATE.egressGB)}/GB`;
+  }
+}
+
+function StateChip({ state }: { state: SandboxState }) {
+  const color = state === "running" ? C.ok : state === "paused" ? "#60a5fa" : state === "error" ? C.err : C.muted;
+  return (
+    <span style={{ display: "inline-flex", fontFamily: FONT, fontSize: 11.5, color, background: `${color}1f`, border: `1px solid ${color}55`, padding: "2px 9px", borderRadius: 5 }}>
+      {state}
+    </span>
+  );
+}
+
+// ── Sandbox detail (§5) ─────────────────────────────────────────────────────
+// A chronological timeline, not a session list. One sandbox has many segments,
+// so what used to be per-row constants — region, spec, instance type — move to
+// the header, and each row becomes a stretch of time in one state. Running
+// segments expand into vCPU / memory / disk, which is the only way a custom
+// spec's price can be reconciled: there is no product code to look it up by.
+function SandboxDetail({ sandboxId }: { sandboxId: string }) {
+  const [tab, setTab] = useState<"Segments" | "Snapshots">("Segments");
+  const [open, setOpen] = useState<string | null>(null);
+  const sb = sandboxById(sandboxId);
+  if (!sb) return <div style={{ fontFamily: FONT, color: C.muted }}>No usage recorded for this sandbox.</div>;
+
+  const snaps = snapshotsFor(sb.id);
+  const total = sandboxTotal(sb);
+  const snapTotal = sumRounded(snaps.map(snapshotCost));
+
+  const field = (k: string, v: React.ReactNode) => (
+    <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
+      <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>{k}</span>
+      <span style={{ fontFamily: MONO, fontSize: 12, color: C.fg }}>{v}</span>
+    </span>
+  );
+
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <h1 style={{ fontFamily: FONT, fontSize: 24, fontWeight: 700, color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>{sb.name}</h1>
+            <StateChip state={sb.state} />
+          </div>
+          {/* Everything constant across segments lives here, not in a column. */}
+          <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 8 }}>
+            {field("Sandbox", sb.id)}
+            {field("Template", `${sb.templateName} · ${sb.templateId.slice(0, 8)}…`)}
+            {field("Spec", sb.legacy ? sb.legacy.instanceType : sb.productName ? `${sb.productName} · ${specDetail(sb.spec)}` : specDetail(sb.spec))}
+            {field("Region", sb.region)}
+            {field("Created", sb.created)}
+            {sb.deleted && field("Deleted", sb.deleted)}
+          </div>
+          {sb.legacy && (
+            // §9 — a pre-redesign row cannot be broken down, and saying so is
+            // better than showing three zeroes that look like a bug.
+            <div style={{ marginTop: 10, display: "inline-flex", alignItems: "flex-start", gap: 7, background: "rgba(255,255,255,0.03)", border: `1px solid ${C.borderSoft}`, borderRadius: 7, padding: "7px 11px", fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
+              Pre-redesign billing, charged by container duration. Paused, storage and egress were not metered for this period.
+            </div>
+          )}
+        </div>
+        <button style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 13, fontWeight: 500, background: C.pillBg, color: C.fg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 14px", cursor: "pointer", flexShrink: 0 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+          </svg>
+          Download
+        </button>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, margin: "22px 0 14px", flexWrap: "wrap" }}>
+        <Segmented value={tab} options={["Segments", "Snapshots"] as const} onChange={setTab} size="sm" />
+        <span style={{ fontFamily: FONT, fontSize: 13, color: C.muted }}>
+          {BILLING_MONTH.label} total: <span style={{ fontFamily: MONO, color: C.fg }}>{money4(tab === "Segments" ? total : snapTotal)}</span>
+        </span>
+      </div>
+
+      <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+        {tab === "Segments" ? (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={{ ...thStyle, width: 34 }} />
+                <th style={thStyle}>Segment</th>
+                <th style={thStyle}>Start</th>
+                <th style={thStyle}>End</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Duration</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sb.segments.map((sg) => {
+                const amount = segmentAmount(sb, sg);
+                const expandable = !sb.legacy;
+                const isOpen = open === sg.id;
+                return (
+                  <Fragment key={sg.id}>
+                    <tr
+                      onClick={() => expandable && setOpen(isOpen ? null : sg.id)}
+                      style={{ cursor: expandable ? "pointer" : "default" }}
+                    >
+                      <td style={{ ...tdStyle, paddingRight: 0 }}>
+                        {expandable && (
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
+                               style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform .15s" }}>
+                            <path d="m9 18 6-6-6-6" />
+                          </svg>
+                        )}
+                      </td>
+                      <td style={tdStyle}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ width: 8, height: 8, borderRadius: 2, background: sg.state === "running" ? ITEM_COLOR.running : ITEM_COLOR.paused }} />
+                          {sg.state === "running" ? "Running" : "Paused"}
+                        </span>
+                      </td>
+                      <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>{sg.start}</td>
+                      <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5, color: sg.end ? C.fg : C.warn }}>
+                        {sg.end ?? "In progress"}
+                      </td>
+                      <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{durationLabel(sg.seconds)}</td>
+                      <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money4(amount)}</td>
+                    </tr>
+                    {isOpen && segmentBreakdown(sb, sg).map((b) => (
+                      <tr key={b.label} style={{ background: "rgba(255,255,255,0.02)" }}>
+                        <td style={{ ...tdStyle, borderTop: "none" }} />
+                        <td style={{ ...tdStyle, borderTop: "none", color: C.muted, paddingLeft: 26 }}>{b.label}</td>
+                        <td style={{ ...tdStyle, borderTop: "none", color: C.muted, fontFamily: MONO, fontSize: 12 }} colSpan={2}>{b.qty}</td>
+                        <td style={{ ...tdStyle, borderTop: "none" }} />
+                        <td style={{ ...tdStyle, borderTop: "none", fontFamily: MONO, textAlign: "right", color: C.muted }}>{money4(b.amount)}</td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : snaps.length === 0 ? (
+          <div style={{ padding: "26px 18px", fontFamily: FONT, fontSize: 13, color: C.muted }}>
+            No snapshots were taken from this sandbox.
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={thStyle}>Snapshot</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Size</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Age</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Stored</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Period cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {snaps.map((s) => (
+                <tr key={s.id}>
+                  <td style={tdStyle}>
+                    {s.name}
+                    <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>{s.id}</div>
+                  </td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{s.sizeGB} GB</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{s.ageDays} d</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{(s.sizeGB * s.storedHours).toLocaleString()} GB·h</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money4(snapshotCost(s))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* §10 — billed amount by default, list and discount in detail. */}
+      {ACCOUNT_DISCOUNT > 0 && tab === "Segments" && (
+        <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end", gap: 24, fontFamily: FONT, fontSize: 12, color: C.muted }}>
+          <span>List <span style={{ fontFamily: MONO, color: C.fg }}>{money4(total)}</span></span>
+          <span>Discount <span style={{ fontFamily: MONO, color: C.fg }}>{(ACCOUNT_DISCOUNT * 100).toFixed(0)}%</span></span>
+          <span>Billed <span style={{ fontFamily: MONO, color: C.fg }}>{money4(round4(total * (1 - ACCOUNT_DISCOUNT)))}</span></span>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── Page ────────────────────────────────────────────────────────────────────
 export default function UsageBilling() {
   const [, setLocation] = useLocation();
-  const [matchAgent, params] = useRoute("/settings/usage/agentbox/:agentId");
-  const agentId = matchAgent ? params?.agentId : undefined;
+  // §5 — a sandbox detail is its own URL, so a charge someone is questioning
+  // can be linked to directly rather than described.
+  const [matchSandbox, params] = useRoute("/settings/usage/agentbox/:sandboxId");
+  const sandboxId = matchSandbox ? params?.sandboxId : undefined;
 
   const [side, setSide] = useState<"Inference" | "Compute">("Inference");
   const [tab, setTab] = useState<BillingTab>("Usage");
-  const [scope, setScope] = useState<UsageScope>(agentId ? "agentbox" : "inference");
+  const [scope, setScope] = useState<UsageScope>(sandboxId ? "agentbox" : "inference");
 
-  const crumbs: { label: string; href?: string }[] = agentId
+  const crumbs: { label: string; href?: string }[] = sandboxId
     ? [
         { label: "Usage & Billing", href: "/settings/usage" },
         { label: "Usage", href: "/settings/usage" },
         { label: "Agentbox", href: "/settings/usage" },
-        { label: agentUsageById(agentId)?.name ?? agentId },
+        { label: sandboxById(sandboxId)?.name ?? sandboxId },
       ]
     : [{ label: "Usage & Billing", href: "/settings/usage" }, { label: "Usage" }];
 
@@ -557,8 +788,8 @@ export default function UsageBilling() {
             <div style={{ fontFamily: FONT, fontSize: 13.5, color: C.muted, padding: "40px 0" }}>
               {tab} is part of the existing Console and is not rebuilt in this prototype.
             </div>
-          ) : agentId ? (
-            <AgentDetail agentId={agentId} />
+          ) : sandboxId ? (
+            <SandboxDetail sandboxId={sandboxId} />
           ) : (
             <>
               <h1 style={{ fontFamily: FONT, fontSize: 22, fontWeight: 700, color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>Usage</h1>
@@ -577,7 +808,7 @@ export default function UsageBilling() {
               {scope === "inference" && <TokenScopeView total={INFERENCE_TOTAL} rows={INFERENCE_ROWS} />}
               {scope === "studio"    && <TokenScopeView total={STUDIO_TOTAL} rows={STUDIO_ROWS} />}
               {scope === "agentbox"  && (
-                <Agentbox onOpen={(a) => setLocation(`/settings/usage/agentbox/${a.agentId}`)} />
+                <Agentbox onOpen={(id) => setLocation(`/settings/usage/agentbox/${encodeURIComponent(id)}`)} />
               )}
             </>
           )}
