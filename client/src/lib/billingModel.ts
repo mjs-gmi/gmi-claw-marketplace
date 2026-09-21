@@ -63,6 +63,16 @@ export const ITEM_BLURB_NO_ALLOWANCE: Partial<Record<BillingItem, string>> = {
  */
 export const ACCOUNT_LEVEL: BillingItem[] = ["template_storage"];
 
+/**
+ * Pause / Resume / Snapshot land in Agentbox 2.1. Their billing items are
+ * specified and drawn so the model can be reviewed whole, but nothing in the
+ * product can produce them yet: no sandbox can be paused, so there are no
+ * paused segments, no transitions and no snapshots. Marked rather than hidden,
+ * for the same reason the Terminal and Extend controls are drawn — a billing
+ * model reviewed with two of its six items missing has not been reviewed.
+ */
+export const V21_ITEMS: BillingItem[] = ["paused", "snapshot_storage"];
+
 // ── Rates ───────────────────────────────────────────────────────────────────
 export const RATE = {
   vcpuHr: 0.0738,       // per vCPU hour

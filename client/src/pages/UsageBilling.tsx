@@ -2,8 +2,9 @@ import { Fragment, useMemo, useState } from "react";
 import { useLocation, useRoute, Link } from "wouter";
 import { C, FONT, MONO } from "@/lib/tokens";
 import V2Badge from "@/components/V2Badge";
+import V21Badge from "@/components/V21Badge";
 import {
-  BILLING_ITEMS, ITEM_LABEL, ITEM_COLOR, ITEM_BLURB, ACCOUNT_LEVEL, RATE,
+  BILLING_ITEMS, ITEM_LABEL, ITEM_COLOR, ITEM_BLURB, ACCOUNT_LEVEL, V21_ITEMS, RATE,
   STATUS_NOTE, money2, money4, rate6, round4, sumRounded, specDetail, durationLabel,
   type BillingItem,
 } from "@/lib/billingModel";
@@ -248,15 +249,17 @@ function TokenScopeView({ total, rows }: { total: number; rows: typeof INFERENCE
 // neither belongs to a sandbox.
 type AgentboxView = "sandbox" | "item";
 
-function AllowanceBar({ label, used, free, unit, note }: {
-  label: string; used: number; free: number; unit: string; note?: string;
+function AllowanceBar({ label, used, free, unit, note, v21 }: {
+  label: string; used: number; free: number; unit: string; note?: string; v21?: boolean;
 }) {
   const pct = Math.min(100, (used / free) * 100);
   const over = used > free;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
-        <span style={{ fontFamily: FONT, fontSize: 12.5, color: C.fg }}>{label}</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 12.5, color: C.fg }}>
+          {label}{v21 && <V21Badge />}
+        </span>
         <span style={{ fontFamily: MONO, fontSize: 12, color: over ? C.warn : C.muted }}>
           {used.toFixed(used < 10 ? 1 : 0)} / {free} {unit}
         </span>
@@ -357,8 +360,9 @@ function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 13 }}>
           {itemTotals.map(({ item, amount }) => (
             <div key={item} style={{ display: "grid", gridTemplateColumns: "150px minmax(0,1fr) 110px", gap: 14, alignItems: "center" }}>
-              <span style={{ fontFamily: FONT, fontSize: 13, color: C.fg, textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={ITEM_BLURB[item]}>
-                {ITEM_LABEL[item]}
+              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 6, fontFamily: FONT, fontSize: 13, color: C.fg, minWidth: 0 }} title={ITEM_BLURB[item]}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ITEM_LABEL[item]}</span>
+                {V21_ITEMS.includes(item) && <V21Badge />}
               </span>
               <div style={{ height: 11, borderRadius: 2, background: "rgba(255,255,255,0.03)" }}>
                 <div style={{ width: `${(amount / maxItem) * 100}%`, height: "100%", background: ITEM_COLOR[item], borderRadius: 2, minWidth: amount > 0 ? 3 : 0 }} />
@@ -387,7 +391,7 @@ function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
           </div>
           {range === BILLING_MONTH.label ? (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 20 }}>
-              <AllowanceBar label="Snapshot storage" used={snapshotGBmo} free={SNAPSHOT_FREE_GB} unit="GB·mo"
+              <AllowanceBar label="Snapshot storage" v21 used={snapshotGBmo} free={SNAPSHOT_FREE_GB} unit="GB·mo"
                 note={snapshotBillableGBmo > 0 ? `${snapshotBillableGBmo.toFixed(1)} GB·mo billable` : "Within the free allowance"} />
               <AllowanceBar label="Template storage" used={templateGBmo} free={TEMPLATE_FREE_GB} unit="GB·mo"
                 note={templateBillableGBmo > 0 ? `${templateBillableGBmo.toFixed(2)} GB·mo billable` : "Within the free allowance"} />
@@ -514,6 +518,7 @@ function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                       <span style={{ width: 8, height: 8, borderRadius: 2, background: ITEM_COLOR[item] }} />
                       {ITEM_LABEL[item]}
+                      {V21_ITEMS.includes(item) && <V21Badge />}
                     </span>
                     <div style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, marginTop: 2 }}>{ITEM_BLURB[item]}</div>
                   </td>
@@ -812,7 +817,10 @@ function SandboxDetail({ sandboxId }: { sandboxId: string }) {
       </div>
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, margin: "22px 0 14px", flexWrap: "wrap" }}>
-        <Segmented value={tab} options={["Segments", "Snapshots", "Model usage"] as const} onChange={setTab} size="sm" />
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <Segmented value={tab} options={["Segments", "Snapshots", "Model usage"] as const} onChange={setTab} size="sm" />
+          {tab === "Snapshots" && <V21Badge />}
+        </span>
         <V2Badge title="New in V2 — a chronological running/paused timeline replaces the session list, and Snapshots replaces Token Calls." />
         <span style={{ fontFamily: FONT, fontSize: 13, color: C.muted }}>
           {BILLING_MONTH.label} total: <span style={{ fontFamily: MONO, color: C.fg }}>{money4(tab === "Segments" ? total : tab === "Snapshots" ? snapTotal : modelTotal)}</span>
@@ -856,6 +864,9 @@ function SandboxDetail({ sandboxId }: { sandboxId: string }) {
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                           <span style={{ width: 8, height: 8, borderRadius: 2, background: transitioning ? C.muted : sg.state === "running" ? ITEM_COLOR.running : ITEM_COLOR.paused }} />
                           {transitioning ? "Transitioning" : sg.state === "running" ? "Running" : "Paused"}
+                          {/* Pause and its transitions ship in 2.1, so no
+                              sandbox can produce these segments yet. */}
+                          {sg.state !== "running" && <V21Badge />}
                         </span>
                       </td>
                       <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>{sg.start}</td>

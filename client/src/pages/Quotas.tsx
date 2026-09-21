@@ -1,5 +1,6 @@
 import { Link } from "wouter";
 import V2Badge from "@/components/V2Badge";
+import V21Badge from "@/components/V21Badge";
 import { C, FONT, MONO } from "@/lib/tokens";
 import { TIERS, RATE, rate6, money2 } from "@/lib/billingModel";
 import {
@@ -17,13 +18,15 @@ import {
 // The distinction this page exists to make: a build quota running out is a
 // REFUSAL, not a charge. Nothing on this page bills.
 
-function Row({ label, used, limit, note, warn }: {
-  label: string; used: string; limit: string; note?: string; warn?: boolean;
+function Row({ label, used, limit, note, warn, v21 }: {
+  label: string; used: string; limit: string; note?: string; warn?: boolean; v21?: boolean;
 }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 14, padding: "13px 0", borderTop: `1px solid ${C.borderSoft}` }}>
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontFamily: FONT, fontSize: 13.5, color: C.fg }}>{label}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 13.5, color: C.fg }}>
+          {label}{v21 && <V21Badge />}
+        </div>
         {note && <div style={{ fontFamily: FONT, fontSize: 11.5, color: warn ? C.warn : C.muted, marginTop: 3, lineHeight: "16px" }}>{note}</div>}
       </div>
       <div style={{ fontFamily: MONO, fontSize: 13, color: warn ? C.warn : C.fg, whiteSpace: "nowrap", textAlign: "right" }}>
@@ -121,7 +124,7 @@ export default function Quotas() {
           <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 4px", lineHeight: "18px" }}>
             These do not refuse anything. Usage beyond them is billed at the rate shown.
           </p>
-          <Row label="Snapshot storage" used={`${snapshotGBmo.toFixed(1)} GB·mo`} limit={`${SNAPSHOT_FREE_GB} GB·mo`}
+          <Row label="Snapshot storage" v21 used={`${snapshotGBmo.toFixed(1)} GB·mo`} limit={`${SNAPSHOT_FREE_GB} GB·mo`}
                warn={snapshotGBmo > SNAPSHOT_FREE_GB}
                note={`Beyond the allowance: ${rate6(RATE.storageGBMonth)}/GB·mo`} />
           <Row label="Template storage" used={`${templateGBmo.toFixed(2)} GB·mo`} limit={`${TEMPLATE_FREE_GB} GB·mo`}
@@ -136,7 +139,10 @@ export default function Quotas() {
 
         <Section title="Approaching archival">
           <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 4px", lineHeight: "18px" }}>
-            Templates with no launch for 90 days are archived then deleted. Paused sandboxes not resumed for 30 days are archived.
+            Templates with no launch for 90 days are archived then deleted.{" "}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              Paused sandboxes not resumed for 30 days are archived. <V21Badge />
+            </span>
           </p>
           {QUOTA.archivingSoon.map((r) => (
             <div key={r.name} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 14, padding: "13px 0", borderTop: `1px solid ${C.borderSoft}` }}>
