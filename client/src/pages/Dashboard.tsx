@@ -2504,6 +2504,7 @@ function ProvisionModal({
                 <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>
                   <span>Running <span style={{ fontFamily: MONO, color: C.fg }}>{money4(runningRate(sp, launchSpec))}</span>/h</span>
                   <span>Paused <span style={{ fontFamily: MONO, color: C.fg }}>{money4(pausedRate(sp, launchSpec))}</span>/h</span>
+                  <V2Badge title="New in V2 — both prices are disclosed beside the Spec that sets them." />
                   <Link href="/settings/usage" style={{ color: C.link, textDecoration: "none" }}>Usage &amp; billing →</Link>
                 </div>
               );

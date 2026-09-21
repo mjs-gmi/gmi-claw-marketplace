@@ -1,4 +1,5 @@
 import { Link } from "wouter";
+import V2Badge from "@/components/V2Badge";
 import { C, FONT, MONO } from "@/lib/tokens";
 import { TIERS, RATE, rate6, money2 } from "@/lib/billingModel";
 import {
@@ -57,9 +58,12 @@ export default function Quotas() {
           Usage &amp; Billing
         </Link>
 
-        <h1 style={{ fontFamily: FONT, fontSize: 23, fontWeight: 700, color: C.fg, margin: "14px 0 4px", letterSpacing: "-0.02em" }}>
-          Quotas &amp; account tier
-        </h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "14px 0 4px" }}>
+          <h1 style={{ fontFamily: FONT, fontSize: 23, fontWeight: 700, color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>
+            Quotas &amp; account tier
+          </h1>
+          <V2Badge title="New in V2 — quotas, tiers and allowances had no surface before." />
+        </div>
         <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, margin: "0 0 20px" }}>
           Limits on what you can run at once. Hitting one refuses the request — <span style={{ color: C.fg }}>nothing here bills you</span>.
         </p>

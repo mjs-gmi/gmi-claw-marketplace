@@ -317,8 +317,11 @@ function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
       <Card>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 20 }}>
           <div>
-            <div style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg }}>
-              Total · <span style={{ fontFamily: MONO }}>{money2(total)}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg }}>
+                Total · <span style={{ fontFamily: MONO }}>{money2(total)}</span>
+              </span>
+              <V2Badge title="V2 bills five items. The old page had two — Container and Token — and Token has moved to Inference." />
             </div>
             <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, marginTop: 3 }}>
               {BILLING_MONTH.label} · {BILLING_MONTH.start} – {BILLING_MONTH.end}
@@ -351,6 +354,7 @@ function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
         <div style={{ marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.borderSoft}` }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 13 }}>
             <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Free allowances</span>
+            <V2Badge title="New in V2 — snapshot storage, template storage and egress each carry a free allowance." />
             <Link href="/settings/quotas" style={{ fontFamily: FONT, fontSize: 12, color: C.link, textDecoration: "none" }}>Quotas →</Link>
           </div>
           {range === BILLING_MONTH.label ? (
@@ -375,6 +379,7 @@ function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
         <Segmented value={view === "sandbox" ? "By sandbox" : "By billing item"}
                    options={["By sandbox", "By billing item"] as const}
                    onChange={(v) => setView(v === "By sandbox" ? "sandbox" : "item")} size="sm" />
+        <V2Badge title="New in V2 — the cost subject is the sandbox instance, and account-level items only appear in the by-item view." />
         {view === "sandbox" && (
           <Dropdown value={stateFilter} options={["All states", "Running", "Paused", "Deleted"]} onChange={setStateFilter} width={160} />
         )}
@@ -566,6 +571,7 @@ function SandboxDetail({ sandboxId }: { sandboxId: string }) {
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, margin: "22px 0 14px", flexWrap: "wrap" }}>
         <Segmented value={tab} options={["Segments", "Snapshots"] as const} onChange={setTab} size="sm" />
+        <V2Badge title="New in V2 — a chronological running/paused timeline replaces the session list, and Snapshots replaces Token Calls." />
         <span style={{ fontFamily: FONT, fontSize: 13, color: C.muted }}>
           {BILLING_MONTH.label} total: <span style={{ fontFamily: MONO, color: C.fg }}>{money4(tab === "Segments" ? total : snapTotal)}</span>
         </span>
