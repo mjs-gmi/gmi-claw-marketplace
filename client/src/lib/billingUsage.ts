@@ -9,7 +9,7 @@
 
 import {
   RATE, HOURS_PER_MONTH, STANDARD_SPECS, runningRate, pausedRate, round4, sumRounded,
-  type BillingItem, type Spec, type TierId,
+  type BillingItem, type BillingStatus, type Spec, type TierId,
 } from "./billingModel";
 
 export type UsageScope = "inference" | "studio" | "agentbox";
@@ -20,11 +20,41 @@ export const BILLING_MONTH = { label: "September 2026", start: "2026-09-01 00:00
 export const DATA_AS_OF = "2026-09-21 14:05 UTC";
 
 export const ACCOUNT_TIER: TierId = "T1";
+
+/**
+ * §10 — where each item is in the rollout. Storage meters were confirmed
+ * missing on 9/19, so template storage is still being shown-not-charged.
+ */
+export const ITEM_STATUS: Record<BillingItem, BillingStatus> = {
+  running: "billed",
+  paused: "billed",
+  snapshot_storage: "billed",
+  template_storage: "not_yet_billed",
+  egress: "billed",
+  model_usage: "billed",
+};
+export const ITEM_BILLING_STARTS: Partial<Record<BillingItem, string>> = {
+  template_storage: "2026-11-01",
+};
+
+/**
+ * §2 — egress and model usage should attribute per sandbox. When the upstream
+ * cannot, the item degrades to account level and says so rather than silently
+ * dropping the dimension.
+ */
+export const EGRESS_ATTRIBUTABLE = true;
+export const MODEL_USAGE_ATTRIBUTABLE = true;
 /** §10 — a discount multiplies the computed amount; base rates never change. */
 export const ACCOUNT_DISCOUNT = 0.10;
 
 // ── Sandboxes and their segments ────────────────────────────────────────────
-export type SegmentState = "running" | "paused";
+/**
+ * §2 — `transitioning` covers pausing and resuming. Whether it bills at the
+ * running rate or is free is still open with Sandbox API, but either way it is
+ * a visible segment: a user who pressed Pause at 09:50 and sees a running
+ * segment ending at 09:50:40 otherwise concludes they were overcharged.
+ */
+export type SegmentState = "running" | "paused" | "transitioning";
 export interface Segment {
   id: string;
   state: SegmentState;
@@ -90,9 +120,11 @@ export const SANDBOXES: SandboxUsage[] = [
     created: "2026-09-07 09:20:44",
     deleted: "2026-09-07 12:20:44",
     segments: [
-      { id: "sg1", state: "running", start: "2026-09-07 09:20:44", end: "2026-09-07 09:50:44", seconds: hrs(0.5) },
-      { id: "sg2", state: "paused",  start: "2026-09-07 09:50:44", end: "2026-09-07 11:50:44", seconds: hrs(2) },
-      { id: "sg3", state: "running", start: "2026-09-07 11:50:44", end: "2026-09-07 12:20:44", seconds: hrs(0.5) },
+      { id: "sg1", state: "running",       start: "2026-09-07 09:20:44", end: "2026-09-07 09:50:44", seconds: hrs(0.5) },
+      // 40 s of pausing — the segment that used to be invisible.
+      { id: "sg2", state: "transitioning", start: "2026-09-07 09:50:44", end: "2026-09-07 09:51:24", seconds: 40 },
+      { id: "sg3", state: "paused",        start: "2026-09-07 09:51:24", end: "2026-09-07 11:51:24", seconds: hrs(2) },
+      { id: "sg4", state: "running",       start: "2026-09-07 11:51:24", end: "2026-09-07 12:21:24", seconds: hrs(0.5) },
     ],
   },
   // §12 — a custom spec: quantities, no product code.
@@ -150,6 +182,10 @@ export function segmentAmount(sb: SandboxUsage, sg: Segment): number {
   const hours = sg.seconds / 3600;
   // A legacy row has no product name to price by, but it also has no
   // breakdown — its amount is whatever the old container meter recorded.
+  // §2/§11 — whether the transition bills at the running rate or is free is
+  // still open. The prototype charges nothing and labels the row, rather than
+  // picking a side and quietly baking it into a total.
+  if (sg.state === "transitioning") return 0;
   const rate = sg.state === "running"
     ? runningRate(sb.spec, sb.legacy ? undefined : sb.productName)
     : pausedRate(sb.spec, sb.legacy ? undefined : sb.productName);
@@ -157,6 +193,7 @@ export function segmentAmount(sb: SandboxUsage, sg: Segment): number {
 }
 /** Running segments expand to three rows (§5) — the only way a custom spec reconciles. */
 export function segmentBreakdown(sb: SandboxUsage, sg: Segment): { label: string; qty: string; amount: number }[] {
+  if (sg.state === "transitioning") return [];
   if (sg.state !== "running") {
     return [{ label: "Disk", qty: `${sb.spec.diskGB} GB · ${(sg.seconds / 3600).toFixed(2)} h`, amount: round4(sb.spec.diskGB * RATE.diskGBHr * (sg.seconds / 3600)) }];
   }
@@ -193,21 +230,68 @@ export const snapshotBillableGBmo = Math.max(0, snapshotGBmo - SNAPSHOT_FREE_GB)
 export const templateBillableGBmo = Math.max(0, templateGBmo - TEMPLATE_FREE_GB);
 export const egressBillableGB = Math.max(0, egressUsedGB - EGRESS_FREE_GB);
 
-export const ACCOUNT_ITEM_AMOUNT: Record<"snapshot_storage" | "template_storage" | "egress", number> = {
+const BILLING_ITEMS_ALL: BillingItem[] =
+  ["running", "paused", "snapshot_storage", "template_storage", "egress", "model_usage"];
+
+export const ACCOUNT_ITEM_AMOUNT: Record<"snapshot_storage" | "template_storage" | "egress" | "model_usage", number> = {
+  model_usage: 0,   // computed in itemTotal from gross minus credit
   snapshot_storage: round4(snapshotBillableGBmo * RATE.storageGBMonth),
   template_storage: round4(templateBillableGBmo * RATE.storageGBMonth),
   egress: round4(egressBillableGB * RATE.egressGB),
 };
 
+// ── §3 drill-downs ──────────────────────────────────────────────────────────
+// The answer to "what am I paying for" has to be one click from every number.
+// Without these, snapshot storage and egress are amounts a user can see and
+// cannot act on — the exact complaint that produced this section.
+export interface TemplateStorage { id: string; name: string; version: string; sizeGB: number; lastLaunch: string; storedHours: number }
+export const TEMPLATES: TemplateStorage[] = [
+  { id: "d6b808ba", name: "wickwood3",           version: "v4", sizeGB: 46, lastLaunch: "2026-09-03", storedHours: 730 },
+  { id: "7c1e0a44", name: "FDE Agent 003-rev20", version: "v20", sizeGB: 38, lastLaunch: "2026-09-21", storedHours: 730 },
+  { id: "51a7fb30", name: "matchday",            version: "v2", sizeGB: 16, lastLaunch: "2026-09-07", storedHours: 730 },
+  { id: "e9d31c87", name: "sevenTest",           version: "v1", sizeGB: 10, lastLaunch: "2026-07-09", storedHours: 48 },
+];
+export const templateStorageCost = (t: TemplateStorage): number =>
+  round4((t.sizeGB * t.storedHours / HOURS_PER_MONTH) * RATE.storageGBMonth);
+
+export interface EgressRow { sandboxId: string; sandboxName: string; bytesGB: number }
+export const EGRESS_BY_SANDBOX: EgressRow[] = [
+  { sandboxId: "sbx_e5d130", sandboxName: "fde-batch-03",    bytesGB: 18.2 },
+  { sandboxId: "sbx_a11c84", sandboxName: "viva-eval",       bytesGB: 5.1 },
+  { sandboxId: "sbx_2b90ff", sandboxName: "matchday-worker", bytesGB: 3.1 },
+];
+
+export interface ModelUsageRow { sandboxId: string; sandboxName: string; model: string; tokens: number; amount: number; creditApplied: number }
+export const MODEL_USAGE: ModelUsageRow[] = [
+  { sandboxId: "sbx_7c41a9", sandboxName: "nightly-scrape", model: "claude-opus-5",   tokens: 214_300_000, amount: 9_244.10, creditApplied: 0 },
+  { sandboxId: "sbx_7c41a9", sandboxName: "nightly-scrape", model: "claude-sonnet-5", tokens: 114_550_000, amount: 3_118.44, creditApplied: 3_118.44 },
+  { sandboxId: "sbx_e5d130", sandboxName: "fde-batch-03",   model: "DeepSeek-V4-Pro", tokens: 285_000_000, amount: 1_230.28, creditApplied: 0 },
+];
+export const modelUsageFor = (sandboxId: string): ModelUsageRow[] =>
+  MODEL_USAGE.filter((m) => m.sandboxId === sandboxId);
+/** Coding Plan credits show as a credit line against the item, not as a discount. */
+export const MODEL_USAGE_GROSS = sumRounded(MODEL_USAGE.map((m) => m.amount));
+export const MODEL_USAGE_CREDIT = sumRounded(MODEL_USAGE.map((m) => m.creditApplied));
+
 export function itemTotal(item: BillingItem): number {
   if (item === "running" || item === "paused") {
     return sumRounded(SANDBOXES.map((sb) => sandboxItemTotal(sb, item)));
   }
+  if (item === "model_usage") return round4(MODEL_USAGE_GROSS - MODEL_USAGE_CREDIT);
   return ACCOUNT_ITEM_AMOUNT[item];
 }
+/**
+ * §3/§10 — the header total is BILLED: month to date, in-progress included,
+ * and items that are metered but not yet charged left out. Showing a number
+ * the customer is not being asked to pay is the one mistake this total cannot
+ * make.
+ */
 export const periodTotal = (): number => sumRounded(
-  (["running", "paused", "snapshot_storage", "template_storage", "egress"] as BillingItem[]).map(itemTotal),
+  BILLING_ITEMS_ALL.filter((i) => ITEM_STATUS[i] === "billed").map(itemTotal),
 );
+/** What the same period costs before the account discount. */
+export const periodListTotal = (): number => periodTotal();
+export const periodBilledTotal = (): number => round4(periodTotal() * (1 - ACCOUNT_DISCOUNT));
 
 // ── Quotas (§6) ─────────────────────────────────────────────────────────────
 export const QUOTA = {
@@ -267,8 +351,6 @@ export const INFERENCE_ROWS: UsageRow[] = [
   { time: "Sep, 2026", category: "Dedicated",  modelType: "—",          amount: 7_671.5 },
   { time: "Sep, 2026", category: "Serverless", modelType: "LLM",        amount: 32_279.4 },
   { time: "Sep, 2026", category: "Serverless", modelType: "Multimodal", amount: 267.07 },
-  // §9 — Token usage left Agentbox. It lands here, still attributed.
-  { time: "Sep, 2026", category: "Serverless", modelType: "LLM · wickwood3", amount: 13_592.82, legacyFromAgentbox: true },
   { time: "Aug, 2026", category: "Dedicated",  modelType: "—",          amount: 5_402.18 },
 ];
 export const STUDIO_ROWS: UsageRow[] = [
@@ -276,6 +358,24 @@ export const STUDIO_ROWS: UsageRow[] = [
   { time: "Sep, 2026", category: "Video", modelType: "Gallery", amount: 311.82 },
   { time: "Sep, 2026", category: "Audio", modelType: "Gallery", amount: 69.94 },
 ];
+
+/**
+ * §3 — a deleted sandbox stays visible in every month it actually cost money,
+ * and disappears from months where it did not. Both halves matter: chasing a
+ * charge for something you deleted is the most common reason anyone opens this
+ * page, and padding later months with $0 rows for dead sandboxes buries the
+ * live ones. Retention is 13 months, after which they roll into one archived
+ * row.
+ */
+export function sandboxesForMonth(month: string): SandboxUsage[] {
+  return SANDBOXES.filter((sb) => sb.segments.some((sg) => sg.start.startsWith(monthPrefix(month))));
+}
+function monthPrefix(label: string): string {
+  const [name, year] = label.split(" ");
+  const idx = ["January","February","March","April","May","June","July","August","September","October","November","December"].indexOf(name);
+  return idx < 0 ? "" : `${year}-${String(idx + 1).padStart(2, "0")}`;
+}
+export const MONTH_OPTIONS = ["September 2026", "August 2026", "July 2026"];
 
 export const sandboxById = (id: string): SandboxUsage | undefined => SANDBOXES.find((s) => s.id === id);
 export const snapshotsFor = (id: string): SnapshotUsage[] => SNAPSHOTS.filter((s) => s.sandboxId === id);

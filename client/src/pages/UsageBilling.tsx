@@ -4,7 +4,7 @@ import { C, FONT, MONO } from "@/lib/tokens";
 import V2Badge from "@/components/V2Badge";
 import {
   BILLING_ITEMS, ITEM_LABEL, ITEM_COLOR, ITEM_BLURB, ACCOUNT_LEVEL, RATE,
-  money2, money4, rate6, round4, sumRounded, specDetail, durationLabel,
+  STATUS_NOTE, money2, money4, rate6, round4, sumRounded, specDetail, durationLabel,
   type BillingItem,
 } from "@/lib/billingModel";
 import {
@@ -12,7 +12,11 @@ import {
   INFERENCE_MODELS, INFERENCE_MODELS_MORE, INFERENCE_TOTAL, INFERENCE_ROWS,
   STUDIO_TOTAL, STUDIO_ROWS, inferenceSeries,
   SANDBOXES, sandboxById, sandboxTotal, sandboxItemTotal, segmentAmount,
-  segmentBreakdown, isAccruing, itemTotal, periodTotal,
+  segmentBreakdown, isAccruing, itemTotal, periodTotal, periodBilledTotal,
+  sandboxesForMonth, MONTH_OPTIONS, ITEM_STATUS, ITEM_BILLING_STARTS,
+  EGRESS_ATTRIBUTABLE, MODEL_USAGE_ATTRIBUTABLE,
+  TEMPLATES, templateStorageCost, EGRESS_BY_SANDBOX, MODEL_USAGE, modelUsageFor,
+  MODEL_USAGE_CREDIT, SNAPSHOTS, ACCOUNT_TIER,
   snapshotsFor, snapshotCost, snapshotGBmo, templateGBmo, egressUsedGB,
   snapshotBillableGBmo, templateBillableGBmo, egressBillableGB,
   SNAPSHOT_FREE_GB, TEMPLATE_FREE_GB, EGRESS_FREE_GB,
@@ -294,18 +298,29 @@ function BillingEmptyState() {
 
 function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
   const [view, setView] = useState<AgentboxView>("sandbox");
+  const [openItem, setOpenItem] = useState<BillingItem | null>(null);
   const [range, setRange] = useState<string>(BILLING_MONTH.label);
   const [stateFilter, setStateFilter] = useState("All states");
 
-  const total = periodTotal();
+  // §3 — billed, month to date, in-progress included, metered-but-not-yet-
+  // billed items excluded. For a discounted account the list figure sits
+  // beside it in small text: a headline 10% above what the customer will
+  // actually pay is the worst possible default.
+  const listTotal = periodTotal();
+  const total = periodBilledTotal();
   const itemTotals = BILLING_ITEMS.map((it) => ({ item: it, amount: itemTotal(it) }));
   const maxItem = Math.max(...itemTotals.map((x) => x.amount), 0.0001);
 
+  // §3 — a sandbox shows in every month it cost money and in no other, so the
+  // month selector decides membership rather than just re-scoping amounts.
+  // Deleted sandboxes are included by default: chasing a charge for something
+  // already gone is the main reason anyone opens this page.
   const rows = useMemo(() => {
-    const list = [...SANDBOXES].sort((a, b) => sandboxTotal(b) - sandboxTotal(a));
+    const inMonth = range === BILLING_MONTH.label ? sandboxesForMonth(range) : SANDBOXES;
+    const list = [...inMonth].sort((a, b) => sandboxTotal(b) - sandboxTotal(a));
     if (stateFilter === "All states") return list;
     return list.filter((s) => s.state === stateFilter.toLowerCase());
-  }, [stateFilter]);
+  }, [stateFilter, range]);
 
   const maxSandbox = Math.max(...SANDBOXES.map(sandboxTotal), 0.0001);
   const accruing = SANDBOXES.filter(isAccruing).length;
@@ -317,14 +332,19 @@ function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
       <Card>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 20 }}>
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap" }}>
               <span style={{ fontFamily: FONT, fontSize: 15, fontWeight: 600, color: C.fg }}>
                 Total · <span style={{ fontFamily: MONO }}>{money2(total)}</span>
               </span>
-              <V2Badge title="V2 bills five items. The old page had two — Container and Token — and Token has moved to Inference." />
+              {listTotal !== total && (
+                <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>
+                  <span style={{ fontFamily: MONO }}>{money2(listTotal)}</span> list
+                </span>
+              )}
+              <V2Badge title="V2 bills six items. The old page had two — Container and Token." />
             </div>
             <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, marginTop: 3 }}>
-              {BILLING_MONTH.label} · {BILLING_MONTH.start} – {BILLING_MONTH.end}
+              Month to date · includes in-progress usage · {BILLING_MONTH.start} – {BILLING_MONTH.end}
               {accruing > 0 && (
                 <> · <span style={{ color: C.warn }}>{accruing} sandbox{accruing === 1 ? "" : "es"} still accruing</span></>
               )}
@@ -343,7 +363,15 @@ function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
               <div style={{ height: 11, borderRadius: 2, background: "rgba(255,255,255,0.03)" }}>
                 <div style={{ width: `${(amount / maxItem) * 100}%`, height: "100%", background: ITEM_COLOR[item], borderRadius: 2, minWidth: amount > 0 ? 3 : 0 }} />
               </div>
-              <span style={{ fontFamily: MONO, fontSize: 13, color: amount > 0 ? C.fg : C.muted, textAlign: "right" }}>{money2(amount)}</span>
+              <span style={{ fontFamily: MONO, fontSize: 13, color: amount > 0 ? C.fg : C.muted, textAlign: "right" }}>
+                {money2(amount)}
+                {ITEM_STATUS[item] !== "billed" && (
+                  <div style={{ fontFamily: FONT, fontSize: 10, color: C.warn }}>
+                    {STATUS_NOTE[ITEM_STATUS[item]]}
+                    {ITEM_BILLING_STARTS[item] ? ` — starts ${ITEM_BILLING_STARTS[item]}` : ""}
+                  </div>
+                )}
+              </span>
             </div>
           ))}
         </div>
@@ -369,7 +397,7 @@ function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
           ) : (
             <span style={{ display: "flex", alignItems: "flex-start", gap: 7, fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px" }}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 2 }}><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
-              Allowance and estimated charge are shown for the full month at account level. This range shows usage only.
+              Allowances and month-end projections are available in the monthly account view without filters.
             </span>
           )}
         </div>
@@ -381,7 +409,7 @@ function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
                    onChange={(v) => setView(v === "By sandbox" ? "sandbox" : "item")} size="sm" />
         <V2Badge title="New in V2 — the cost subject is the sandbox instance, and account-level items only appear in the by-item view." />
         {view === "sandbox" && (
-          <Dropdown value={stateFilter} options={["All states", "Running", "Paused", "Deleted"]} onChange={setStateFilter} width={160} />
+          <Dropdown value={stateFilter} options={["All states", "Running", "Paused", "Transitioning", "Deleted"]} onChange={setStateFilter} width={175} />
         )}
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Data updated as of {DATA_AS_OF}</span>
@@ -417,8 +445,20 @@ function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ display: "inline-block", width: 3, height: 26, borderRadius: 2, background: `${(sandboxTotal(sb) / maxSandbox) > 0.5 ? C.lime : C.border}` }} />
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sb.name}</div>
-                        <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>{sb.id}</div>
+                        {/* §11 — the 9/15 sandbox spec says display_name is not
+                            returned. Until it is, the row falls back to the id
+                            and the tooltip says the name is absent rather than
+                            leaving a blank that reads as a failed load. */}
+                        {sb.name === sb.id ? (
+                          <div title="No name set" style={{ fontFamily: MONO, fontSize: 12.5, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {sb.id}
+                          </div>
+                        ) : (
+                          <>
+                            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sb.name}</div>
+                            <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>{sb.id}</div>
+                          </>
+                        )}
                       </div>
                     </div>
                   </td>
@@ -428,7 +468,14 @@ function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
                         custom one, because a custom spec has no code to show. */}
                     {sb.legacy ? sb.legacy.instanceType : sb.productName ?? specDetail(sb.spec)}
                   </td>
-                  <td style={tdStyle}><StateChip state={sb.state} /></td>
+                  <td style={tdStyle}>
+                    <StateChip state={sb.state} />
+                    {sb.state === "deleted" && sb.deleted && (
+                      <div style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted, marginTop: 3 }}>
+                        Deleted {sb.deleted.slice(0, 10)}
+                      </div>
+                    )}
+                  </td>
                   <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money2(sandboxItemTotal(sb, "running"))}</td>
                   <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: sandboxItemTotal(sb, "paused") > 0 ? C.fg : C.muted }}>
                     {money2(sandboxItemTotal(sb, "paused"))}
@@ -451,11 +498,18 @@ function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
                 <th style={{ ...thStyle, textAlign: "right" }}>Quantity</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Unit price</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Amount</th>
+                <th style={{ ...thStyle, width: 44 }} />
               </tr>
             </thead>
             <tbody>
               {itemTotals.map(({ item, amount }) => (
-                <tr key={item}>
+                <tr
+                  key={item}
+                  onClick={() => setOpenItem(openItem === item ? null : item)}
+                  style={{ cursor: "pointer" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(221,234,77,0.05)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                >
                   <td style={tdStyle}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                       <span style={{ width: 8, height: 8, borderRadius: 2, background: ITEM_COLOR[item] }} />
@@ -463,22 +517,206 @@ function Agentbox({ onOpen }: { onOpen: (id: string) => void }) {
                     </span>
                     <div style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, marginTop: 2 }}>{ITEM_BLURB[item]}</div>
                   </td>
-                  {/* §4 — Template storage and Egress are account-level: they
-                      have no sandbox, and saying so is the point of this view. */}
-                  <td style={{ ...tdStyle, color: C.muted }}>
-                    {ACCOUNT_LEVEL.includes(item) ? "Account" : `${SANDBOXES.filter((s) => sandboxItemTotal(s, item) > 0).length} sandboxes`}
-                  </td>
+                  {/* §2 — what each item hangs off. Template storage belongs to
+                      a template; egress and model usage SHOULD hang off a
+                      sandbox and say so loudly when they cannot. */}
+                  <td style={{ ...tdStyle, color: C.muted }}>{itemScope(item)}</td>
                   <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: C.muted }}>{itemQuantity(item)}</td>
                   <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: C.muted }}>{itemUnitPrice(item)}</td>
-                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money2(amount)}</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>
+                    {money2(amount)}
+                    {ITEM_STATUS[item] !== "billed" && (
+                      <div style={{ fontFamily: FONT, fontSize: 10, color: C.warn }}>
+                        {STATUS_NOTE[ITEM_STATUS[item]]}{ITEM_BILLING_STARTS[item] ? ` — starts ${ITEM_BILLING_STARTS[item]}` : ""}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}><Chevron /></td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
+      {view === "item" && openItem && <ItemDrilldown item={openItem} onClose={() => setOpenItem(null)} />}
     </>
   );
+}
+
+// ── §3 item drill-downs ─────────────────────────────────────────────────────
+// Every amount on the by-item view has to lead somewhere. Snapshot storage and
+// egress used to be numbers a user could see and could not act on — they could
+// tell they were over the allowance and had no way to find out what was
+// responsible. These four lists are the answer, and each ends in an action.
+function ItemDrilldown({ item, onClose }: { item: BillingItem; onClose: () => void }) {
+  const head = (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 18px", borderBottom: `1px solid ${C.borderSoft}`, background: "rgba(255,255,255,0.02)" }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 13.5, fontWeight: 600, color: C.fg }}>
+        <span style={{ width: 8, height: 8, borderRadius: 2, background: ITEM_COLOR[item] }} />
+        {ITEM_LABEL[item]}
+      </span>
+      <button onClick={onClose} style={{ fontFamily: FONT, fontSize: 12, background: "transparent", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+        Close
+      </button>
+    </div>
+  );
+
+  const del = (label: string) => (
+    <button style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 500, background: "transparent", color: C.err, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+      {label}
+    </button>
+  );
+
+  return (
+    <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", marginTop: 12 }}>
+      {head}
+
+      {item === "snapshot_storage" && (
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr>
+            <th style={thStyle}>Snapshot</th><th style={thStyle}>Source sandbox</th>
+            <th style={{ ...thStyle, textAlign: "right" }}>Size</th><th style={{ ...thStyle, textAlign: "right" }}>Age</th>
+            <th style={{ ...thStyle, textAlign: "right" }}>Period cost</th><th style={{ ...thStyle, width: 90 }} />
+          </tr></thead>
+          <tbody>
+            {SNAPSHOTS.map((sn) => {
+              const src = sandboxById(sn.sandboxId);
+              return (
+                <tr key={sn.id}>
+                  <td style={tdStyle}>{sn.name}<div style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>{sn.id}</div></td>
+                  {/* A snapshot routinely outlives the sandbox it came from,
+                      which is exactly why this list cannot live only inside a
+                      sandbox detail page. */}
+                  <td style={{ ...tdStyle, color: C.muted }}>
+                    {src?.name ?? sn.sandboxId}
+                    {src?.state === "deleted" && <div style={{ fontSize: 11, color: C.warn }}>sandbox deleted</div>}
+                  </td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{sn.sizeGB} GB</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{sn.ageDays} d</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money4(snapshotCost(sn))}</td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}>{del("Delete")}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      {item === "template_storage" && (
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr>
+            <th style={thStyle}>Template</th><th style={thStyle}>Version</th>
+            <th style={{ ...thStyle, textAlign: "right" }}>Size</th><th style={thStyle}>Last launch</th>
+            <th style={{ ...thStyle, textAlign: "right" }}>Period cost</th><th style={{ ...thStyle, width: 90 }} />
+          </tr></thead>
+          <tbody>
+            {TEMPLATES.map((t) => (
+              <tr key={t.id}>
+                <td style={tdStyle}>{t.name}<div style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>{t.id}</div></td>
+                <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5, color: C.muted }}>{t.version}</td>
+                <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{t.sizeGB} GB</td>
+                <td style={{ ...tdStyle, color: C.muted }}>{t.lastLaunch}</td>
+                <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money4(templateStorageCost(t))}</td>
+                <td style={{ ...tdStyle, textAlign: "right" }}>{del("Delete")}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {item === "egress" && (
+        EGRESS_ATTRIBUTABLE ? (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>
+              <th style={thStyle}>Sandbox</th>
+              <th style={{ ...thStyle, textAlign: "right" }}>Outbound</th>
+              <th style={{ ...thStyle, textAlign: "right" }}>Cost</th>
+            </tr></thead>
+            <tbody>
+              {EGRESS_BY_SANDBOX.map((e) => (
+                <tr key={e.sandboxId}>
+                  <td style={tdStyle}>{e.sandboxName}<div style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>{e.sandboxId}</div></td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{e.bytesGB.toFixed(1)} GB</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: C.muted }}>metered at account level</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          // §2 — the degraded state, stated rather than left as a silent gap.
+          <div style={{ padding: "20px 18px", fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "19px" }}>
+            Not attributable by sandbox. Outbound traffic is metered for the account as a whole.
+            <div style={{ marginTop: 8 }}>
+              <a href="/deploy" style={{ fontFamily: FONT, fontSize: 12.5, fontWeight: 600, color: C.lime, textDecoration: "none" }}>
+                Review template network settings →
+              </a>
+            </div>
+          </div>
+        )
+      )}
+
+      {item === "model_usage" && (
+        MODEL_USAGE_ATTRIBUTABLE ? (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>
+              <th style={thStyle}>Sandbox</th><th style={thStyle}>Model</th>
+              <th style={{ ...thStyle, textAlign: "right" }}>Tokens</th>
+              <th style={{ ...thStyle, textAlign: "right" }}>Cost</th>
+              <th style={{ ...thStyle, textAlign: "right" }}>Credit applied</th>
+            </tr></thead>
+            <tbody>
+              {MODEL_USAGE.map((m, i) => (
+                <tr key={`${m.sandboxId}-${i}`}>
+                  <td style={tdStyle}>{m.sandboxName}</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>{m.model}</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{(m.tokens / 1e6).toFixed(1)}M</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money2(m.amount)}</td>
+                  {/* Coding Plan credits are a credit line against the item,
+                      not a discount on the rate — the distinction shows up on
+                      the invoice, so it shows up here too. */}
+                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: m.creditApplied > 0 ? C.ok : C.muted }}>
+                    {m.creditApplied > 0 ? `−${money2(m.creditApplied)}` : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ padding: "20px 18px", fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "19px" }}>
+            Not attributable by sandbox. Model calls are metered for the account as a whole while API key
+            attribution is being connected.
+          </div>
+        )
+      )}
+
+      {(item === "running" || item === "paused") && (
+        <div style={{ padding: "18px", fontFamily: FONT, fontSize: 13, color: C.muted }}>
+          Broken down by sandbox — switch to <span style={{ color: C.fg }}>By sandbox</span> above.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function itemScope(item: BillingItem): React.ReactNode {
+  const degraded = (
+    <span style={{ color: C.warn }}>Not attributable by sandbox</span>
+  );
+  switch (item) {
+    case "running":
+    case "paused":
+      return `${SANDBOXES.filter((s) => sandboxItemTotal(s, item) > 0).length} sandboxes`;
+    case "snapshot_storage":
+      return `${SNAPSHOTS.length} snapshots`;
+    case "template_storage":
+      return `${TEMPLATES.length} templates`;
+    case "egress":
+      return EGRESS_ATTRIBUTABLE ? `${EGRESS_BY_SANDBOX.length} sandboxes` : degraded;
+    case "model_usage":
+      return MODEL_USAGE_ATTRIBUTABLE
+        ? `${new Set(MODEL_USAGE.map((m) => m.sandboxId)).size} sandboxes`
+        : degraded;
+  }
 }
 
 function itemQuantity(item: BillingItem): string {
@@ -491,6 +729,7 @@ function itemQuantity(item: BillingItem): string {
     case "snapshot_storage":  return `${snapshotBillableGBmo.toFixed(2)} GB·mo billable`;
     case "template_storage":  return `${templateBillableGBmo.toFixed(2)} GB·mo billable`;
     case "egress":            return `${egressBillableGB.toFixed(2)} GB billable`;
+    case "model_usage":       return `${(MODEL_USAGE.reduce((a, m) => a + m.tokens, 0) / 1e6).toFixed(0)}M tokens`;
   }
 }
 function itemUnitPrice(item: BillingItem): string {
@@ -500,6 +739,7 @@ function itemUnitPrice(item: BillingItem): string {
     case "snapshot_storage":
     case "template_storage": return `${rate6(RATE.storageGBMonth)}/GB·mo`;
     case "egress":           return `${rate6(RATE.egressGB)}/GB`;
+    case "model_usage":      return "Inference rates";
   }
 }
 
@@ -519,7 +759,7 @@ function StateChip({ state }: { state: SandboxState }) {
 // segments expand into vCPU / memory / disk, which is the only way a custom
 // spec's price can be reconciled: there is no product code to look it up by.
 function SandboxDetail({ sandboxId }: { sandboxId: string }) {
-  const [tab, setTab] = useState<"Segments" | "Snapshots">("Segments");
+  const [tab, setTab] = useState<"Segments" | "Snapshots" | "Model usage">("Segments");
   const [open, setOpen] = useState<string | null>(null);
   const sb = sandboxById(sandboxId);
   if (!sb) return <div style={{ fontFamily: FONT, color: C.muted }}>No usage recorded for this sandbox.</div>;
@@ -527,6 +767,8 @@ function SandboxDetail({ sandboxId }: { sandboxId: string }) {
   const snaps = snapshotsFor(sb.id);
   const total = sandboxTotal(sb);
   const snapTotal = sumRounded(snaps.map(snapshotCost));
+  const models = modelUsageFor(sb.id);
+  const modelTotal = sumRounded(models.map((m) => m.amount - m.creditApplied));
 
   const field = (k: string, v: React.ReactNode) => (
     <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
@@ -570,10 +812,10 @@ function SandboxDetail({ sandboxId }: { sandboxId: string }) {
       </div>
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, margin: "22px 0 14px", flexWrap: "wrap" }}>
-        <Segmented value={tab} options={["Segments", "Snapshots"] as const} onChange={setTab} size="sm" />
+        <Segmented value={tab} options={["Segments", "Snapshots", "Model usage"] as const} onChange={setTab} size="sm" />
         <V2Badge title="New in V2 — a chronological running/paused timeline replaces the session list, and Snapshots replaces Token Calls." />
         <span style={{ fontFamily: FONT, fontSize: 13, color: C.muted }}>
-          {BILLING_MONTH.label} total: <span style={{ fontFamily: MONO, color: C.fg }}>{money4(tab === "Segments" ? total : snapTotal)}</span>
+          {BILLING_MONTH.label} total: <span style={{ fontFamily: MONO, color: C.fg }}>{money4(tab === "Segments" ? total : tab === "Snapshots" ? snapTotal : modelTotal)}</span>
         </span>
       </div>
 
@@ -593,7 +835,8 @@ function SandboxDetail({ sandboxId }: { sandboxId: string }) {
             <tbody>
               {sb.segments.map((sg) => {
                 const amount = segmentAmount(sb, sg);
-                const expandable = !sb.legacy;
+                const transitioning = sg.state === "transitioning";
+                const expandable = !sb.legacy && !transitioning;
                 const isOpen = open === sg.id;
                 return (
                   <Fragment key={sg.id}>
@@ -611,8 +854,8 @@ function SandboxDetail({ sandboxId }: { sandboxId: string }) {
                       </td>
                       <td style={tdStyle}>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                          <span style={{ width: 8, height: 8, borderRadius: 2, background: sg.state === "running" ? ITEM_COLOR.running : ITEM_COLOR.paused }} />
-                          {sg.state === "running" ? "Running" : "Paused"}
+                          <span style={{ width: 8, height: 8, borderRadius: 2, background: transitioning ? C.muted : sg.state === "running" ? ITEM_COLOR.running : ITEM_COLOR.paused }} />
+                          {transitioning ? "Transitioning" : sg.state === "running" ? "Running" : "Paused"}
                         </span>
                       </td>
                       <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>{sg.start}</td>
@@ -620,7 +863,12 @@ function SandboxDetail({ sandboxId }: { sandboxId: string }) {
                         {sg.end ?? "In progress"}
                       </td>
                       <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{durationLabel(sg.seconds)}</td>
-                      <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money4(amount)}</td>
+                      {/* §2/§11 — the transition is shown so the time is
+                          accounted for; whether it bills is still open, and the
+                          row says pending rather than asserting $0.0000. */}
+                      <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: transitioning ? C.muted : C.fg }}>
+                        {transitioning ? "pending" : money4(amount)}
+                      </td>
                     </tr>
                     {isOpen && segmentBreakdown(sb, sg).map((b) => (
                       <tr key={b.label} style={{ background: "rgba(255,255,255,0.02)" }}>
@@ -636,6 +884,33 @@ function SandboxDetail({ sandboxId }: { sandboxId: string }) {
               })}
             </tbody>
           </table>
+        ) : tab === "Model usage" ? (
+          models.length === 0 ? (
+            <div style={{ padding: "26px 18px", fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "20px" }}>
+              This sandbox made no model calls in this period.
+            </div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr>
+                <th style={thStyle}>Model</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Tokens</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Cost</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Credit applied</th>
+              </tr></thead>
+              <tbody>
+                {models.map((m, i) => (
+                  <tr key={i}>
+                    <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>{m.model}</td>
+                    <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{(m.tokens / 1e6).toFixed(1)}M</td>
+                    <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money2(m.amount)}</td>
+                    <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: m.creditApplied > 0 ? C.ok : C.muted }}>
+                      {m.creditApplied > 0 ? `−${money2(m.creditApplied)}` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
         ) : snaps.length === 0 ? (
           <div style={{ padding: "26px 18px", fontFamily: FONT, fontSize: 13, color: C.muted }}>
             No snapshots were taken from this sandbox.

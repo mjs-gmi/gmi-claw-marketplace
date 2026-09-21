@@ -11,18 +11,26 @@
 //     acceptance case (30m run + 2h paused + 30m run = $0.1842) only comes out
 //     right that way, and it matches what a reader gets adding up the column.
 
-export type BillingItem = "running" | "paused" | "snapshot_storage" | "template_storage" | "egress";
+export type BillingItem =
+  | "running" | "paused" | "snapshot_storage" | "template_storage" | "egress" | "model_usage";
 
 export const BILLING_ITEMS: BillingItem[] = [
-  "running", "paused", "snapshot_storage", "template_storage", "egress",
+  "running", "paused", "snapshot_storage", "template_storage", "egress", "model_usage",
 ];
 
+/**
+ * §9 — these display names are used everywhere: page, legend, invoice and the
+ * human-readable side of the CSV. The machine values are the `billing_item`
+ * codes. Keeping one set for both is what stops the invoice disagreeing with
+ * the console, which §9 calls out by name.
+ */
 export const ITEM_LABEL: Record<BillingItem, string> = {
-  running: "Sandbox runtime",
+  running: "Running",
   paused: "Paused",
   snapshot_storage: "Snapshot storage",
   template_storage: "Template storage",
   egress: "Egress",
+  model_usage: "Model usage",
 };
 
 export const ITEM_COLOR: Record<BillingItem, string> = {
@@ -31,19 +39,29 @@ export const ITEM_COLOR: Record<BillingItem, string> = {
   snapshot_storage: "#a78bfa",
   template_storage: "#38bdf8",
   egress: "#f472b6",
+  model_usage: "#fbbf24",
 };
 
 /** §10 — one line each, for the empty state and the tooltips. */
 export const ITEM_BLURB: Record<BillingItem, string> = {
-  running: "Billed per second while running, based on vCPU, memory and disk. No minimum.",
+  running: "Billed per second while running, by vCPU, memory and disk. No minimum.",
   paused: "Only disk is billed while a sandbox is paused.",
   snapshot_storage: "Billed per GB-month beyond the free 50 GB.",
   template_storage: "Billed per GB-month beyond the free 100 GB. Building templates is free.",
   egress: "Billed per GB beyond the free 20 GB per month. Inbound traffic is always free.",
+  model_usage: "Model calls from your sandboxes, at Inference rates. Coding Plan credits apply.",
+};
+/** §9 — a tier with no allowance gets different copy, not a "free 0 GB". */
+export const ITEM_BLURB_NO_ALLOWANCE: Partial<Record<BillingItem, string>> = {
+  template_storage: "Billed per GB-month. This tier has no free allowance. Building templates is free.",
 };
 
-/** Account-level items have no sandbox to hang off (§4). */
-export const ACCOUNT_LEVEL: BillingItem[] = ["template_storage", "egress"];
+/**
+ * §2 — Template storage belongs to a template, not a sandbox. Egress and Model
+ * usage SHOULD attribute per sandbox; when the upstream cannot, they fall back
+ * to account level, which is a degraded state and is labelled as one.
+ */
+export const ACCOUNT_LEVEL: BillingItem[] = ["template_storage"];
 
 // ── Rates ───────────────────────────────────────────────────────────────────
 export const RATE = {
@@ -104,6 +122,19 @@ export function specDetail(s: Spec): string {
 
 // ── Allowances ──────────────────────────────────────────────────────────────
 export interface Allowance { item: BillingItem; free: number; unit: string; used: number; resets: string }
+
+/**
+ * §10 — storage and egress ship in three steps: no meter, metered but not yet
+ * billed, then billed. The middle state is the one that needs care: the number
+ * is real but the customer is not paying it yet, so it must stay out of the
+ * header total and off the invoice while still being visible for a month.
+ */
+export type BillingStatus = "no_meter" | "not_yet_billed" | "billed";
+export const STATUS_NOTE: Record<BillingStatus, string | null> = {
+  no_meter: "Metering not yet available",
+  not_yet_billed: "Not yet billed",
+  billed: null,
+};
 
 // ── Tiers ───────────────────────────────────────────────────────────────────
 export type TierId = "T0" | "T1" | "T2";

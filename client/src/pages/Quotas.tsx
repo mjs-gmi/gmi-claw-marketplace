@@ -3,7 +3,7 @@ import V2Badge from "@/components/V2Badge";
 import { C, FONT, MONO } from "@/lib/tokens";
 import { TIERS, RATE, rate6, money2 } from "@/lib/billingModel";
 import {
-  ACCOUNT_TIER, QUOTA, BILLING_MONTH,
+  ACCOUNT_TIER, QUOTA, BILLING_MONTH, SANDBOXES, isAccruing,
   snapshotGBmo, templateGBmo, egressUsedGB,
   SNAPSHOT_FREE_GB, TEMPLATE_FREE_GB, EGRESS_FREE_GB,
 } from "@/lib/billingUsage";
@@ -77,19 +77,38 @@ export default function Quotas() {
           </p>
           <Row label="Concurrency" used={`${QUOTA.concurrencyUsedVcpu} vCPU`} limit={`${tier.concurrencyVcpu} vCPU`}
                note="Paused sandboxes count toward this — pausing frees compute, not quota." />
+          {/* §5 — the number alone is not actionable. At 40/40 the question is
+              WHICH sandboxes are holding the quota, and the answer has to be
+              here rather than left as a hunt through the sandbox list. */}
+          <div style={{ paddingBottom: 6 }}>
+            {SANDBOXES.filter(isAccruing).map((sb) => (
+              <div key={sb.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "7px 0 7px 14px", borderLeft: `2px solid ${C.borderSoft}`, marginLeft: 2 }}>
+                <Link href={`/settings/usage/agentbox/${encodeURIComponent(sb.id)}`} style={{ fontFamily: FONT, fontSize: 12.5, color: C.link, textDecoration: "none" }}>
+                  {sb.name}
+                </Link>
+                <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted }}>
+                  {sb.state} · {sb.spec.vcpu} vCPU
+                </span>
+              </div>
+            ))}
+          </div>
         </Section>
 
         <Section title="Template builds">
           <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 4px", lineHeight: "18px" }}>
             Builds are free. When the quota is exhausted a build is <span style={{ color: C.fg }}>refused, not charged</span>.
           </p>
-          <Row label="Build CPU-hours this month"
-               used={`${QUOTA.buildCpuHoursUsed}`} limit={`${QUOTA.buildCpuHoursAllowed} CPU-h`}
+          {/* §2 — published in hours at 2 cores (API CPU-hours ÷ 2), because
+              "5 CPU-hours" is not a unit anyone can plan a build around. */}
+          <Row label="Build time this month"
+               used={`${(QUOTA.buildCpuHoursUsed / 2).toFixed(1)} h`} limit={`${(QUOTA.buildCpuHoursAllowed / 2).toFixed(1)} h`}
                warn={buildPct >= 0.8}
-               note={`Resets ${QUOTA.buildResets}. On ${tier.id} the allowance floats: ${tier.buildQuota}.`} />
+               note={`At 2 cores. Resets ${QUOTA.buildResets}. On ${tier.id} the allowance floats: ${tier.buildQuota}.`} />
           <Row label="Concurrent builds" used="0" limit={`${QUOTA.concurrentBuilds}`} />
           <Row label="Timeout per build" used="—" limit={`${QUOTA.buildTimeoutMin} min`} />
           <Row label="Cores per build" used="—" limit={`${QUOTA.buildCores}`} />
+          <Row label="Session limit" used="—" limit={ACCOUNT_TIER === "T0" ? "1 h" : ACCOUNT_TIER === "T1" ? "24 h" : "Per contract"}
+               note="Maximum life of one sandbox on this tier. Behaviour at the limit is pending Product." />
         </Section>
 
         <Section title="Storage caps">
@@ -108,9 +127,11 @@ export default function Quotas() {
           <Row label="Template storage" used={`${templateGBmo.toFixed(2)} GB·mo`} limit={`${TEMPLATE_FREE_GB} GB·mo`}
                warn={templateGBmo > TEMPLATE_FREE_GB}
                note={`Beyond the allowance: ${rate6(RATE.storageGBMonth)}/GB·mo`} />
-          <Row label="Egress" used={`${egressUsedGB.toFixed(1)} GB`} limit={`${EGRESS_FREE_GB} GB`}
-               warn={egressUsedGB > EGRESS_FREE_GB}
-               note={`Beyond the allowance: ${rate6(RATE.egressGB)}/GB · inbound is always free`} />
+          <Row label="Egress" used={`${egressUsedGB.toFixed(1)} GB`} limit={ACCOUNT_TIER === "T0" ? "Whitelist only" : `${EGRESS_FREE_GB} GB`}
+               warn={ACCOUNT_TIER !== "T0" && egressUsedGB > EGRESS_FREE_GB}
+               note={ACCOUNT_TIER === "T0"
+                 ? "On this tier outbound traffic reaches whitelisted destinations only."
+                 : `Beyond the allowance: ${rate6(RATE.egressGB)}/GB · inbound is always free`} />
         </Section>
 
         <Section title="Approaching archival">
