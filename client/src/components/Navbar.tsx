@@ -223,7 +223,7 @@ export default function Navbar() {
 
       {/* Bottom: Settings + Docs */}
       <div style={{ borderTop: "1px solid #1a1a1a", paddingBottom: "0.5rem", marginTop: "auto" }}>
-        <NavItem href="https://console.gmicloud.ai/settings" label="Settings" icon={IcoSetting} external />
+        <NavItem href="/settings/usage" label="Settings" icon={IcoSetting} active={isActive("/settings")} />
         <NavItem href="https://docs.gmicloud.ai" label="Docs" icon={IcoDocs} external />
       </div>
     </aside>

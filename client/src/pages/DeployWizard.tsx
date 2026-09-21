@@ -1671,10 +1671,14 @@ function StepReview({
           {/* §B — no compute price. The field exists and is always 0, and a
               "$0.0000/hr" reads as a bug rather than as free. Model usage below
               is metered for real, so that half stays. */}
+          {/* No rate is quoted: the price field comes back zero, and a
+              "$0.0000/hr" reads as a bug. Sandbox time IS metered though — it
+              lands under Settings › Usage & Billing › Agentbox as Container
+              Amount — so this must not say the compute is free. */}
           <div style={costCard}>
             <div style={costLabel}>Compute</div>
-            <div style={{ ...bigNum, fontSize: 18 }}>Included</div>
-            <div style={{ fontSize: 12, color: C.muted, textAlign: "right" }}>Sandbox compute is not billed separately</div>
+            <div style={{ ...bigNum, fontSize: 18 }}>Metered</div>
+            <div style={{ fontSize: 12, color: C.muted, textAlign: "right" }}>Billed per Sandbox session · no rate quoted up front</div>
           </div>
           <div style={costCard}>
             <div style={costLabel}>Default model</div>
@@ -1784,9 +1788,11 @@ function EditCostPanel({
       <div style={{ background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Cost</div>
         <div style={{ fontFamily: FONT, fontSize: 20, fontWeight: 700, color: C.fg, letterSpacing: "-0.02em", lineHeight: "26px" }}>
-          Compute included
+          Compute is metered
         </div>
-        <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Sandbox compute is not billed separately</div>
+        <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>
+          Billed per Sandbox session. See it under <span style={{ color: C.fg }}>Usage &amp; Billing → Agentbox</span>.
+        </div>
         <div style={{ borderTop: `1px solid ${C.borderSoft}`, marginTop: 4, paddingTop: 10, display: "flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 12, color: C.muted }}>
           <span style={{ width: 8, height: 8, borderRadius: 2, background: C.lime, display: "inline-block", flexShrink: 0 }} />
           MaaS: pay per token used
