@@ -1,25 +1,26 @@
 import { Link } from "wouter";
+import { C, FONT, MONO } from "@/lib/tokens";
 import V2Badge from "@/components/V2Badge";
 import V21Badge from "@/components/V21Badge";
-import { C, FONT, MONO } from "@/lib/tokens";
-import { TIERS, RATE, rate6, money2 } from "@/lib/billingModel";
+import { TIERS, RATE, rate6, type TierId } from "@/lib/billingModel";
 import {
-  ACCOUNT_TIER, QUOTA, BILLING_MONTH, SANDBOXES, isAccruing,
-  snapshotGBmo, templateGBmo, egressUsedGB,
-  SNAPSHOT_FREE_GB, TEMPLATE_FREE_GB, EGRESS_FREE_GB,
+  ACCOUNT_TIER, QUOTA, BILLING_MONTH, SANDBOXES, isAccruing, agentById,
+  templateGBmo, egressUsedGB, TEMPLATE_FREE_GB, EGRESS_FREE_GB, SNAPSHOT_FREE_GB,
+  metered,
 } from "@/lib/billingUsage";
 
-// ─── Settings › Quotas & account tier (§6) ──────────────────────────────────
-// One click from every quota rejection, which is the requirement that decides
-// its existence: a rejection that only says "quota exceeded" sends the user to
-// support. Every row here names the quota, the current usage, the limit and the
-// remedy, so the message can link here and stop explaining.
+// ─── Settings › Quotas & account tier (§P4) ─────────────────────────────────
+// One click from every rejection. The distinction the page exists to make:
+// hitting a quota REFUSES the request — it never bills you. A build that runs
+// out of quota is turned away, not charged, and the old page had no surface
+// that could say so.
 //
-// The distinction this page exists to make: a build quota running out is a
-// REFUSAL, not a charge. Nothing on this page bills.
+// Placement is still open with Console (§P4 header). The logic here holds
+// wherever it lands, which is why it is built as a standalone page rather than
+// wired into a tab that may not exist.
 
 function Row({ label, used, limit, note, warn, v21 }: {
-  label: string; used: string; limit: string; note?: string; warn?: boolean; v21?: boolean;
+  label: string; used: string; limit: string; note?: React.ReactNode; warn?: boolean; v21?: boolean;
 }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 14, padding: "13px 0", borderTop: `1px solid ${C.borderSoft}` }}>
@@ -49,13 +50,14 @@ function Section({ title, children, aside }: { title: string; children: React.Re
 }
 
 export default function Quotas() {
-  const tier = TIERS[ACCOUNT_TIER];
-  const buildPct = QUOTA.buildCpuHoursUsed / QUOTA.buildCpuHoursAllowed;
-  const tplPct = QUOTA.templateStorageUsedGB / (tier.templateStorageCapGB as number);
+  const tier = TIERS[ACCOUNT_TIER as TierId];
+  const buildPct = QUOTA.buildHoursUsed / QUOTA.buildHoursAllowed;
+  const tplPct = QUOTA.templateStorageUsedGB / QUOTA.templateStorageCapGB;
+  const order: TierId[] = ["tier1", "tier2", "tier3", "tier4", "tier5"];
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.fg, padding: "26px 26px 60px" }}>
-      <div style={{ maxWidth: 860, margin: "0 auto" }}>
+      <div style={{ maxWidth: 900, margin: "0 auto" }}>
         <Link href="/settings/usage" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 13, color: C.muted, textDecoration: "none" }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
           Usage &amp; Billing
@@ -72,74 +74,115 @@ export default function Quotas() {
         </p>
 
         <Section
-          title="Account tier"
+          title="Your tier"
           aside={<span style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 700, letterSpacing: "0.06em", color: C.lime, background: "rgba(221,234,77,0.12)", border: "1px solid rgba(221,234,77,0.4)", padding: "2px 9px", borderRadius: 5 }}>{tier.id}</span>}
         >
-          <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 4px", lineHeight: "18px" }}>
-            {tier.condition}. Top up to <span style={{ color: C.fg, fontFamily: MONO }}>$500</span> cumulative for T2, or contact Sales for a negotiated limit.
+          <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 10px", lineHeight: "18px" }}>
+            {tier.condition}. Tier follows <span style={{ color: C.fg }}>settled top-up</span>, not a card on file, and changes
+            quotas only — never prices. A chargeback returns the account to tier1 and freezes new sandboxes.
           </p>
-          <Row label="Concurrency" used={`${QUOTA.concurrencyUsedVcpu} vCPU`} limit={`${tier.concurrencyVcpu} vCPU`}
-               note="Paused sandboxes count toward this — pausing frees compute, not quota." />
-          {/* §5 — the number alone is not actionable. At 40/40 the question is
-              WHICH sandboxes are holding the quota, and the answer has to be
-              here rather than left as a hunt through the sandbox list. */}
+          {/* The ladder, so "what do I get if I top up" is answerable here. */}
+          <div style={{ overflowX: "auto", margin: "0 -20px" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 660 }}>
+              <thead>
+                <tr>
+                  <th style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 500, color: C.muted, textAlign: "left", padding: "8px 20px" }} />
+                  {order.map((t) => (
+                    <th key={t} style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 600, color: t === tier.id ? C.lime : C.muted, textAlign: "left", padding: "8px 12px", whiteSpace: "nowrap" }}>
+                      {t}{TIERS[t].provisional && <span style={{ color: C.warn }} title="Extrapolated, not yet agreed"> *</span>}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {([
+                  ["Condition", (t: TierId) => TIERS[t].condition],
+                  ["Concurrency", (t: TierId) => `${TIERS[t].concurrencyVcpu} vCPU`],
+                  ["Session limit", (t: TierId) => TIERS[t].sessionLimit],
+                  ["Build time / month", (t: TierId) => TIERS[t].buildHours],
+                  ["Template storage", (t: TierId) => TIERS[t].templateStorage],
+                  ["Egress", (t: TierId) => TIERS[t].egress],
+                ] as const).map(([label, get]) => (
+                  <tr key={label}>
+                    <td style={{ fontFamily: FONT, fontSize: 12, color: C.muted, padding: "9px 20px", borderTop: `1px solid ${C.borderSoft}`, whiteSpace: "nowrap" }}>{label}</td>
+                    {order.map((t) => (
+                      <td key={t} style={{ fontFamily: FONT, fontSize: 12, color: t === tier.id ? C.fg : C.muted, padding: "9px 12px", borderTop: `1px solid ${C.borderSoft}` }}>
+                        {get(t)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p style={{ fontFamily: FONT, fontSize: 11, color: C.muted, margin: "10px 0 6px" }}>
+            <span style={{ color: C.warn }}>*</span> tier4 and tier5 figures are extrapolated and not yet agreed.
+          </p>
+        </Section>
+
+        <Section title="Concurrency">
+          <Row label="Sandboxes running now" used={`${QUOTA.concurrencyUsedVcpu} vCPU`} limit={`${tier.concurrencyVcpu} vCPU`}
+               note={<>From 2.1, paused sandboxes count toward this too — pausing frees compute, not quota. <V21Badge /></>} />
+          {/* §P4 — the number alone is not actionable. At the limit the question
+              is WHICH sandboxes hold it, and the answer belongs here. */}
           <div style={{ paddingBottom: 6 }}>
             {SANDBOXES.filter(isAccruing).map((sb) => (
               <div key={sb.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "7px 0 7px 14px", borderLeft: `2px solid ${C.borderSoft}`, marginLeft: 2 }}>
-                <Link href={`/settings/usage/agentbox/${encodeURIComponent(sb.id)}`} style={{ fontFamily: FONT, fontSize: 12.5, color: C.link, textDecoration: "none" }}>
+                <Link href={`/settings/usage/agentbox/${sb.agentId}/${encodeURIComponent(sb.id)}`} style={{ fontFamily: FONT, fontSize: 12.5, color: C.link, textDecoration: "none" }}>
                   {sb.name}
                 </Link>
                 <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted }}>
-                  {sb.state} · {sb.spec.vcpu} vCPU
+                  {agentById(sb.agentId)?.name} · {sb.state} · {sb.spec.vcpu} vCPU
                 </span>
               </div>
             ))}
           </div>
+          <Row label="Session limit" used="—" limit={tier.sessionLimit}
+               note="Maximum life of one sandbox on this tier. What happens at the limit is pending Product." />
         </Section>
 
         <Section title="Template builds">
           <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 4px", lineHeight: "18px" }}>
-            Builds are free. When the quota is exhausted a build is <span style={{ color: C.fg }}>refused, not charged</span>.
+            Builds are free — their cost is already in the running price. The quota exists to stop templates being built
+            and never run, so exhausting it <span style={{ color: C.fg }}>refuses the build; it does not charge you</span>.
           </p>
-          {/* §2 — published in hours at 2 cores (API CPU-hours ÷ 2), because
-              "5 CPU-hours" is not a unit anyone can plan a build around. */}
-          <Row label="Build time this month"
-               used={`${(QUOTA.buildCpuHoursUsed / 2).toFixed(1)} h`} limit={`${(QUOTA.buildCpuHoursAllowed / 2).toFixed(1)} h`}
+          {/* §P4 — published in hours at 2 cores. "CPU-hours" is not a unit
+              anyone can plan a build around. */}
+          <Row label="Build time this month" used={`${QUOTA.buildHoursUsed} h`} limit={`${QUOTA.buildHoursAllowed} h`}
                warn={buildPct >= 0.8}
-               note={`At 2 cores. Resets ${QUOTA.buildResets}. On ${tier.id} the allowance floats: ${tier.buildQuota}.`} />
-          <Row label="Concurrent builds" used="0" limit={`${QUOTA.concurrentBuilds}`} />
-          <Row label="Timeout per build" used="—" limit={`${QUOTA.buildTimeoutMin} min`} />
-          <Row label="Cores per build" used="—" limit={`${QUOTA.buildCores}`} />
-          <Row label="Session limit" used="—" limit={ACCOUNT_TIER === "T0" ? "1 h" : ACCOUNT_TIER === "T1" ? "24 h" : "Per contract"}
-               note="Maximum life of one sandbox on this tier. Behaviour at the limit is pending Product." />
+               note={`At 2 cores. Resets ${QUOTA.buildResets}. On ${tier.id}: ${tier.buildHours}.`} />
+          <Row label="Concurrent builds / timeout / cores" used="0" limit={tier.buildConcurrency} />
         </Section>
 
-        <Section title="Storage caps">
-          <Row label="Template storage" used={`${QUOTA.templateStorageUsedGB} GB`} limit={`${tier.templateStorageCapGB} GB`}
-               warn={tplPct >= 0.8}
-               note={tplPct >= 0.8 ? "Over 80% of the cap — new templates are refused at 100%." : undefined} />
-        </Section>
-
-        <Section title="Free allowances" aside={<span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Resets {BILLING_MONTH.end}</span>}>
+        <Section title="Storage and traffic" aside={<span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Resets {BILLING_MONTH.end}</span>}>
           <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 4px", lineHeight: "18px" }}>
-            These do not refuse anything. Usage beyond them is billed at the rate shown.
+            Caps refuse; allowances do not — usage beyond an allowance is billed at the rate shown.
           </p>
-          <Row label="Snapshot storage" v21 used={`${snapshotGBmo.toFixed(1)} GB·mo`} limit={`${SNAPSHOT_FREE_GB} GB·mo`}
-               warn={snapshotGBmo > SNAPSHOT_FREE_GB}
-               note={`Beyond the allowance: ${rate6(RATE.storageGBMonth)}/GB·mo`} />
-          <Row label="Template storage" used={`${templateGBmo.toFixed(2)} GB·mo`} limit={`${TEMPLATE_FREE_GB} GB·mo`}
-               warn={templateGBmo > TEMPLATE_FREE_GB}
-               note={`Beyond the allowance: ${rate6(RATE.storageGBMonth)}/GB·mo`} />
-          <Row label="Egress" used={`${egressUsedGB.toFixed(1)} GB`} limit={ACCOUNT_TIER === "T0" ? "Whitelist only" : `${EGRESS_FREE_GB} GB`}
-               warn={ACCOUNT_TIER !== "T0" && egressUsedGB > EGRESS_FREE_GB}
-               note={ACCOUNT_TIER === "T0"
-                 ? "On this tier outbound traffic reaches whitelisted destinations only."
-                 : `Beyond the allowance: ${rate6(RATE.egressGB)}/GB · inbound is always free`} />
+          <Row label="Template storage cap" used={`${QUOTA.templateStorageUsedGB} GB`} limit={`${QUOTA.templateStorageCapGB} GB`}
+               warn={tplPct >= 0.8}
+               note={<>
+                 {tplPct >= 0.8 ? "Over 80% of the cap — new templates are refused at 100%. " : ""}
+                 <Link href="/settings/usage" style={{ color: C.link, textDecoration: "none" }}>See templates →</Link>
+               </>} />
+          <Row label="Template storage allowance"
+               used={metered("template_storage") ? `${templateGBmo.toFixed(2)} GB·mo` : "—"}
+               limit={`${TEMPLATE_FREE_GB} GB·mo`}
+               warn={metered("template_storage") && templateGBmo > TEMPLATE_FREE_GB}
+               note={metered("template_storage") ? `Beyond the allowance: ${rate6(RATE.storageGBMonth)}/GB·mo` : "Metering not yet available"} />
+          <Row label="Egress allowance"
+               used={metered("egress") ? `${egressUsedGB.toFixed(1)} GB` : "—"}
+               limit={tier.id === "tier1" ? "Package mirrors only" : `${EGRESS_FREE_GB} GB`}
+               warn={metered("egress") && tier.id !== "tier1" && egressUsedGB > EGRESS_FREE_GB}
+               note={tier.id === "tier1"
+                 ? "On tier1 outbound traffic reaches package mirrors only and is not metered."
+                 : metered("egress") ? `Beyond the allowance: ${rate6(RATE.egressGB)}/GB · inbound is always free` : "Metering not yet available"} />
+          <Row label="Snapshot storage allowance" v21 used="—" limit={`${SNAPSHOT_FREE_GB} GB·mo`}
+               note="Snapshots ship in 2.1." />
         </Section>
 
         <Section title="Approaching archival">
           <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 4px", lineHeight: "18px" }}>
-            Templates with no launch for 90 days are archived then deleted.{" "}
+            A template with no launch for 90 days is archived, then deleted.{" "}
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
               Paused sandboxes not resumed for 30 days are archived. <V21Badge />
             </span>

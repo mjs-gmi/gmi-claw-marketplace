@@ -33,7 +33,8 @@ function Router() {
       {/* Settings › Usage & Billing. The agent drill-down is its own URL so a
           cost someone is questioning can be linked to directly. */}
       <Route path={"/settings/usage"} component={UsageBilling} />
-      <Route path={"/settings/usage/agentbox/:sandboxId"} component={UsageBilling} />
+      <Route path={"/settings/usage/agentbox/:agentId"} component={UsageBilling} />
+      <Route path={"/settings/usage/agentbox/:agentId/:sandboxId"} component={UsageBilling} />
       <Route path={"/settings/quotas"} component={Quotas} />
       <Route component={NotFound} />
     </Switch>

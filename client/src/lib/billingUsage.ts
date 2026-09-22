@@ -1,318 +1,284 @@
 // ─── Usage & Billing data ───────────────────────────────────────────────────
-// The cost subject is the SANDBOX INSTANCE, not the template. A template can
-// have many instances, each started, paused and deleted on its own clock, so
-// every figure here hangs off a sandbox — except Template storage and Egress,
-// which are account-level and deliberately have no sandbox to attach to.
+// The page aggregates by AGENT. That is the level a person thinks at — "what
+// did this agent cost me" — and it is the level both cost chains roll up to:
 //
-// Amounts are computed from the rate card rather than typed in, so the §12
-// acceptance cases are checkable against the page instead of against a fixture.
+//   Agent
+//   ├─ Template (one per agent, many versions) → Template storage
+//   └─ Sandbox (many per agent)                → Running, Egress, Model usage
+//
+// A sandbox is one level down and a segment is two. Each level answers a
+// different question, and flattening them was what made the old page unable to
+// answer any of them.
 
 import {
   RATE, HOURS_PER_MONTH, STANDARD_SPECS, runningRate, pausedRate, round4, sumRounded,
-  type BillingItem, type BillingStatus, type Spec, type TierId,
+  type BillingItem, type BillingStatus, type Spec,
 } from "./billingModel";
 
 export type UsageScope = "inference" | "studio" | "agentbox";
 
-export const USAGE_PERIOD = { from: "Aug 22, 2026", to: "Sep 21, 2026" };
-/** §10 — billing periods are UTC calendar months, and the page has to say so. */
 export const BILLING_MONTH = { label: "September 2026", start: "2026-09-01 00:00 UTC", end: "2026-09-30 23:59 UTC" };
-export const DATA_AS_OF = "2026-09-21 14:05 UTC";
+export const USAGE_PERIOD = { from: "Aug 22, 2026", to: "Sep 21, 2026" };
+export const DATA_AS_OF = "2026-09-22 09:40 UTC";
+export const MONTH_OPTIONS = ["September 2026", "August 2026", "July 2026"];
 
-export const ACCOUNT_TIER: TierId = "T1";
-
-/**
- * §10 — where each item is in the rollout. Storage meters were confirmed
- * missing on 9/19, so template storage is still being shown-not-charged.
- */
-export const ITEM_STATUS: Record<BillingItem, BillingStatus> = {
-  running: "billed",
-  paused: "billed",
-  snapshot_storage: "billed",
-  template_storage: "not_yet_billed",
-  egress: "billed",
-  model_usage: "billed",
-};
-export const ITEM_BILLING_STARTS: Partial<Record<BillingItem, string>> = {
-  template_storage: "2026-11-01",
-};
-
-/**
- * §2 — egress and model usage should attribute per sandbox. When the upstream
- * cannot, the item degrades to account level and says so rather than silently
- * dropping the dimension.
- */
-export const EGRESS_ATTRIBUTABLE = true;
-export const MODEL_USAGE_ATTRIBUTABLE = true;
-/** §10 — a discount multiplies the computed amount; base rates never change. */
+export const ACCOUNT_TIER = "tier2" as const;
 export const ACCOUNT_DISCOUNT = 0.10;
 
-// ── Sandboxes and their segments ────────────────────────────────────────────
 /**
- * §2 — `transitioning` covers pausing and resuming. Whether it bills at the
- * running rate or is free is still open with Sandbox API, but either way it is
- * a visible segment: a user who pressed Pause at 09:50 and sees a running
- * segment ending at 09:50:40 otherwise concludes they were overcharged.
+ * Where each meter actually is. Template storage and Egress do not exist yet —
+ * the page must show "—" with a reason, never $0, because a zero reads as "you
+ * used none of this" and the truth is "nobody is counting".
+ *
+ * Flip either to "billed" to review the fully-metered design.
  */
-export type SegmentState = "running" | "paused" | "transitioning";
-export interface Segment {
-  id: string;
-  state: SegmentState;
-  start: string;
-  end?: string;          // absent = still accruing (§10 "In progress")
-  seconds: number;
-}
+export const METER: Record<BillingItem, BillingStatus> = {
+  running: "billed",
+  model_usage: "billed",
+  template_storage: "no_meter",
+  egress: "no_meter",
+  paused: "no_meter",            // 2.1
+  snapshot_storage: "no_meter",  // 2.1
+};
+export const BILLING_STARTS: Partial<Record<BillingItem, string>> = {
+  template_storage: "2026-11-01",
+  egress: "2026-11-01",
+};
+export const metered = (i: BillingItem): boolean => METER[i] !== "no_meter";
+
+/** §P3 — whether the upstream can attribute these to a sandbox at all. */
+export const EGRESS_ATTRIBUTABLE = true;
+export const MODEL_USAGE_ATTRIBUTABLE = true;
+
+/**
+ * §P2 — whether `/ce/usage` can return Running split into vCPU / memory / disk.
+ * It returns a single `amount` today. The split must NOT be reverse-computed
+ * from spec × rate: rates change, discounts multiply the total, and a number
+ * derived that way will not match the invoice. Until Billing answers, segments
+ * do not expand and no placeholder rows are shown.
+ */
+export const RESOURCE_SPLIT_AVAILABLE = false;
+
+// ── Sandboxes ───────────────────────────────────────────────────────────────
 export type SandboxState = "running" | "paused" | "deleted" | "creating" | "error";
+/** §P2 — 2.0 has hourly buckets, not true segments. Same row shape either way. */
+export interface HourBucket { hourStart: string; minutes: number; amount: number }
 
 export interface SandboxUsage {
   id: string;
-  name: string;
-  templateId: string;
-  templateName: string;
+  name: string;            // equals id when the API returns no display_name
+  agentId: string;
   region: string;
-  /** Undefined for a custom spec — §2.1 says those have no product code. */
-  productName?: string;
+  productName?: string;    // absent for a custom spec
   spec: Spec;
   state: SandboxState;
-  created: string;
+  created?: string;        // §P2 — Sandbox API may not return this
   deleted?: string;
-  segments: Segment[];
-  /** §9 — pre-redesign rows have no resource breakdown and must say so. */
-  legacy?: { instanceType: string };
+  buckets: HourBucket[];
+  /** Pre-redesign rows: one session, original instance type, no breakdown. */
+  legacy?: { instanceType: string; durationLabel: string };
 }
 
-export interface SnapshotUsage {
-  id: string;
-  sandboxId: string;
-  name: string;
-  sizeGB: number;
-  ageDays: number;
-  storedHours: number;
-}
+const bucket = (hourStart: string, minutes: number, hourlyRate: number): HourBucket =>
+  ({ hourStart, minutes, amount: round4(hourlyRate * (minutes / 60)) });
 
-const hrs = (h: number) => Math.round(h * 3600);
+const MEDIUM = STANDARD_SPECS.medium;
+const LARGE = STANDARD_SPECS.large;
+const CUSTOM: Spec = { vcpu: 3, ramGiB: 6, diskGB: 30 };
 
 export const SANDBOXES: SandboxUsage[] = [
-  // §12 — `medium` runs one hour then is deleted. The canonical case.
   {
-    id: "sbx_7c41a9",
-    name: "nightly-scrape",
-    templateId: "d6b808ba-37a2-48f6-9f20-d744bc13f70f",
-    templateName: "wickwood3",
-    region: "us-central-iowa1",
-    productName: "medium",
-    spec: STANDARD_SPECS.medium,
-    state: "deleted",
-    created: "2026-09-03 08:12:05",
-    deleted: "2026-09-03 09:12:05",
-    segments: [{ id: "sg1", state: "running", start: "2026-09-03 08:12:05", end: "2026-09-03 09:12:05", seconds: hrs(1) }],
+    id: "sbx_7c41a9", name: "nightly-scrape", agentId: "wickwood3",
+    region: "us-central-iowa1", productName: "medium", spec: MEDIUM,
+    state: "deleted", created: "2026-09-03 08:12:05", deleted: "2026-09-03 09:12:05",
+    buckets: [bucket("2026-09-03 08:00", 60, runningRate(MEDIUM, "medium"))],
   },
-  // §12 — run 30m, pause 2h, resume 30m, delete.
   {
-    id: "sbx_2b90ff",
-    name: "matchday-worker",
-    templateId: "51a7fb30-6c84-4de2-9017-8b43ea7c5d19",
-    templateName: "matchday",
-    region: "us-central-iowa1",
-    productName: "medium",
-    spec: STANDARD_SPECS.medium,
-    state: "deleted",
-    created: "2026-09-07 09:20:44",
-    deleted: "2026-09-07 12:20:44",
-    segments: [
-      { id: "sg1", state: "running",       start: "2026-09-07 09:20:44", end: "2026-09-07 09:50:44", seconds: hrs(0.5) },
-      // 40 s of pausing — the segment that used to be invisible.
-      { id: "sg2", state: "transitioning", start: "2026-09-07 09:50:44", end: "2026-09-07 09:51:24", seconds: 40 },
-      { id: "sg3", state: "paused",        start: "2026-09-07 09:51:24", end: "2026-09-07 11:51:24", seconds: hrs(2) },
-      { id: "sg4", state: "running",       start: "2026-09-07 11:51:24", end: "2026-09-07 12:21:24", seconds: hrs(0.5) },
+    id: "sbx_2b90ff", name: "matchday-worker", agentId: "matchday",
+    region: "us-central-iowa1", productName: "medium", spec: MEDIUM,
+    state: "deleted", created: "2026-09-07 09:20:44", deleted: "2026-09-07 12:20:44",
+    buckets: [
+      bucket("2026-09-07 09:00", 39, runningRate(MEDIUM, "medium")),
+      bucket("2026-09-07 11:00", 9,  runningRate(MEDIUM, "medium")),
+      bucket("2026-09-07 12:00", 12, runningRate(MEDIUM, "medium")),
     ],
   },
-  // §12 — a custom spec: quantities, no product code.
   {
-    id: "sbx_e5d130",
-    name: "fde-batch-03",
-    templateId: "7c1e0a44-9b2d-4f13-8a6e-2d55c0913bb2",
-    templateName: "FDE Agent 003-rev20",
-    region: "eu-de-frankfurt1",
-    spec: { vcpu: 3, ramGiB: 6, diskGB: 30 },
-    state: "running",
-    created: "2026-09-21 13:05:00",
-    segments: [{ id: "sg1", state: "running", start: "2026-09-21 13:05:00", seconds: hrs(1) }],
-  },
-  // Still accruing while paused — the list has to flag these (§4).
-  {
-    id: "sbx_a11c84",
-    name: "viva-eval",
-    templateId: "3a86e5b1-7d24-40cf-9e83-16b0d4c7f2aa",
-    templateName: "viva",
-    region: "ap-sg-singapore1",
-    productName: "large",
-    spec: STANDARD_SPECS.large,
-    state: "paused",
-    created: "2026-09-16 03:41:19",
-    segments: [
-      { id: "sg1", state: "running", start: "2026-09-16 03:41:19", end: "2026-09-16 11:30:19", seconds: hrs(7.82) },
-      { id: "sg2", state: "paused",  start: "2026-09-16 11:30:19", seconds: hrs(126) },
+    id: "sbx_e5d130", name: "fde-batch-03", agentId: "fde-003",
+    region: "eu-de-frankfurt1", spec: CUSTOM,     // custom: no product code
+    state: "running", created: "2026-09-21 13:05:00",
+    buckets: [
+      bucket("2026-09-21 13:00", 55, runningRate(CUSTOM)),
+      bucket("2026-09-21 14:00", 60, runningRate(CUSTOM)),
+      bucket("2026-09-22 09:00", 40, runningRate(CUSTOM)),
     ],
   },
-  // §9 — a pre-redesign record: container duration only, no breakdown.
   {
-    id: "49d9a362…b104",
-    name: "49d9a362…b104",
-    templateId: "d6b808ba-37a2-48f6-9f20-d744bc13f70f",
-    templateName: "wickwood3",
-    region: "us-central-iowa1",
-    productName: "gmi.container.intel.x4660.small.ext",
-    spec: STANDARD_SPECS.small,
-    state: "deleted",
-    created: "2026-07-09 11:39:34",
-    deleted: "2026-07-10 22:18:34",
-    segments: [{ id: "sg1", state: "running", start: "2026-07-09 11:39:34", end: "2026-07-10 22:18:34", seconds: hrs(34.65) }],
-    legacy: { instanceType: "gmi.container.intel.x4660.small.ext" },
+    // §P2 — the API returns no display_name for this one, so the row is its id.
+    id: "sbx_a11c84", name: "sbx_a11c84", agentId: "viva",
+    region: "ap-sg-singapore1", productName: "large", spec: LARGE,
+    state: "running", created: undefined,
+    buckets: [
+      bucket("2026-09-16 03:00", 19, runningRate(LARGE, "large")),
+      bucket("2026-09-16 04:00", 60, runningRate(LARGE, "large")),
+      bucket("2026-09-16 05:00", 47, runningRate(LARGE, "large")),
+    ],
+  },
+  {
+    // §P1/§P2 — pre-redesign: one session row, original type, no split.
+    id: "49d9a362…b104", name: "49d9a362…b104", agentId: "wickwood3",
+    region: "us-central-iowa1", productName: "gmi.container.intel.x4660.small.ext",
+    spec: STANDARD_SPECS.small, state: "deleted",
+    created: "2026-07-09 11:39:34", deleted: "2026-07-10 22:18:34",
+    buckets: [{ hourStart: "2026-07-09 11:00", minutes: 2079, amount: 0.34 }],
+    legacy: { instanceType: "gmi.container.intel.x4660.small.ext", durationLabel: "34 hours 39 minutes" },
   },
 ];
 
-export const SNAPSHOTS: SnapshotUsage[] = [
-  { id: "snap_4f21a0", sandboxId: "sbx_2b90ff", name: "matchday-pre-upgrade", sizeGB: 38, ageDays: 14, storedHours: 336 },
-  { id: "snap_9c07be", sandboxId: "sbx_a11c84", name: "viva-eval-baseline",   sizeGB: 22, ageDays: 5,  storedHours: 120 },
-];
-
-// ── Derived amounts ─────────────────────────────────────────────────────────
-export function segmentAmount(sb: SandboxUsage, sg: Segment): number {
-  const hours = sg.seconds / 3600;
-  // A legacy row has no product name to price by, but it also has no
-  // breakdown — its amount is whatever the old container meter recorded.
-  // §2/§11 — whether the transition bills at the running rate or is free is
-  // still open. The prototype charges nothing and labels the row, rather than
-  // picking a side and quietly baking it into a total.
-  if (sg.state === "transitioning") return 0;
-  const rate = sg.state === "running"
-    ? runningRate(sb.spec, sb.legacy ? undefined : sb.productName)
-    : pausedRate(sb.spec, sb.legacy ? undefined : sb.productName);
-  return round4(rate * hours);
-}
-/** Running segments expand to three rows (§5) — the only way a custom spec reconciles. */
-export function segmentBreakdown(sb: SandboxUsage, sg: Segment): { label: string; qty: string; amount: number }[] {
-  if (sg.state === "transitioning") return [];
-  if (sg.state !== "running") {
-    return [{ label: "Disk", qty: `${sb.spec.diskGB} GB · ${(sg.seconds / 3600).toFixed(2)} h`, amount: round4(sb.spec.diskGB * RATE.diskGBHr * (sg.seconds / 3600)) }];
-  }
-  const h = sg.seconds / 3600;
-  return [
-    { label: "vCPU",   qty: `${sb.spec.vcpu} vCPU · ${h.toFixed(2)} h`,      amount: round4(sb.spec.vcpu * RATE.vcpuHr * h) },
-    { label: "Memory", qty: `${sb.spec.ramGiB} GiB · ${h.toFixed(2)} h`,     amount: round4(sb.spec.ramGiB * RATE.ramGiBHr * h) },
-    { label: "Disk",   qty: `${sb.spec.diskGB} GB · ${h.toFixed(2)} h`,      amount: round4(sb.spec.diskGB * RATE.diskGBHr * h) },
-  ];
-}
-export function sandboxTotal(sb: SandboxUsage): number {
-  return sumRounded(sb.segments.map((sg) => segmentAmount(sb, sg)));
-}
-export function sandboxItemTotal(sb: SandboxUsage, item: BillingItem): number {
-  if (item !== "running" && item !== "paused") return 0;
-  return sumRounded(sb.segments.filter((s) => s.state === item).map((sg) => segmentAmount(sb, sg)));
-}
+export const sandboxById = (id: string): SandboxUsage | undefined => SANDBOXES.find((s) => s.id === id);
+export const sandboxRunning = (sb: SandboxUsage): number => sumRounded(sb.buckets.map((b) => b.amount));
+export const sandboxMinutes = (sb: SandboxUsage): number => sb.buckets.reduce((a, b) => a + b.minutes, 0);
 export const isAccruing = (sb: SandboxUsage): boolean => sb.state === "running" || sb.state === "paused";
+export const sandboxVersion = (sb: SandboxUsage): "v1" | "v2" => (sb.legacy ? "v1" : "v2");
 
-// ── Account-level items ─────────────────────────────────────────────────────
-export const SNAPSHOT_FREE_GB = 50;
+// ── Model usage ─────────────────────────────────────────────────────────────
+export interface ModelUsageRow { sandboxId: string; model: string; tokens: number; amount: number; creditApplied: number }
+export const MODEL_USAGE: ModelUsageRow[] = [
+  { sandboxId: "sbx_7c41a9",     model: "claude-opus-5",   tokens: 214_300_000, amount: 9_244.10, creditApplied: 0 },
+  { sandboxId: "sbx_7c41a9",     model: "claude-sonnet-5", tokens: 114_550_000, amount: 3_118.44, creditApplied: 3_118.44 },
+  { sandboxId: "49d9a362…b104",  model: "claude-opus-4.8", tokens: 61_200_000,  amount: 1_230.28, creditApplied: 0 },
+  { sandboxId: "sbx_e5d130",     model: "DeepSeek-V4-Pro", tokens: 285_000_000, amount: 881.16,   creditApplied: 0 },
+];
+export const modelUsageFor = (sandboxId: string): ModelUsageRow[] => MODEL_USAGE.filter((m) => m.sandboxId === sandboxId);
+export const modelNet = (m: ModelUsageRow): number => round4(m.amount - m.creditApplied);
+
+// ── Templates (one per agent) ───────────────────────────────────────────────
+export interface TemplateStorage {
+  id: string; agentId: string; name: string; version: string;
+  sizeGB: number; lastLaunch: string; storedHours: number; deleted?: boolean;
+}
+export const TEMPLATES: TemplateStorage[] = [
+  { id: "d6b808ba", agentId: "wickwood3", name: "wickwood3",           version: "v4",  sizeGB: 46, lastLaunch: "2026-09-03", storedHours: 730 },
+  { id: "7c1e0a44", agentId: "fde-003",   name: "FDE Agent 003-rev20", version: "v20", sizeGB: 38, lastLaunch: "2026-09-21", storedHours: 730 },
+  { id: "51a7fb30", agentId: "matchday",  name: "matchday",            version: "v2",  sizeGB: 16, lastLaunch: "2026-09-07", storedHours: 730 },
+  { id: "e9d31c87", agentId: "sevenTest", name: "sevenTest",           version: "v1",  sizeGB: 10, lastLaunch: "2026-07-09", storedHours: 48, deleted: true },
+];
+export const templateGBh = (t: TemplateStorage): number => t.sizeGB * t.storedHours;
+export const templateCost = (t: TemplateStorage): number =>
+  round4((templateGBh(t) / HOURS_PER_MONTH) * RATE.storageGBMonth);
+
+// ── Egress ──────────────────────────────────────────────────────────────────
+export interface EgressRow { sandboxId: string; bytesGB: number }
+export const EGRESS: EgressRow[] = [
+  { sandboxId: "sbx_e5d130", bytesGB: 18.2 },
+  { sandboxId: "sbx_a11c84", bytesGB: 5.1 },
+  { sandboxId: "sbx_2b90ff", bytesGB: 3.1 },
+];
+export const egressFor = (sandboxId: string): number =>
+  EGRESS.find((e) => e.sandboxId === sandboxId)?.bytesGB ?? 0;
+
+// ── Allowances ──────────────────────────────────────────────────────────────
 export const TEMPLATE_FREE_GB = 100;
 export const EGRESS_FREE_GB = 20;
+export const SNAPSHOT_FREE_GB = 50;
 
-/** Storage accrues in GB·hours and is presented as GB·month (§4). */
-export const snapshotGBh = SNAPSHOTS.reduce((a, s) => a + s.sizeGB * s.storedHours, 0);
-export const templateGBh = 10 * 48 + 100 * HOURS_PER_MONTH;   // §12: 10 GB for 48 h beyond the allowance
-export const egressUsedGB = 26.4;
-
-export const snapshotGBmo = snapshotGBh / HOURS_PER_MONTH;
-export const templateGBmo = templateGBh / HOURS_PER_MONTH;
-
-export const snapshotBillableGBmo = Math.max(0, snapshotGBmo - SNAPSHOT_FREE_GB);
+export const templateGBmo = TEMPLATES.reduce((a, t) => a + templateGBh(t), 0) / HOURS_PER_MONTH;
+export const egressUsedGB = EGRESS.reduce((a, e) => a + e.bytesGB, 0);
 export const templateBillableGBmo = Math.max(0, templateGBmo - TEMPLATE_FREE_GB);
 export const egressBillableGB = Math.max(0, egressUsedGB - EGRESS_FREE_GB);
 
-const BILLING_ITEMS_ALL: BillingItem[] =
-  ["running", "paused", "snapshot_storage", "template_storage", "egress", "model_usage"];
+// ── Agent rollup — what P1 lists ────────────────────────────────────────────
+export interface AgentRow {
+  agentId: string;
+  name: string;
+  templateId: string;
+  runs: number;
+  version: "v1" | "v2" | "v1+v2";
+  deletedAt?: string;
+  accruing: boolean;
+  running: number;
+  modelUsage: number;
+  templateStorage: number | null;   // null = no meter, which is not zero
+  egress: number | null;
+}
 
-export const ACCOUNT_ITEM_AMOUNT: Record<"snapshot_storage" | "template_storage" | "egress" | "model_usage", number> = {
-  model_usage: 0,   // computed in itemTotal from gross minus credit
-  snapshot_storage: round4(snapshotBillableGBmo * RATE.storageGBMonth),
-  template_storage: round4(templateBillableGBmo * RATE.storageGBMonth),
-  egress: round4(egressBillableGB * RATE.egressGB),
+const AGENT_META: Record<string, { name: string; templateId: string; deletedAt?: string }> = {
+  wickwood3: { name: "wickwood3",           templateId: "d6b808ba-37a2-48f6-9f20-d744bc13f70f", deletedAt: "2026-09-20" },
+  "fde-003": { name: "FDE Agent 003-rev20", templateId: "7c1e0a44-9b2d-4f13-8a6e-2d55c0913bb2" },
+  matchday:  { name: "matchday",            templateId: "51a7fb30-6c84-4de2-9017-8b43ea7c5d19" },
+  viva:      { name: "viva",                templateId: "3a86e5b1-7d24-40cf-9e83-16b0d4c7f2aa" },
 };
 
-// ── §3 drill-downs ──────────────────────────────────────────────────────────
-// The answer to "what am I paying for" has to be one click from every number.
-// Without these, snapshot storage and egress are amounts a user can see and
-// cannot act on — the exact complaint that produced this section.
-export interface TemplateStorage { id: string; name: string; version: string; sizeGB: number; lastLaunch: string; storedHours: number }
-export const TEMPLATES: TemplateStorage[] = [
-  { id: "d6b808ba", name: "wickwood3",           version: "v4", sizeGB: 46, lastLaunch: "2026-09-03", storedHours: 730 },
-  { id: "7c1e0a44", name: "FDE Agent 003-rev20", version: "v20", sizeGB: 38, lastLaunch: "2026-09-21", storedHours: 730 },
-  { id: "51a7fb30", name: "matchday",            version: "v2", sizeGB: 16, lastLaunch: "2026-09-07", storedHours: 730 },
-  { id: "e9d31c87", name: "sevenTest",           version: "v1", sizeGB: 10, lastLaunch: "2026-07-09", storedHours: 48 },
-];
-export const templateStorageCost = (t: TemplateStorage): number =>
-  round4((t.sizeGB * t.storedHours / HOURS_PER_MONTH) * RATE.storageGBMonth);
-
-export interface EgressRow { sandboxId: string; sandboxName: string; bytesGB: number }
-export const EGRESS_BY_SANDBOX: EgressRow[] = [
-  { sandboxId: "sbx_e5d130", sandboxName: "fde-batch-03",    bytesGB: 18.2 },
-  { sandboxId: "sbx_a11c84", sandboxName: "viva-eval",       bytesGB: 5.1 },
-  { sandboxId: "sbx_2b90ff", sandboxName: "matchday-worker", bytesGB: 3.1 },
-];
-
-export interface ModelUsageRow { sandboxId: string; sandboxName: string; model: string; tokens: number; amount: number; creditApplied: number }
-export const MODEL_USAGE: ModelUsageRow[] = [
-  { sandboxId: "sbx_7c41a9", sandboxName: "nightly-scrape", model: "claude-opus-5",   tokens: 214_300_000, amount: 9_244.10, creditApplied: 0 },
-  { sandboxId: "sbx_7c41a9", sandboxName: "nightly-scrape", model: "claude-sonnet-5", tokens: 114_550_000, amount: 3_118.44, creditApplied: 3_118.44 },
-  { sandboxId: "sbx_e5d130", sandboxName: "fde-batch-03",   model: "DeepSeek-V4-Pro", tokens: 285_000_000, amount: 1_230.28, creditApplied: 0 },
-];
-export const modelUsageFor = (sandboxId: string): ModelUsageRow[] =>
-  MODEL_USAGE.filter((m) => m.sandboxId === sandboxId);
-/** Coding Plan credits show as a credit line against the item, not as a discount. */
-export const MODEL_USAGE_GROSS = sumRounded(MODEL_USAGE.map((m) => m.amount));
-export const MODEL_USAGE_CREDIT = sumRounded(MODEL_USAGE.map((m) => m.creditApplied));
-
-export function itemTotal(item: BillingItem): number {
-  if (item === "running" || item === "paused") {
-    return sumRounded(SANDBOXES.map((sb) => sandboxItemTotal(sb, item)));
-  }
-  if (item === "model_usage") return round4(MODEL_USAGE_GROSS - MODEL_USAGE_CREDIT);
-  return ACCOUNT_ITEM_AMOUNT[item];
+export function sandboxesForAgent(agentId: string): SandboxUsage[] {
+  return SANDBOXES.filter((s) => s.agentId === agentId);
 }
-/**
- * §3/§10 — the header total is BILLED: month to date, in-progress included,
- * and items that are metered but not yet charged left out. Showing a number
- * the customer is not being asked to pay is the one mistake this total cannot
- * make.
- */
-export const periodTotal = (): number => sumRounded(
-  BILLING_ITEMS_ALL.filter((i) => ITEM_STATUS[i] === "billed").map(itemTotal),
-);
-/** What the same period costs before the account discount. */
-export const periodListTotal = (): number => periodTotal();
-export const periodBilledTotal = (): number => round4(periodTotal() * (1 - ACCOUNT_DISCOUNT));
+export function templateForAgent(agentId: string): TemplateStorage | undefined {
+  return TEMPLATES.find((t) => t.agentId === agentId);
+}
 
-// ── Quotas (§6) ─────────────────────────────────────────────────────────────
+export function agentRows(): AgentRow[] {
+  return Object.entries(AGENT_META).map(([agentId, meta]) => {
+    const boxes = sandboxesForAgent(agentId);
+    const versions = new Set(boxes.map(sandboxVersion));
+    const tpl = templateForAgent(agentId);
+    return {
+      agentId,
+      name: meta.name,
+      templateId: meta.templateId,
+      runs: boxes.length,
+      version: (versions.size > 1 ? "v1+v2" : (versions.values().next().value ?? "v2")) as AgentRow["version"],
+      deletedAt: meta.deletedAt,
+      accruing: boxes.some(isAccruing),
+      running: sumRounded(boxes.map(sandboxRunning)),
+      modelUsage: sumRounded(boxes.flatMap((b) => modelUsageFor(b.id).map(modelNet))),
+      // §P1 — "—", not $0: nothing is counting these yet.
+      templateStorage: metered("template_storage") && tpl ? templateCost(tpl) : null,
+      egress: metered("egress")
+        ? round4(boxes.reduce((a, b) => a + egressFor(b.id), 0) * RATE.egressGB)
+        : null,
+    };
+  }).sort((a, b) => agentTotal(b) - agentTotal(a));
+}
+
+/** Only metered items count toward a total anyone is being asked to pay. */
+export function agentTotal(a: AgentRow): number {
+  return sumRounded([a.running, a.modelUsage, a.templateStorage ?? 0, a.egress ?? 0]);
+}
+export function agentById(agentId: string): AgentRow | undefined {
+  return agentRows().find((a) => a.agentId === agentId);
+}
+
+export const itemTotal = (item: BillingItem): number | null => {
+  if (!metered(item)) return null;
+  switch (item) {
+    case "running":     return sumRounded(SANDBOXES.map(sandboxRunning));
+    case "model_usage": return sumRounded(MODEL_USAGE.map(modelNet));
+    case "template_storage": return round4(templateBillableGBmo * RATE.storageGBMonth);
+    case "egress":      return round4(egressBillableGB * RATE.egressGB);
+    default:            return 0;
+  }
+};
+export const periodListTotal = (): number => sumRounded(agentRows().map(agentTotal));
+export const periodBilledTotal = (): number => round4(periodListTotal() * (1 - ACCOUNT_DISCOUNT));
+
+// ── Quotas (§P4) ────────────────────────────────────────────────────────────
 export const QUOTA = {
-  concurrencyUsedVcpu: 7,      // includes paused sandboxes — the point of the row
-  buildCpuHoursUsed: 12.4,
-  buildCpuHoursAllowed: 20,
+  concurrencyUsedVcpu: 7,
+  buildHoursUsed: 6.2,
+  buildHoursAllowed: 10,
   buildResets: "2026-10-01 00:00 UTC",
-  concurrentBuilds: 2,
-  buildTimeoutMin: 30,
-  buildCores: 4,
+  concurrentBuilds: 5,
+  buildTimeoutLabel: "1 h",
+  buildCores: 2,
+  sessionLimit: "24 h",
   templateStorageUsedGB: 110,
+  templateStorageCapGB: 500,
   archivingSoon: [
-    { kind: "Paused sandbox", name: "viva-eval", detail: "archived in 5 days if not resumed" },
     { kind: "Template", name: "sevenTest", detail: "no launch for 74 days · archived at 90" },
   ],
 };
 
-export const usd = (n: number): string =>
-  `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-// ── Inference / Studio (unchanged scopes) ───────────────────────────────────
+// ── Inference / Studio (other scopes, unchanged) ────────────────────────────
 export interface ModelSlice { model: string; color: string; amount: number }
 export interface InferenceDay { date: string; slices: ModelSlice[] }
 export const INFERENCE_MODELS: { model: string; color: string }[] = [
@@ -345,8 +311,7 @@ export function inferenceSeries(): InferenceDay[] {
   }
   return days;
 }
-
-export interface UsageRow { time: string; category: string; modelType: string; amount: number; legacyFromAgentbox?: boolean }
+export interface UsageRow { time: string; category: string; modelType: string; amount: number }
 export const INFERENCE_ROWS: UsageRow[] = [
   { time: "Sep, 2026", category: "Dedicated",  modelType: "—",          amount: 7_671.5 },
   { time: "Sep, 2026", category: "Serverless", modelType: "LLM",        amount: 32_279.4 },
@@ -359,25 +324,5 @@ export const STUDIO_ROWS: UsageRow[] = [
   { time: "Sep, 2026", category: "Audio", modelType: "Gallery", amount: 69.94 },
 ];
 
-/**
- * §3 — a deleted sandbox stays visible in every month it actually cost money,
- * and disappears from months where it did not. Both halves matter: chasing a
- * charge for something you deleted is the most common reason anyone opens this
- * page, and padding later months with $0 rows for dead sandboxes buries the
- * live ones. Retention is 13 months, after which they roll into one archived
- * row.
- */
-export function sandboxesForMonth(month: string): SandboxUsage[] {
-  return SANDBOXES.filter((sb) => sb.segments.some((sg) => sg.start.startsWith(monthPrefix(month))));
-}
-function monthPrefix(label: string): string {
-  const [name, year] = label.split(" ");
-  const idx = ["January","February","March","April","May","June","July","August","September","October","November","December"].indexOf(name);
-  return idx < 0 ? "" : `${year}-${String(idx + 1).padStart(2, "0")}`;
-}
-export const MONTH_OPTIONS = ["September 2026", "August 2026", "July 2026"];
-
-export const sandboxById = (id: string): SandboxUsage | undefined => SANDBOXES.find((s) => s.id === id);
-export const snapshotsFor = (id: string): SnapshotUsage[] => SNAPSHOTS.filter((s) => s.sandboxId === id);
-export const snapshotCost = (s: SnapshotUsage): number =>
-  round4((s.sizeGB * s.storedHours / HOURS_PER_MONTH) * RATE.storageGBMonth);
+export const usd = (n: number): string =>
+  `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

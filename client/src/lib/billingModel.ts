@@ -146,19 +146,30 @@ export const STATUS_NOTE: Record<BillingStatus, string | null> = {
   billed: null,
 };
 
-// ── Tiers ───────────────────────────────────────────────────────────────────
-export type TierId = "T0" | "T1" | "T2";
+// ── Tiers (§P4) ─────────────────────────────────────────────────────────────
+// Console already has tier1–tier5 for Inference rate limits; AgentBox hangs its
+// own limit table off the same tiers rather than inventing a parallel ladder.
+// Tier is set by SETTLED top-up, not by a card on file, and only ever changes
+// quotas — never prices.
+export type TierId = "tier1" | "tier2" | "tier3" | "tier4" | "tier5";
 export interface Tier {
   id: TierId;
   condition: string;
   concurrencyVcpu: number | string;
-  buildQuota: string;
-  templateStorageCapGB: number | string;
+  sessionLimit: string;
+  buildHours: string;
+  buildConcurrency: string;
+  templateStorage: string;
+  egress: string;
+  /** tier4-5 are extrapolated and not yet agreed. */
+  provisional?: boolean;
 }
 export const TIERS: Record<TierId, Tier> = {
-  T0: { id: "T0", condition: "Email verified",             concurrencyVcpu: 4,   buildQuota: "5 CPU-hours",  templateStorageCapGB: 30 },
-  T1: { id: "T1", condition: "Cumulative top-up ≥ $25",    concurrencyVcpu: 40,  buildQuota: "0.10 × last-30-day sandbox vCPU-hours, floor 20", templateStorageCapGB: 500 },
-  T2: { id: "T2", condition: "Cumulative ≥ $500 or contract", concurrencyVcpu: "200 or negotiated", buildQuota: "Per contract", templateStorageCapGB: "Balance pre-check" },
+  tier1: { id: "tier1", condition: "Email verified (default)", concurrencyVcpu: 4,   sessionLimit: "1 h",     buildHours: "2.5 h",  buildConcurrency: "1 / 30 min / 2 cores",  templateStorage: "30 GB cap · no free allowance",    egress: "Package mirrors only" },
+  tier2: { id: "tier2", condition: "Settled top-up ≥ $25",      concurrencyVcpu: 40,  sessionLimit: "24 h",    buildHours: "10 h, grows with 30-day usage", buildConcurrency: "5 / 1 h / 2 cores", templateStorage: "500 GB cap · 100 GB free", egress: "20 GB/month free" },
+  tier3: { id: "tier3", condition: "≥ $500",                     concurrencyVcpu: 200, sessionLimit: "Unlimited", buildHours: "Floor 40 h",  buildConcurrency: "10 / 2 h / 4 cores", templateStorage: "Balance pre-check · 100 GB free", egress: "20 GB/month free" },
+  tier4: { id: "tier4", condition: "≥ $2,000",                   concurrencyVcpu: 400, sessionLimit: "Unlimited", buildHours: "Floor 100 h", buildConcurrency: "20 / 2 h / 4 cores", templateStorage: "Balance pre-check · 250 GB free", egress: "100 GB/month free", provisional: true },
+  tier5: { id: "tier5", condition: "Committed-volume contract",  concurrencyVcpu: "Per contract", sessionLimit: "Unlimited", buildHours: "Per contract", buildConcurrency: "Per contract", templateStorage: "Per contract", egress: "Per contract", provisional: true },
 };
 
 // ── Formatting (§10) ────────────────────────────────────────────────────────
