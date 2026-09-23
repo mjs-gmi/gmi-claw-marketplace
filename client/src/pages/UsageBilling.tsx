@@ -599,6 +599,7 @@ function AgentDetail({ agentId, onOpenSandbox }: { agentId: string; onOpenSandbo
               <th style={thStyle}>Status</th>
               <th style={thStyle}>Last launched</th>
               <th style={{ ...thStyle, textAlign: "right" }}>Archives in</th>
+              <th style={{ ...thStyle, width: 40 }} />
             </tr></thead>
             <tbody>
               {templates.map((t) => <TemplateRow key={t.id} t={t} />)}
@@ -611,11 +612,19 @@ function AgentDetail({ agentId, onOpenSandbox }: { agentId: string; onOpenSandbo
 }
 
 function TemplateRow({ t }: { t: TemplateRecord }) {
+  const [, setLocation] = useLocation();
   const left = daysToArchive(t);
   const soon = left !== null && left <= ARCHIVE_WARN_DAYS;
   const color = t.status === "ready" ? C.ok : t.status === "building" ? C.warn : t.status === "error" ? C.err : C.muted;
   return (
-    <tr>
+    // Read-only, but it leads somewhere: My Agents is where a template can
+    // actually be rebuilt or deleted. A billing page is not.
+    <tr
+      onClick={() => setLocation("/dashboard")}
+      style={{ cursor: "pointer" }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(221,234,77,0.05)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+    >
       <td style={tdStyle}>{t.name}<div style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>{t.id}</div></td>
       <td style={{ ...tdStyle, fontFamily: MONO, color: C.muted }}>{t.version}</td>
       <td style={tdStyle}>
@@ -628,6 +637,7 @@ function TemplateRow({ t }: { t: TemplateRecord }) {
       <td style={{ ...tdStyle, textAlign: "right", fontFamily: MONO, color: soon ? C.warn : C.muted }}>
         {left === null ? "—" : `${left} d`}
       </td>
+      <td style={{ ...tdStyle, textAlign: "right", width: 40 }}><Chevron /></td>
     </tr>
   );
 }

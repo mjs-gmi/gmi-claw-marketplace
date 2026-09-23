@@ -1599,11 +1599,12 @@ function daysIdle(agent: MyAgent, instances: Instance[] = []): number | null {
 const AGENT_IDLE_DAYS: Record<string, number> = { agent_openclaw: 78 };
 
 function AgentListItem({
-  agent, agg, image, selected, onClick, onEditTemplate, onDeleteTemplate, onLaunch,
+  agent, agg, image, instances, selected, onClick, onEditTemplate, onDeleteTemplate, onLaunch,
 }: {
   agent: MyAgent;
   agg: AgentAggregate;
   image?: RuntimeImage;
+  instances: Instance[];
   selected: boolean;
   onClick: () => void;
   onEditTemplate: (agent: MyAgent) => void;
@@ -1617,18 +1618,8 @@ function AgentListItem({
     (agent.displayStatus ?? "idle");
 
   const tpl = templateViewFor(agent, image);
-
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  // Close menu on outside click
-  useEffect(() => {
-    if (!menuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [menuOpen]);
+  const idle = daysIdle(agent, instances);
+  const lastLaunched = idle === null ? "—" : idle === 0 ? "today" : idle === 1 ? "yesterday" : `${idle} days ago`;
 
   return (
     <div
@@ -1676,81 +1667,6 @@ function AgentListItem({
           )}
           <ListingStateBadge state={agent.listingState} />
         </div>
-        {/* Kebab menu — Edit / Delete template */}
-        <div ref={menuRef} style={{ position: "relative", flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
-          <button
-            aria-label="Template options"
-            onClick={() => setMenuOpen((o) => !o)}
-            style={{
-              width: 24, height: 24,
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-              background: menuOpen ? "rgba(255,255,255,0.06)" : "transparent",
-              border: `1px solid ${menuOpen ? C.border : "transparent"}`,
-              color: C.muted,
-              borderRadius: 6, cursor: "pointer",
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-              <circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" />
-            </svg>
-          </button>
-          {menuOpen && (
-            <div
-              style={{
-                position: "absolute", top: "calc(100% + 4px)", right: 0,
-                background: C.cardSolid,
-                border: `1px solid ${C.border}`,
-                borderRadius: 8,
-                padding: 4,
-                display: "flex", flexDirection: "column",
-                minWidth: 160,
-                zIndex: 20,
-                boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
-              }}
-            >
-              {tpl.launch && (
-                <button onClick={() => { setMenuOpen(false); onLaunch(agent); }} style={menuItemStyle(C.fg)}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
-                  Launch sandbox
-                </button>
-              )}
-              {tpl.logs && (
-                <button onClick={() => setMenuOpen(false)} style={menuItemStyle(C.fg)}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h10" /></svg>
-                  View build logs
-                </button>
-              )}
-              {tpl.rebuild && (
-                <button onClick={() => setMenuOpen(false)} style={menuItemStyle(C.fg)}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" /></svg>
-                  Rebuild
-                </button>
-              )}
-              {tpl.edit && (
-              <button
-                onClick={() => { setMenuOpen(false); onEditTemplate(agent); }}
-                style={menuItemStyle(C.fg)}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                </svg>
-                Edit template
-              </button>
-              )}
-              {/* Deleting the template deletes the agent — they are the same
-                  object — so there is one entry, and it says so. */}
-              <button
-                onClick={() => { setMenuOpen(false); onDeleteTemplate(agent); }}
-                style={menuItemStyle("#f87171")}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z"/>
-                </svg>
-                Delete agent
-              </button>
-            </div>
-          )}
-        </div>
       </div>
       {/* Two states, kept apart. The dot is the AGENT — are its sandboxes
           running. The chip below is its TEMPLATE — can a sandbox start at all.
@@ -1778,7 +1694,40 @@ function AgentListItem({
           </span>
         )}
       </div>
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 2 }}>
+        <span style={{ fontSize: 11, color: C.muted, whiteSpace: "nowrap" }}>
+          Last launched {lastLaunched}
+        </span>
+        {/* §1 — the actions are on the row, not behind a kebab. Which ones
+            exist follows the template's state: there is no Launch for an image
+            that has not been built, because that call can only 409. */}
+        <div onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex", gap: 4, flexShrink: 0 }}>
+          {tpl.launch && <RowLink label="Launch" onClick={() => onLaunch(agent)} />}
+          {tpl.logs && <RowLink label="View logs" onClick={() => {}} />}
+          {tpl.rebuild && <RowLink label="Rebuild" onClick={() => {}} />}
+          {tpl.edit && <RowLink label="Edit" onClick={() => onEditTemplate(agent)} />}
+          <RowLink label="Delete" danger onClick={() => onDeleteTemplate(agent)} />
+        </div>
+      </div>
     </div>
+  );
+}
+
+function RowLink({ label, danger, onClick }: { label: string; danger?: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        fontFamily: FONT, fontSize: 11, fontWeight: 500,
+        background: "transparent", color: danger ? C.err : C.muted,
+        border: "none", padding: "2px 4px", cursor: "pointer",
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.color = danger ? C.err : C.fg; }}
+      onMouseLeave={(e) => { e.currentTarget.style.color = danger ? C.err : C.muted; }}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -4600,7 +4549,7 @@ function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instan
 function AgentDetailPane({
   agent, instances, snapshots, image, onProvision, onAction, onOpenDetail, activeInstanceId,
   onPublishListing, onUnpublishListing,
-  onEditTemplate, onDismissSetup, canConvert = false,
+  onEditTemplate, onDeleteAgent, onDismissSetup, canConvert = false,
 }: {
   agent: MyAgent;
   instances: Instance[];
@@ -4613,6 +4562,7 @@ function AgentDetailPane({
   onOpenDetail: (id: string, tab?: DrawerTab) => void;
   activeInstanceId: string | null;
   onEditTemplate: (agent: MyAgent) => void;
+  onDeleteAgent: (agent: MyAgent) => void;
   /** Clears the first-run panel without configuring anything. */
   onDismissSetup: (agentId: string) => void;
   canConvert?: boolean;
@@ -4928,6 +4878,30 @@ function AgentDetailPane({
       )}
       {tab === "integration" && <IntegrationPane agent={agent} />}
       {tab === "analytics" && <AnalyticsPane agent={agent} instances={instances} snapshots={snapshots} />}
+
+      {/* §2 — the one place this agent can be deleted. Deleting the template
+          deletes the agent: they are the same object, so offering it twice
+          would imply they are separable. It sits at the bottom, away from the
+          edit controls, because it ends everything above it. */}
+      {tab === "monitor" && (
+        <section style={{ marginTop: 28, border: `1px solid rgba(248,113,113,0.28)`, borderRadius: 10, padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontFamily: FONT, fontSize: 13.5, fontWeight: 600, color: C.fg }}>Delete this agent</div>
+            <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, marginTop: 3, lineHeight: "17px" }}>
+              Removes the agent and its template together, and frees a slot against your quota.
+              {instances.filter((i) => i.agentId === agent.id && i.status !== "deleted").length > 0
+                ? " Its running sandboxes are deleted with it, along with their files."
+                : " It has no sandboxes to lose."}
+            </div>
+          </div>
+          <button
+            onClick={() => onDeleteAgent(agent)}
+            style={{ flexShrink: 0, fontFamily: FONT, fontSize: 12.5, fontWeight: 600, color: C.err, background: "transparent", border: `1px solid rgba(248,113,113,0.5)`, borderRadius: 8, padding: "7px 14px", cursor: "pointer" }}
+          >
+            Delete agent
+          </button>
+        </section>
+      )}
     </div>
   );
 }
@@ -6341,6 +6315,7 @@ export default function Dashboard() {
                   agent={agent}
                   agg={aggregateFor(instances, agent.id)}
                   image={runtimeImages[agent.id]}
+                  instances={instances}
                   selected={agent.id === selected?.id}
                   onClick={() => setSelectedId(agent.id)}
                   onEditTemplate={handleEditTemplate}
@@ -6370,6 +6345,7 @@ export default function Dashboard() {
               onOpenDetail={openDetail}
               activeInstanceId={drawer?.id ?? null}
               onEditTemplate={handleEditTemplate}
+              onDeleteAgent={handleDeleteTemplate}
               onDismissSetup={dismissSetup}
               canConvert
             />
