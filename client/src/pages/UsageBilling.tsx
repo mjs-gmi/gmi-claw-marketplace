@@ -4,20 +4,18 @@ import { C, FONT, MONO } from "@/lib/tokens";
 import V2Badge from "@/components/V2Badge";
 import V21Badge from "@/components/V21Badge";
 import {
-  BILLING_ITEMS, ITEM_LABEL, ITEM_COLOR, ITEM_BLURB, V21_ITEMS, RATE,
-  money2, money4, rate6, sumRounded, specDetail, runningRate, pausedRate,
+  BILLING_ITEMS_2_0, ITEM_LABEL, ITEM_COLOR, ITEM_BLURB, V21_ITEMS,
+  money2, money4, rate6, sumRounded, round2, specDetail, runningRate, pausedRate,
   type BillingItem,
 } from "@/lib/billingModel";
 import {
   BILLING_MONTH, DATA_AS_OF, MONTH_OPTIONS, BILLING_STARTS, metered,
   INFERENCE_MODELS, INFERENCE_MODELS_MORE, INFERENCE_TOTAL, INFERENCE_ROWS,
   STUDIO_TOTAL, STUDIO_ROWS, inferenceSeries, USAGE_PERIOD,
-  SANDBOXES, sandboxById, sandboxRunning, sandboxItem, sandboxMinutes, sandboxVersion,
+  SANDBOXES, sandboxById, sandboxRunning, sandboxItem, sandboxVersion,
   sandboxesForAgent, agentRows, agentTotal, agentById,
   MODEL_USAGE, modelUsageFor, modelNet,
-  TEMPLATES, templatesForAgent, daysToArchive, ARCHIVE_AFTER_DAYS,
-  EGRESS, EGRESS_ATTRIBUTABLE, MODEL_USAGE_ATTRIBUTABLE,
-  egressUsedGB, egressBillableGB, EGRESS_FREE_GB, SNAPSHOT_FREE_GB, TERMINATE_AT,
+  templatesForAgent, daysToArchive, TERMINATE_AT,
   itemTotal, periodListTotal, periodBilledTotal,
   type UsageScope, type SandboxState, type SandboxUsage, type TemplateRecord,
 } from "@/lib/billingUsage";
@@ -240,118 +238,40 @@ function TokenScopeView({ total, rows }: { total: number; rows: typeof INFERENCE
   );
 }
 
-// ── §P3 item drill-downs ────────────────────────────────────────────────────
-// Every amount in the by-item view leads somewhere, and each list ends in an
-// action. Storage and egress were previously numbers a user could see and not
-// act on: they could tell they were over the allowance and had no way to find
-// out what was responsible.
-function ItemDrilldown({ item, onClose }: { item: BillingItem; onClose: () => void }) {
-  const head = (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 18px", borderBottom: `1px solid ${C.borderSoft}`, background: "rgba(255,255,255,0.02)" }}>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 13.5, fontWeight: 600, color: C.fg }}>
-        <span style={{ width: 8, height: 8, borderRadius: 2, background: ITEM_COLOR[item] }} />
-        {ITEM_LABEL[item]}
-        {V21_ITEMS.includes(item) && <V21Badge />}
-      </span>
-      <button onClick={onClose} style={{ fontFamily: FONT, fontSize: 12, background: "transparent", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
-        Close
-      </button>
-    </div>
-  );
-  const del = () => (
-    <button style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 500, background: "transparent", color: C.err, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
-      Delete
-    </button>
-  );
-  const notMetered = (what: string) => (
-    <div style={{ padding: "20px 18px", fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "19px" }}>
-      Metering not yet available.{BILLING_STARTS[item] ? ` Billing starts ${BILLING_STARTS[item]}.` : ""}
-      <div style={{ marginTop: 6 }}>When it is live, this lists {what}.</div>
-    </div>
-  );
-
+// ── Cost breakdown ──────────────────────────────────────────────────────────
+// Three cells, summing to the header total. This replaces the by-billing-item
+// page: with Egress out of 2.0 and Templates free, there are exactly three
+// things being charged for, and a separate page holding three numbers is a
+// navigation step that answers nothing. It becomes four cells when Snapshots
+// land, and only then is it worth asking whether it needs a page of its own.
+//
+// The by-agent view is the one worth building out. Account-level cost-by-type
+// is what everyone ships; per-agent money is not.
+function CostBreakdown({ rows }: { rows: ReturnType<typeof agentRows> }) {
+  const cells = BILLING_ITEMS_2_0.map((item) => ({
+    item,
+    amount: round2(
+      item === "running" ? sumRounded(rows.map((r) => r.running))
+      : item === "paused" ? sumRounded(rows.map((r) => r.paused))
+      : sumRounded(rows.map((r) => r.modelUsage)),
+    ),
+  }));
   return (
-    <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", marginTop: 12 }}>
-      {head}
-
-      {/* §P3 — there is no Template storage list. Templates are not billed:
-          they are capped by count, and that limit lives on the quota page. A
-          cost list for something with no cost is a question generator. */}
-      {item === "egress" && (
-        !metered("egress") ? notMetered("outbound traffic per sandbox") :
-        EGRESS_ATTRIBUTABLE ? (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>
-              <th style={thStyle}>Sandbox</th><th style={thStyle}>Agent</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>Outbound</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>Cost</th>
-            </tr></thead>
-            <tbody>
-              {EGRESS.map((e) => {
-                const sb = sandboxById(e.sandboxId);
-                return (
-                  <tr key={e.sandboxId}>
-                    <td style={tdStyle}>{sb?.name ?? e.sandboxId}<div style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>{e.sandboxId}</div></td>
-                    <td style={{ ...tdStyle, color: C.muted }}>{sb ? agentById(sb.agentId)?.name : "—"}</td>
-                    <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{e.bytesGB.toFixed(1)} GB</td>
-                    <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: C.muted }}>after allowance</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        ) : (
-          <div style={{ padding: "20px 18px", fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "19px" }}>
-            Not attributable by sandbox. Outbound traffic is metered for the account as a whole.
-            <div style={{ marginTop: 8 }}>
-              <a href="/deploy" style={{ fontFamily: FONT, fontSize: 12.5, fontWeight: 600, color: C.lime, textDecoration: "none" }}>
-                Review template network settings →
-              </a>
-            </div>
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${cells.length}, minmax(0,1fr))`, gap: 12, marginBottom: 20 }}>
+      {cells.map(({ item, amount }) => (
+        <div key={item} style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 9, padding: "13px 15px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 12, color: C.muted }}>
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: ITEM_COLOR[item] }} />
+            {ITEM_LABEL[item]}
           </div>
-        )
-      )}
-
-      {item === "model_usage" && (
-        MODEL_USAGE_ATTRIBUTABLE ? (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>
-              <th style={thStyle}>Sandbox</th><th style={thStyle}>Agent</th><th style={thStyle}>Model</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>Tokens</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>Cost</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>Credit</th>
-            </tr></thead>
-            <tbody>
-              {MODEL_USAGE.map((m, i) => {
-                const sb = sandboxById(m.sandboxId);
-                return (
-                  <tr key={i}>
-                    <td style={tdStyle}>{sb?.name ?? m.sandboxId}</td>
-                    <td style={{ ...tdStyle, color: C.muted }}>{sb ? agentById(sb.agentId)?.name : "—"}</td>
-                    <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>{m.model}</td>
-                    <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{(m.tokens / 1e6).toFixed(1)}M</td>
-                    <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money2(m.amount)}</td>
-                    <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: m.creditApplied > 0 ? C.ok : C.muted }}>
-                      {m.creditApplied > 0 ? `−${money2(m.creditApplied)}` : "—"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        ) : (
-          <div style={{ padding: "20px 18px", fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "19px" }}>
-            Not attributable by sandbox. Model calls are metered for the account as a whole while API key attribution is connected.
+          <div style={{ fontFamily: MONO, fontSize: 19, fontWeight: 600, color: amount > 0 ? C.fg : C.muted, marginTop: 5 }}>
+            {money2(amount)}
           </div>
-        )
-      )}
-
-      {item === "snapshot_storage" && notMetered("every snapshot with its source sandbox, size and cost")}
-      {item === "running" && (
-        <div style={{ padding: "18px", fontFamily: FONT, fontSize: 13, color: C.muted }}>
-          Broken down by agent — switch to <span style={{ color: C.fg }}>By agent</span> above.
+          <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, marginTop: 3, lineHeight: "15px" }}>
+            {ITEM_BLURB[item]}
+          </div>
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -362,8 +282,6 @@ function ItemDrilldown({ item, onClose }: { item: BillingItem; onClose: () => vo
 // model calls. The row shows all four so the shape of the bill is visible
 // without opening anything; the detail views are for "which sandbox" and "which
 // hour", which are different questions.
-type AgentboxView = "agent" | "item";
-
 const V21_MARK = (item: BillingItem) => V21_ITEMS.includes(item);
 
 /** §P1 — a meter that does not exist yet shows "—", never $0. */
@@ -397,33 +315,8 @@ function VersionTag({ v }: { v: "v1" | "v2" | "v1+v2" }) {
   );
 }
 
-function AllowanceBar({ label, used, free, unit, note, v21, unavailable }: {
-  label: string; used: number; free: number; unit: string; note?: string; v21?: boolean; unavailable?: boolean;
-}) {
-  const pct = Math.min(100, (used / free) * 100);
-  const over = used > free;
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, opacity: unavailable ? 0.55 : 1 }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 12.5, color: C.fg }}>
-          {label}{v21 && <V21Badge />}
-        </span>
-        <span style={{ fontFamily: MONO, fontSize: 12, color: unavailable ? C.muted : over ? C.warn : C.muted }}>
-          {unavailable ? `— / ${free} ${unit}` : `${used.toFixed(used < 10 ? 1 : 0)} / ${free} ${unit}`}
-        </span>
-      </div>
-      <div style={{ height: 5, borderRadius: 999, background: "rgba(255,255,255,0.07)", overflow: "hidden" }}>
-        {!unavailable && <div style={{ width: `${pct}%`, height: "100%", background: over ? C.warn : C.lime }} />}
-      </div>
-      <span style={{ fontFamily: FONT, fontSize: 11, color: unavailable ? C.muted : over ? C.warn : C.muted, lineHeight: "15px" }}>
-        {unavailable ? "Metering not yet available" : note}
-      </span>
-    </div>
-  );
-}
-
 function BillingEmptyState() {
-  const live = BILLING_ITEMS.filter((i) => !V21_ITEMS.includes(i));
+  const live = BILLING_ITEMS_2_0;
   return (
     <Card>
       <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, marginBottom: 4 }}>No Agentbox usage yet</div>
@@ -449,9 +342,7 @@ function BillingEmptyState() {
 }
 
 function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
-  const [view, setView] = useState<AgentboxView>("agent");
   const [range, setRange] = useState<string>(BILLING_MONTH.label);
-  const [openItem, setOpenItem] = useState<BillingItem | null>(null);
 
   const rows = useMemo(() => agentRows(), []);
   const listTotal = periodListTotal();
@@ -486,8 +377,10 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
           <Segmented value={range} options={[BILLING_MONTH.label, "30d", "7d", "24hr"]} onChange={setRange} size="sm" />
         </div>
 
-        {/* One bar per agent, split by what it spent on — the same chart shape as
-            before, but the legend is the billing items rather than two columns. */}
+        {/* The three things 2.0 charges for, summing to the total above. */}
+        <CostBreakdown rows={rows} />
+
+        {/* One bar per agent, split by what it spent on. */}
         <div style={{ display: "flex", flexDirection: "column", gap: 13 }}>
           {rows.map((a) => {
             const total = agentTotal(a);
@@ -495,7 +388,6 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
               { item: "running", amount: a.running },
               { item: "paused", amount: a.paused },
               { item: "model_usage", amount: a.modelUsage },
-              { item: "egress", amount: a.egress ?? 0 },
             ];
             return (
               <div key={a.agentId} style={{ display: "grid", gridTemplateColumns: "165px minmax(0,1fr) 110px", gap: 14, alignItems: "center" }}>
@@ -521,7 +413,7 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 16, marginTop: 18, flexWrap: "wrap" }}>
-          {(["running", "paused", "model_usage", "egress"] as BillingItem[]).map((it) => (
+          {BILLING_ITEMS_2_0.map((it) => (
             <span key={it} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 11.5, color: metered(it) ? C.fg : C.muted }}>
               <span style={{ width: 8, height: 8, borderRadius: 2, background: ITEM_COLOR[it], opacity: metered(it) ? 1 : 0.4 }} />
               {ITEM_LABEL[it]}
@@ -529,36 +421,15 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
           ))}
         </div>
 
-        {/* §P1 — allowances belong to a whole calendar month at account scope. */}
-        <div style={{ marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.borderSoft}` }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 13 }}>
-            <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>Free allowances</span>
-            <V2Badge title="New in V2 — template storage, egress and snapshot storage each carry a free allowance." />
-            <Link href="/settings/quotas" style={{ fontFamily: FONT, fontSize: 12, color: C.link, textDecoration: "none" }}>Quotas →</Link>
-          </div>
-          {wholeMonth ? (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 20 }}>
-              <AllowanceBar label="Egress" used={egressUsedGB} free={EGRESS_FREE_GB} unit="GB"
-                unavailable={!metered("egress")}
-                note={`Resets ${BILLING_MONTH.end.slice(0, 10)} · inbound is always free`} />
-              <AllowanceBar label="Snapshot storage" v21 used={0} free={SNAPSHOT_FREE_GB} unit="GB·mo"
-                unavailable note="" />
-            </div>
-          ) : (
-            <span style={{ display: "flex", alignItems: "flex-start", gap: 7, fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px" }}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 2 }}><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
-              Allowances and month-end projections are available in the monthly account view without filters.
-            </span>
-          )}
-        </div>
+        {/* No free allowances in 2.0. Templates are capped by count rather than
+            charged, and Egress is out of scope — the first allowance arrives
+            with Snapshots in 2.1, and lives on the quota page until then. An
+            empty "Free allowances" panel would only invite the question. */}
       </Card>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 0 12px", flexWrap: "wrap" }}>
-        <Segmented value={view === "agent" ? "By agent" : "By billing item"}
-                   options={["By agent", "By billing item"] as const}
-                   onChange={(v) => setView(v === "By agent" ? "agent" : "item")} size="sm" />
-        <V2Badge title="New in V2 — the by-item view is where account-level items and their drill-downs live." />
         <Dropdown value={range} options={MONTH_OPTIONS} onChange={setRange} width={185} />
+        <Link href="/settings/quotas" style={{ fontFamily: FONT, fontSize: 12.5, color: C.link, textDecoration: "none" }}>Quotas →</Link>
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Data updated as of {DATA_AS_OF}</span>
           <ExportButton />
@@ -566,7 +437,6 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
       </div>
 
       <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
-        {view === "agent" ? (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -575,7 +445,6 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
                 <th style={{ ...thStyle, textAlign: "right" }}>Running</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Paused</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Model usage</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>Egress</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Total</th>
                 <th style={{ ...thStyle, width: 44 }} />
               </tr>
@@ -602,7 +471,6 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
                   <td style={{ ...tdStyle, textAlign: "right" }}><Amount value={a.running} /></td>
                   <td style={{ ...tdStyle, textAlign: "right" }}><Amount value={a.paused} /></td>
                   <td style={{ ...tdStyle, textAlign: "right" }}><Amount value={a.modelUsage} /></td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}><Amount value={a.egress} item="egress" /></td>
                   <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>
                     {money2(agentTotal(a))}
                     {a.accruing && <div style={{ fontFamily: FONT, fontSize: 10.5, color: C.warn }}>In progress</div>}
@@ -612,78 +480,9 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
               ))}
             </tbody>
           </table>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th style={thStyle}>Billing item</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>Total usage</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>Free</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>Billable</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>Amount</th>
-                <th style={{ ...thStyle, width: 44 }} />
-              </tr>
-            </thead>
-            <tbody>
-              {BILLING_ITEMS.filter((i) => i !== "paused").map((item) => {
-                const amount = itemTotal(item);
-                return (
-                  <tr key={item}
-                      onClick={() => setOpenItem(openItem === item ? null : item)}
-                      style={{ cursor: "pointer" }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(221,234,77,0.05)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
-                    <td style={tdStyle}>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ width: 8, height: 8, borderRadius: 2, background: ITEM_COLOR[item] }} />
-                        {ITEM_LABEL[item]}
-                        {V21_MARK(item) && <V21Badge />}
-                      </span>
-                      <div style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted, marginTop: 2 }}>{ITEM_BLURB[item]}</div>
-                    </td>
-                    {/* §P3 — total, free and billable side by side, so the page
-                        reconciles against the invoice without arithmetic. */}
-                    <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: C.muted }}>{itemUsage(item)}</td>
-                    <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: C.muted }}>{itemFree(item)}</td>
-                    <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: C.muted }}>{itemBillable(item)}</td>
-                    <td style={{ ...tdStyle, textAlign: "right" }}><Amount value={amount} item={item} /></td>
-                    <td style={{ ...tdStyle, textAlign: "right" }}><Chevron /></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
       </div>
-      {view === "item" && openItem && <ItemDrilldown item={openItem} onClose={() => setOpenItem(null)} />}
     </>
   );
-}
-
-function itemUsage(item: BillingItem): string {
-  if (!metered(item)) return "—";
-  switch (item) {
-    case "running":          return `${(SANDBOXES.reduce((a, s) => a + sandboxMinutes(s), 0) / 60).toFixed(1)} h`;
-    case "model_usage":      return `${(MODEL_USAGE.reduce((a, m) => a + m.tokens, 0) / 1e6).toFixed(0)}M tokens`;
-    case "egress":           return `${egressUsedGB.toFixed(1)} GB`;
-    case "paused":           return `${(SANDBOXES.flatMap((s) => s.buckets).filter((b) => b.state === "paused").reduce((a, b) => a + b.minutes, 0) / 60).toFixed(1)} h`;
-    default:                 return "—";
-  }
-}
-function itemFree(item: BillingItem): string {
-  if (!metered(item)) return "—";
-  switch (item) {
-    case "egress":           return `${Math.min(egressUsedGB, EGRESS_FREE_GB).toFixed(1)} GB`;
-    case "model_usage":      return MODEL_USAGE.some((m) => m.creditApplied > 0) ? "credits applied" : "—";
-    default:                 return "—";
-  }
-}
-function itemBillable(item: BillingItem): string {
-  if (!metered(item)) return "—";
-  switch (item) {
-    case "egress":           return `${egressBillableGB.toFixed(1)} GB`;
-    default:                 return itemUsage(item);
-  }
 }
 
 // ── §P1a Agent detail ───────────────────────────────────────────────────────
@@ -695,14 +494,14 @@ function AgentDetail({ agentId, onOpenSandbox }: { agentId: string; onOpenSandbo
   const templates = templatesForAgent(agentId);
   if (!a) return <div style={{ fontFamily: FONT, color: C.muted }}>No usage recorded for this agent.</div>;
 
-  // Three cost types in 2.0; Egress becomes the fourth once its meter is live.
-  // Templates are not here — they cost nothing, and a $0 card invites the
-  // question "why is my template storage free this month".
-  const split: { item: BillingItem; amount: number | null }[] = [
+  // The same three cells as the list header, scoped to this agent, and summing
+  // to its total. Templates are not here: they cost nothing, and a $0 card
+  // invites the question "why is my template storage free this month".
+  // Snapshot storage becomes a fourth cell when Snapshots ship in 2.1.
+  const split: { item: BillingItem; amount: number }[] = [
     { item: "running", amount: a.running },
     { item: "paused", amount: a.paused },
     { item: "model_usage", amount: a.modelUsage },
-    { item: "egress", amount: a.egress },
   ];
 
   return (

@@ -12,7 +12,7 @@
 
 import {
   RATE, HOURS_PER_MONTH, STANDARD_SPECS, runningRate, pausedRate, round4, sumRounded,
-  billedMinutes, perMinute,
+  billedMinutes, perMinute, round2,
   type BillingItem, type BillingStatus, type Spec,
 } from "./billingModel";
 
@@ -37,16 +37,12 @@ export const METER: Record<BillingItem, BillingStatus> = {
   running: "billed",
   paused: "billed",              // ships in 2.0
   model_usage: "billed",
-  egress: "no_meter",
-  snapshot_storage: "no_meter",  // 2.1
+  snapshot_storage: "no_meter",  // arrives with Snapshots in 2.1
 };
-export const BILLING_STARTS: Partial<Record<BillingItem, string>> = {
-  egress: "2026-11-01",
-};
+export const BILLING_STARTS: Partial<Record<BillingItem, string>> = {};
 export const metered = (i: BillingItem): boolean => METER[i] !== "no_meter";
 
-/** §P3 — whether the upstream can attribute these to a sandbox at all. */
-export const EGRESS_ATTRIBUTABLE = true;
+/** Whether model usage can be attributed to a sandbox via its API key. */
 export const MODEL_USAGE_ATTRIBUTABLE = true;
 
 /**
@@ -212,24 +208,11 @@ export function daysToArchive(t: TemplateRecord, today = "2026-09-22"): number |
 export const templatesForAgent = (agentId: string): TemplateRecord[] => TEMPLATES.filter((t) => t.agentId === agentId);
 export const TEMPLATE_COUNT = TEMPLATES.filter((t) => !t.deletedAt).length;
 
-// ── Egress ──────────────────────────────────────────────────────────────────
-export interface EgressRow { sandboxId: string; bytesGB: number }
-export const EGRESS: EgressRow[] = [
-  { sandboxId: "sbx_e5d130", bytesGB: 18.2 },
-  { sandboxId: "sbx_a11c84", bytesGB: 5.1 },
-  { sandboxId: "sbx_2b90ff", bytesGB: 3.1 },
-];
-export const egressFor = (sandboxId: string): number =>
-  EGRESS.find((e) => e.sandboxId === sandboxId)?.bytesGB ?? 0;
-
 // ── Allowances ──────────────────────────────────────────────────────────────
-// Templates have no allowance because they have no charge — they have a COUNT
-// limit, which lives on the quota page.
-export const EGRESS_FREE_GB = 20;
+// Nothing in 2.0 carries a free allowance: Templates have a count limit rather
+// than a charge, and Egress is out of scope. Snapshot storage brings the first
+// one, with Snapshots, in 2.1.
 export const SNAPSHOT_FREE_GB = 50;
-
-export const egressUsedGB = EGRESS.reduce((a, e) => a + e.bytesGB, 0);
-export const egressBillableGB = Math.max(0, egressUsedGB - EGRESS_FREE_GB);
 
 // ── Agent rollup — what P1 lists ────────────────────────────────────────────
 export interface AgentRow {
@@ -243,7 +226,6 @@ export interface AgentRow {
   running: number;
   paused: number;
   modelUsage: number;
-  egress: number | null;   // null = no meter, which is not zero
   templates: number;       // a count, not a cost
 }
 
@@ -274,10 +256,6 @@ export function agentRows(): AgentRow[] {
       running: sumRounded(boxes.map((b) => sandboxItem(b, "running"))),
       paused: sumRounded(boxes.map((b) => sandboxItem(b, "paused"))),
       modelUsage: sumRounded(boxes.flatMap((b) => modelUsageFor(b.id).map(modelNet))),
-      // §P1 — "—", not $0: nothing is counting egress yet.
-      egress: metered("egress")
-        ? round4(boxes.reduce((a, b) => a + egressFor(b.id), 0) * RATE.egressGB)
-        : null,
       templates: templatesForAgent(agentId).length,
     };
   }).sort((a, b) => agentTotal(b) - agentTotal(a));
@@ -285,7 +263,7 @@ export function agentRows(): AgentRow[] {
 
 /** Only metered items count toward a total anyone is being asked to pay. */
 export function agentTotal(a: AgentRow): number {
-  return sumRounded([a.running, a.paused, a.modelUsage, a.egress ?? 0]);
+  return sumRounded([a.running, a.paused, a.modelUsage]);
 }
 export function agentById(agentId: string): AgentRow | undefined {
   return agentRows().find((a) => a.agentId === agentId);
@@ -297,11 +275,19 @@ export const itemTotal = (item: BillingItem): number | null => {
     case "running":     return sumRounded(SANDBOXES.map((s) => sandboxItem(s, "running")));
     case "paused":      return sumRounded(SANDBOXES.map((s) => sandboxItem(s, "paused")));
     case "model_usage": return sumRounded(MODEL_USAGE.map(modelNet));
-    case "egress":      return round4(egressBillableGB * RATE.egressGB);
     default:            return 0;
   }
 };
-export const periodListTotal = (): number => sumRounded(agentRows().map(agentTotal));
+/**
+ * The header total is the sum of the three breakdown cells, not the sum of the
+ * agent rows. Both are defensible, but they differ by a cent — rounding per
+ * agent and rounding per item take different paths — and only one of them can
+ * be right when the card sits directly under the number it is meant to explain.
+ * The card explains the total, so the total is built from the card.
+ */
+export const periodListTotal = (): number =>
+  (["running", "paused", "model_usage"] as BillingItem[])
+    .reduce((a, i) => a + round2(itemTotal(i) ?? 0), 0);
 export const periodBilledTotal = (): number => round4(periodListTotal() * (1 - ACCOUNT_DISCOUNT));
 
 // ── Quotas (§P4) ────────────────────────────────────────────────────────────

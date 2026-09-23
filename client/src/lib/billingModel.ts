@@ -18,12 +18,21 @@
  * in this union. Putting a zero-cost row in a cost list is how a customer ends
  * up asking why their template storage is free this month.
  */
+/**
+ * 2.0 bills three things. Egress is out of scope for this release entirely —
+ * not "metered later", out — and Templates cost nothing at all. Snapshot
+ * storage is specified here so the model is whole, but it arrives WITH the
+ * Snapshot feature in 2.1 and never before it: storage for a thing you cannot
+ * create is not a line item.
+ */
 export type BillingItem =
-  | "running" | "paused" | "model_usage" | "egress" | "snapshot_storage";
+  | "running" | "paused" | "model_usage" | "snapshot_storage";
 
 export const BILLING_ITEMS: BillingItem[] = [
-  "running", "paused", "model_usage", "egress", "snapshot_storage",
+  "running", "paused", "model_usage", "snapshot_storage",
 ];
+/** What 2.0 actually charges for — three cells, summing to the header total. */
+export const BILLING_ITEMS_2_0: BillingItem[] = ["running", "paused", "model_usage"];
 
 /**
  * §9 — these display names are used everywhere: page, legend, invoice and the
@@ -35,7 +44,6 @@ export const ITEM_LABEL: Record<BillingItem, string> = {
   running: "Running",
   paused: "Paused",
   model_usage: "Model usage",
-  egress: "Egress",
   snapshot_storage: "Snapshot storage",
 };
 
@@ -43,7 +51,6 @@ export const ITEM_COLOR: Record<BillingItem, string> = {
   running: "#DDEA4D",
   paused: "#2dd4bf",
   model_usage: "#fbbf24",
-  egress: "#f472b6",
   snapshot_storage: "#a78bfa",
 };
 
@@ -52,8 +59,7 @@ export const ITEM_BLURB: Record<BillingItem, string> = {
   running: "Billed per minute while running, by vCPU, memory and disk. No minimum.",
   paused: "Only disk is billed while a sandbox is paused — about 1% of the running rate.",
   model_usage: "Model calls from your sandboxes, at Inference rates. Coding Plan credits apply.",
-  egress: "Billed per GB beyond the free 20 GB per month. Inbound traffic is always free.",
-  snapshot_storage: "Billed per GB-month beyond the free 50 GB.",
+  snapshot_storage: "Billed per GB-month beyond the free 50 GB. Arrives with Snapshots in 2.1.",
 };
 
 /**
@@ -78,8 +84,7 @@ export const RATE = {
   vcpuHr: 0.0738,       // per vCPU hour
   ramGiBHr: 0.00759,    // per GiB hour
   diskGBHr: 0.000106,   // per GB hour
-  storageGBMonth: 0.03, // snapshot and template storage
-  egressGB: 0.15,
+  storageGBMonth: 0.03, // snapshot storage (2.1)
 } as const;
 
 /** A month for GB·month conversion. Stated so the arithmetic is auditable. */
@@ -160,16 +165,15 @@ export interface Tier {
   buildHours: string;
   buildConcurrency: string;
   templates: string;
-  egress: string;
   /** tier4-5 are extrapolated and not yet agreed. */
   provisional?: boolean;
 }
 export const TIERS: Record<TierId, Tier> = {
-  tier1: { id: "tier1", condition: "Email verified (default)", concurrencyVcpu: 4,   sessionLimit: "1 h",     buildHours: "2.5 h",  buildConcurrency: "1 / 30 min / 2 cores",  templates: "3",   egress: "Package mirrors only" },
-  tier2: { id: "tier2", condition: "Settled top-up ≥ $25",      concurrencyVcpu: 40,  sessionLimit: "24 h",    buildHours: "10 h, grows with 30-day usage", buildConcurrency: "5 / 1 h / 2 cores", templates: "20",  egress: "20 GB/month free" },
-  tier3: { id: "tier3", condition: "≥ $500",                     concurrencyVcpu: 200, sessionLimit: "Unlimited", buildHours: "Floor 40 h",  buildConcurrency: "10 / 2 h / 4 cores", templates: "50",  egress: "20 GB/month free" },
-  tier4: { id: "tier4", condition: "≥ $2,000",                   concurrencyVcpu: 400, sessionLimit: "Unlimited", buildHours: "Floor 100 h", buildConcurrency: "20 / 2 h / 4 cores", templates: "100", egress: "100 GB/month free", provisional: true },
-  tier5: { id: "tier5", condition: "Committed-volume contract",  concurrencyVcpu: "Per contract", sessionLimit: "Unlimited", buildHours: "Per contract", buildConcurrency: "Per contract", templates: "Per contract", egress: "Per contract", provisional: true },
+  tier1: { id: "tier1", condition: "Email verified (default)", concurrencyVcpu: 4,   sessionLimit: "1 h",     buildHours: "2.5 h",  buildConcurrency: "1 / 30 min / 2 cores",  templates: "3" },
+  tier2: { id: "tier2", condition: "Settled top-up ≥ $25",      concurrencyVcpu: 40,  sessionLimit: "24 h",    buildHours: "10 h, grows with 30-day usage", buildConcurrency: "5 / 1 h / 2 cores", templates: "20" },
+  tier3: { id: "tier3", condition: "≥ $500",                     concurrencyVcpu: 200, sessionLimit: "Unlimited", buildHours: "Floor 40 h",  buildConcurrency: "10 / 2 h / 4 cores", templates: "50" },
+  tier4: { id: "tier4", condition: "≥ $2,000",                   concurrencyVcpu: 400, sessionLimit: "Unlimited", buildHours: "Floor 100 h", buildConcurrency: "20 / 2 h / 4 cores", templates: "100", provisional: true },
+  tier5: { id: "tier5", condition: "Committed-volume contract",  concurrencyVcpu: "Per contract", sessionLimit: "Unlimited", buildHours: "Per contract", buildConcurrency: "Per contract", templates: "Per contract", provisional: true },
 };
 
 // ── Formatting (§10) ────────────────────────────────────────────────────────
@@ -194,6 +198,13 @@ export const rate6 = (n: number): string =>
 
 /** Detail amounts round to 4dp, and a total is the sum of those — see header. */
 export const round4 = (n: number): number => Math.round(n * 10_000) / 10_000;
+/**
+ * Summary rounding. The breakdown card sits directly under the total it
+ * explains, so the two must agree on screen: three cells showing 1.75 / 0.20 /
+ * 11355.54 beside a total of 11357.50 is a penny nobody can account for. Both
+ * sides round to cents first, then add — so what is displayed is what adds up.
+ */
+export const round2 = (n: number): number => Math.round(n * 100) / 100;
 export const sumRounded = (xs: number[]): number => xs.reduce((a, x) => a + round4(x), 0);
 
 /**

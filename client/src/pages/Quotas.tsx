@@ -5,7 +5,7 @@ import V21Badge from "@/components/V21Badge";
 import { TIERS, RATE, rate6, type TierId } from "@/lib/billingModel";
 import {
   ACCOUNT_TIER, QUOTA, BILLING_MONTH, SANDBOXES, isAccruing, agentById,
-  egressUsedGB, EGRESS_FREE_GB, SNAPSHOT_FREE_GB, metered,
+  SNAPSHOT_FREE_GB,
 } from "@/lib/billingUsage";
 
 // ─── Settings › Quotas & account tier (§P4) ─────────────────────────────────
@@ -100,7 +100,6 @@ export default function Quotas() {
                   ["Session limit", (t: TierId) => TIERS[t].sessionLimit],
                   ["Build time / month", (t: TierId) => TIERS[t].buildHours],
                   ["Templates", (t: TierId) => TIERS[t].templates],
-                  ["Egress", (t: TierId) => TIERS[t].egress],
                 ] as const).map(([label, get]) => (
                   <tr key={label}>
                     <td style={{ fontFamily: FONT, fontSize: 12, color: C.muted, padding: "9px 20px", borderTop: `1px solid ${C.borderSoft}`, whiteSpace: "nowrap" }}>{label}</td>
@@ -158,9 +157,10 @@ export default function Quotas() {
                note="Validated before the build starts, so an oversize image fails fast rather than after a long build." />
         </Section>
 
-        <Section title="Templates and traffic" aside={<span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Resets {BILLING_MONTH.end}</span>}>
+        <Section title="Templates and allowances" aside={<span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Resets {BILLING_MONTH.end}</span>}>
           <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 4px", lineHeight: "18px" }}>
             A cap refuses the request. An allowance does not — usage beyond it is billed at the rate shown.
+            Nothing in 2.0 carries an allowance: the first one arrives with Snapshots.
           </p>
           {/* §P4 — templates are capped by COUNT and cost nothing, so this is a
               refusal limit, not an allowance. At the cap Register is rejected
@@ -174,13 +174,6 @@ export default function Quotas() {
                </>} />
           <Row label="Image size per build" used="—" limit={`${QUOTA.imageSizeCapGB} GB`}
                note="Checked when a build is submitted. A larger image is refused, not charged." />
-          <Row label="Egress allowance"
-               used={metered("egress") ? `${egressUsedGB.toFixed(1)} GB` : "—"}
-               limit={tier.id === "tier1" ? "Package mirrors only" : `${EGRESS_FREE_GB} GB`}
-               warn={metered("egress") && tier.id !== "tier1" && egressUsedGB > EGRESS_FREE_GB}
-               note={tier.id === "tier1"
-                 ? "On tier1 outbound traffic reaches package mirrors only and is not metered."
-                 : metered("egress") ? `Beyond the allowance: ${rate6(RATE.egressGB)}/GB · inbound is always free` : "Metering not yet available"} />
           <Row label="Snapshot storage allowance" v21 used="—" limit={`${SNAPSHOT_FREE_GB} GB·mo`}
                note="Snapshots ship in 2.1." />
         </Section>
