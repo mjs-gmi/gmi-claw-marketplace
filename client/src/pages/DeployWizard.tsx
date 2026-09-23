@@ -10,7 +10,7 @@ import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
 import { isPlanEligibleModel, discountPriceString, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
 import { ALL_MODELS, isStandardModel, getModel, paygUsdPer1M, type CatalogModel } from "@/lib/pricingModel";
 import V2Badge from "@/components/V2Badge";
-import { TEMPLATE_QUOTA, buildHoursLeft } from "@/lib/templates";
+import { TEMPLATE_QUOTA, buildHoursLeft, agentsAtLimit } from "@/lib/templates";
 import {
   CostNotice, InsufficientCredits, TopUpCredits, RedeemCoupon, LeaveRegistration,
   hasAcknowledged, acknowledge,
@@ -2268,6 +2268,7 @@ export default function DeployWizard() {
   const [showInsufficient, setShowInsufficient] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   const [showCoupon, setShowCoupon] = useState(false);
+  const [quotaRejected, setQuotaRejected] = useState(false);
   // v1.2 §B6 — leaving mid-registration discards what was typed; confirm first.
   const [showLeave, setShowLeave] = useState(false);
 
@@ -2398,6 +2399,9 @@ export default function DeployWizard() {
         ];
 
   const submitRegistration = () => {
+    // §3 — the form opens even at the limit and fails on submit with a reason.
+    // A disabled Register teaches nothing and sends the user to support.
+    if (agentsAtLimit()) { setQuotaRejected(true); return; }
     // v1.3 §E4 — registering spends credits; surface the shortfall instead of a
     // submit that would fail.
     if (!hasCredits) { setShowInsufficient(true); return; }
@@ -2485,6 +2489,18 @@ export default function DeployWizard() {
             <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 400, lineHeight: "16px", color: C.muted, margin: "2px 0 0" }}>
               Configure infrastructure and register your Agent. List it on the Agentbox after testing.
             </p>
+            {/* §3 — the two limits that can refuse this form, and no price:
+                registering and building are free, and a sandbox's rate belongs
+                at Launch, beside the Spec that sets it. */}
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 12, marginTop: 8, fontFamily: FONT, fontSize: 12, color: C.muted }}>
+              <span>
+                <span style={{ fontFamily: MONO, color: C.fg }}>{buildHoursLeft().toFixed(1)} h</span> build time left this month
+              </span>
+              <span style={{ color: C.borderSoft }}>·</span>
+              <span>
+                Agents <span style={{ fontFamily: MONO, color: agentsAtLimit() ? C.warn : C.fg }}>{TEMPLATE_QUOTA.used} / {TEMPLATE_QUOTA.allowed}</span>
+              </span>
+            </div>
           </div>
 
           <div style={{ display: "inline-flex", flexShrink: 0, border: `1px solid ${C.border}`, borderRadius: 10, background: C.cardSolid, padding: 3, gap: 3 }}>
@@ -2691,6 +2707,37 @@ export default function DeployWizard() {
       )}
       {showCoupon && (
         <RedeemCoupon onClose={() => setShowCoupon(false)} onApply={() => { setShowCoupon(false); setHasCredits(true); }} />
+      )}
+
+      {/* §3 — four things: which quota, used against limit, what to do, where
+          to look. And that it is a count limit, never a charge. */}
+      {quotaRejected && (
+        <div onClick={() => setQuotaRejected(false)} style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(0,0,0,0.78)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 460, maxWidth: "100%", background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ width: 26, height: 26, borderRadius: 999, background: "rgba(251,191,36,0.16)", border: "1px solid rgba(251,191,36,0.5)", display: "inline-flex", alignItems: "center", justifyContent: "center", color: C.warn }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><path d="M12 8v5M12 16h.01" /></svg>
+              </span>
+              <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>
+                Agents {TEMPLATE_QUOTA.used} / {TEMPLATE_QUOTA.allowed}
+              </h3>
+            </div>
+            <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "19px", margin: 0 }}>
+              Delete an agent you are not using, or top up to upgrade to{" "}
+              <span style={{ color: C.fg }}>{TEMPLATE_QUOTA.nextTier.name}</span> for {TEMPLATE_QUOTA.nextTier.agents} agents.
+              <br />
+              <span style={{ fontSize: 12 }}>Agents and their templates are free — this is a count limit, not a charge.</span>
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+              <button onClick={() => setQuotaRejected(false)} style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, background: "transparent", color: C.fg, border: `1px solid ${C.border}`, padding: "7px 14px", borderRadius: 8, cursor: "pointer" }}>
+                Keep editing
+              </button>
+              <button onClick={() => setLocation("/dashboard")} style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, background: C.lime, color: C.limeText, border: "none", padding: "7px 14px", borderRadius: 8, cursor: "pointer" }}>
+                Go to My Agents
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* v1.2 §B6 — Cancel discards everything typed so far, so confirm first */}

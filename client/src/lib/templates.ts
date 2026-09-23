@@ -1,9 +1,14 @@
 // ─── Templates ──────────────────────────────────────────────────────────────
-// Templates are free. They have no price, no size on screen, and they do not
-// appear anywhere in Usage & Billing — the same line E2B draws. What they do
-// have is three numbers that give a user a reason to clean up: how many exist
-// against the tier limit, how much build time is left this month, and how long
-// until an unused one is archived.
+// Templates are free, and they have no page of their own: a template IS an
+// agent's image, so it lives inside My Agents as a column and a detail block.
+// Nothing about them appears in Usage & Billing — the same line E2B draws.
+//
+// Because an agent and its template are one-to-one, the quota is counted in
+// AGENTS. That keeps one number on screen instead of two that must always
+// agree, and it is the number the user can act on: delete an agent, free a
+// slot. It rests on an assumption the Billing spec also flags — a template
+// always has an agent. A template created straight through the SDK must
+// therefore get an agent record too, or the count silently under-reports.
 //
 // This lives outside the billing module on purpose. It was in there while
 // template storage was still a line item; keeping it there now would be an
@@ -80,7 +85,7 @@ export const templatesForAgent = (agentId: string): TemplateRecord[] =>
   TEMPLATES.filter((t) => t.agentId === agentId && !t.deletedAt);
 export const liveTemplates = (): TemplateRecord[] => TEMPLATES.filter((t) => !t.deletedAt);
 
-// ── Quota (the only numbers a template surface shows) ───────────────────────
+// ── Quota — counted in agents, because agent and template are one-to-one ────
 export const TEMPLATE_QUOTA = {
   used: liveTemplates().length,
   allowed: 20,
@@ -91,8 +96,38 @@ export const TEMPLATE_QUOTA = {
   buildTimeout: "1 h",
   buildCores: 2,
   /** What the next tier would give, for the upgrade half of a rejection. */
-  nextTier: { name: "tier3", templates: 50 },
+  nextTier: { name: "tier3", agents: 50 },
 };
 export const buildHoursLeft = (): number =>
   Math.max(0, TEMPLATE_QUOTA.buildHoursAllowed - TEMPLATE_QUOTA.buildHoursUsed);
-export const templatesAtLimit = (): boolean => TEMPLATE_QUOTA.used >= TEMPLATE_QUOTA.allowed;
+export const agentsAtLimit = (): boolean => TEMPLATE_QUOTA.used >= TEMPLATE_QUOTA.allowed;
+
+/** What a row may do, by the state of its template. */
+export function templateActions(t?: TemplateRecord): { launch: boolean; edit: boolean; rebuild: boolean; logs: boolean } {
+  if (!t) return { launch: false, edit: true, rebuild: false, logs: false };
+  switch (t.status) {
+    // Nothing can launch from an image that is not built. Offering it anyway
+    // produces a 409 the user cannot act on.
+    case "building": return { launch: false, edit: false, rebuild: false, logs: true };
+    case "error":    return { launch: false, edit: true,  rebuild: true,  logs: true };
+    case "archived": return { launch: false, edit: true,  rebuild: true,  logs: false };
+    case "ready":    return { launch: true,  edit: true,  rebuild: true,  logs: false };
+  }
+}
+/** One line: "Ready · v5", "Building 3:12", "Error · arm64 not supported". */
+export function templateSummary(t?: TemplateRecord): { label: string; color: "ok" | "warn" | "err" | "muted"; note?: string } {
+  if (!t) return { label: "No template", color: "muted" };
+  if (t.status === "building") {
+    return { label: `Building ${t.buildingForSec !== undefined ? buildElapsed(t.buildingForSec) : ""}`.trim(), color: "warn" };
+  }
+  if (t.status === "error") return { label: "Error", color: "err", note: t.buildError };
+  if (t.status === "archived") return { label: "Archived", color: "muted" };
+  const left = daysToArchive(t);
+  return {
+    label: `Ready · ${t.version}`,
+    color: "ok",
+    note: left !== null && left <= ARCHIVE_WARN_DAYS ? `Archives in ${left} d` : undefined,
+  };
+}
+export const templateForAgent = (agentId: string): TemplateRecord | undefined =>
+  TEMPLATES.find((t) => t.agentId === agentId && !t.deletedAt);

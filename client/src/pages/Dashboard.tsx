@@ -16,6 +16,7 @@ import V2Badge from "@/components/V2Badge";
 import TerminalV2 from "@/components/TerminalV2";
 import NoApiBadge, { NoApiNote, NO_API_REASON } from "@/components/NoApiBadge";
 import V21Badge, { V21Note } from "@/components/V21Badge";
+import { TEMPLATE_QUOTA, agentsAtLimit } from "@/lib/templates";
 import SdkPlaygroundV2 from "@/components/SdkPlaygroundV2";
 import OpenQuestionBadge from "@/components/OpenQuestionBadge";
 import { REVIEW_MODE } from "@/lib/reviewMode";
@@ -1545,21 +1546,77 @@ function ListingStateBadge({ state }: { state?: ListingState }) {
   );
 }
 
+/**
+ * The template's state, derived from the build status this page already
+ * tracks. A second store of template records would be a second truth about the
+ * same object — and the one that goes stale, because only this one is wired to
+ * the build simulation.
+ */
+interface TemplateView {
+  label: string;
+  color: string;
+  note?: string;
+  launch: boolean;
+  edit: boolean;
+  rebuild: boolean;
+  logs: boolean;
+}
+function templateViewFor(agent: MyAgent, image?: RuntimeImage): TemplateView {
+  const v = buildView(image);
+  const version = agentVersionName(agent.id, agent.name).split("-").pop();
+  switch (v) {
+    case "building":
+    case "waiting":
+      return { label: "Building", color: C.warn, launch: false, edit: false, rebuild: false, logs: true };
+    case "error":
+      return { label: "Error", color: C.err, note: image?.buildError, launch: false, edit: true, rebuild: true, logs: true };
+    case "missing":
+      return { label: "No template", color: C.muted, launch: false, edit: true, rebuild: false, logs: false };
+    case "unknown":
+      return { label: image?.buildStatus ?? "Unknown", color: C.muted, launch: true, edit: true, rebuild: true, logs: false };
+    case "ready": {
+      // Inactivity is a template's only clock, and the nudge that replaces a
+      // storage charge: an unused one is archived at 90 days.
+      const idle = daysIdle(agent);
+      const left = idle === null ? null : Math.max(0, 90 - idle);
+      return {
+        label: `Ready · ${version ?? "v1"}`,
+        color: C.ok,
+        note: left !== null && left <= 21 ? `Archives in ${left} d` : undefined,
+        launch: true, edit: true, rebuild: true, logs: false,
+      };
+    }
+  }
+}
+/** Days since this agent last launched a sandbox; null when it never has. */
+function daysIdle(agent: MyAgent, instances: Instance[] = []): number | null {
+  const mine = instances.filter((i) => i.agentId === agent.id);
+  if (mine.length === 0) return AGENT_IDLE_DAYS[agent.id] ?? null;
+  const latest = mine.map((i) => Date.parse(i.created.replace(" ", "T"))).sort((a, b) => b - a)[0];
+  return Math.floor((Date.now() - latest) / 86_400_000);
+}
+/** Seeded idle ages, so the archive warning is reachable in review. */
+const AGENT_IDLE_DAYS: Record<string, number> = { agent_openclaw: 78 };
+
 function AgentListItem({
-  agent, agg, selected, onClick, onEditTemplate, onDeleteTemplate,
+  agent, agg, image, selected, onClick, onEditTemplate, onDeleteTemplate, onLaunch,
 }: {
   agent: MyAgent;
   agg: AgentAggregate;
+  image?: RuntimeImage;
   selected: boolean;
   onClick: () => void;
   onEditTemplate: (agent: MyAgent) => void;
   onDeleteTemplate: (agent: MyAgent) => void;
+  onLaunch: (agent: MyAgent) => void;
 }) {
   const status: AgentStatus =
     agg.error > 0 ? "error" :
     agg.creating > 0 ? "creating" :
     agg.active > 0 ? "running" :
     (agent.displayStatus ?? "idle");
+
+  const tpl = templateViewFor(agent, image);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -1651,6 +1708,25 @@ function AgentListItem({
                 boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
               }}
             >
+              {tpl.launch && (
+                <button onClick={() => { setMenuOpen(false); onLaunch(agent); }} style={menuItemStyle(C.fg)}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+                  Launch sandbox
+                </button>
+              )}
+              {tpl.logs && (
+                <button onClick={() => setMenuOpen(false)} style={menuItemStyle(C.fg)}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h10" /></svg>
+                  View build logs
+                </button>
+              )}
+              {tpl.rebuild && (
+                <button onClick={() => setMenuOpen(false)} style={menuItemStyle(C.fg)}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" /></svg>
+                  Rebuild
+                </button>
+              )}
+              {tpl.edit && (
               <button
                 onClick={() => { setMenuOpen(false); onEditTemplate(agent); }}
                 style={menuItemStyle(C.fg)}
@@ -1660,6 +1736,9 @@ function AgentListItem({
                 </svg>
                 Edit template
               </button>
+              )}
+              {/* Deleting the template deletes the agent — they are the same
+                  object — so there is one entry, and it says so. */}
               <button
                 onClick={() => { setMenuOpen(false); onDeleteTemplate(agent); }}
                 style={menuItemStyle("#f87171")}
@@ -1667,12 +1746,16 @@ function AgentListItem({
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z"/>
                 </svg>
-                Delete template
+                Delete agent
               </button>
             </div>
           )}
         </div>
       </div>
+      {/* Two states, kept apart. The dot is the AGENT — are its sandboxes
+          running. The chip below is its TEMPLATE — can a sandbox start at all.
+          Collapsing them hides the case that matters most: an agent with
+          nothing running because its image failed to build. */}
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <span
           style={{
@@ -1683,6 +1766,17 @@ function AgentListItem({
         <span style={{ fontSize: 12, fontWeight: 500, color: C.muted, lineHeight: "16px" }}>
           {agg.active === 0 ? "No running sandboxes" : `${agg.active} running sandbox${agg.active === 1 ? "" : "es"}`}
         </span>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: C.muted }}>Template</span>
+        <span style={{ display: "inline-flex", fontFamily: FONT, fontSize: 11, color: tpl.color, background: `${tpl.color}1f`, border: `1px solid ${tpl.color}55`, padding: "1px 7px", borderRadius: 5 }}>
+          {tpl.label}
+        </span>
+        {tpl.note && (
+          <span style={{ fontSize: 11, color: tpl.color === C.err ? C.muted : C.warn, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+            {tpl.note}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -4651,6 +4745,9 @@ function AgentDetailPane({
       {image && (() => {
         const view = buildView(image);
         const state = buildChip(view, image.buildStatus);
+        const tplv = templateViewFor(agent, image);
+        const acts = { logs: tplv.logs, rebuild: tplv.rebuild, edit: tplv.edit };
+        const tplNote = tplv.note;
         const field = (k: string, v: React.ReactNode) => (
           <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
             <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>{k}</span>
@@ -4690,15 +4787,39 @@ function AgentDetailPane({
             {field("Image", `${image.url}:${image.tag}`)}
             {field("Spec", `${specName(agentSpecId(agent))} · ${specLabel(agentSpecId(agent))}`)}
             {field("IDC", regionLabel(agent.region))}
+            {/* Inactivity is the only clock a template has; it is the nudge
+                that replaces a storage charge. */}
+            {tplNote && <span style={{ fontFamily: FONT, fontSize: 11, color: C.warn }}>{tplNote}</span>}
             </div>
             <div style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-              <button
-                onClick={() => onEditTemplate(agent)}
-                title="Change the image, Spec or default IDC — every future Sandbox picks them up"
-                style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 500, color: C.fg, background: "transparent", border: `1px solid ${C.border}`, padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}
-              >
-                Edit Template
-              </button>
+              {/* The template block's own actions. Delete is NOT here: deleting
+                  the template deletes the agent, so it lives once, in the danger
+                  zone at the bottom of the page. */}
+              {acts.logs && (
+                <button
+                  title="The build output for this template"
+                  style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 500, color: C.fg, background: "transparent", border: `1px solid ${C.border}`, padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}
+                >
+                  Build logs
+                </button>
+              )}
+              {acts.rebuild && (
+                <button
+                  title="Build this template again from the same image"
+                  style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 500, color: C.fg, background: "transparent", border: `1px solid ${C.border}`, padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}
+                >
+                  Rebuild
+                </button>
+              )}
+              {acts.edit && (
+                <button
+                  onClick={() => onEditTemplate(agent)}
+                  title="Change the image, Spec or default IDC — every future Sandbox picks them up"
+                  style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 500, color: C.fg, background: "transparent", border: `1px solid ${C.border}`, padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}
+                >
+                  Edit Template
+                </button>
+              )}
             </div>
           </div>
         );
@@ -6153,6 +6274,29 @@ export default function Dashboard() {
               <PublishStatusEntry onOpen={() => setPublishStatusOpen(true)} />
             </div>
 
+            {/* An agent IS its template, so the template quota belongs here and
+                is counted in agents — one number to act on rather than two that
+                have to agree. Build time sits beside it because it is the other
+                thing that can refuse a registration. No storage figure: there
+                is no charge for it and no byte count to show. */}
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 22, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "9px 14px" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+                <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted }}>Agents</span>
+                <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600, color: agentsAtLimit() ? C.warn : C.fg }}>
+                  {TEMPLATE_QUOTA.used} / {TEMPLATE_QUOTA.allowed}
+                </span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+                <span style={{ fontFamily: FONT, fontSize: 10.5, color: C.muted }}>Build time this month</span>
+                <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600, color: TEMPLATE_QUOTA.buildHoursUsed / TEMPLATE_QUOTA.buildHoursAllowed >= 0.8 ? C.warn : C.fg }}>
+                  {TEMPLATE_QUOTA.buildHoursUsed} / {TEMPLATE_QUOTA.buildHoursAllowed} h
+                </span>
+              </div>
+              <Link href="/settings/quotas" style={{ marginLeft: "auto", fontFamily: FONT, fontSize: 11.5, color: C.link, textDecoration: "none", whiteSpace: "nowrap", alignSelf: "center" }}>
+                Quotas →
+              </Link>
+            </div>
+
             <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
               <span style={{ position: "absolute", left: 10, color: C.muted, display: "flex" }}>
                 <IconSearch />
@@ -6196,9 +6340,11 @@ export default function Dashboard() {
                   key={agent.id}
                   agent={agent}
                   agg={aggregateFor(instances, agent.id)}
+                  image={runtimeImages[agent.id]}
                   selected={agent.id === selected?.id}
                   onClick={() => setSelectedId(agent.id)}
                   onEditTemplate={handleEditTemplate}
+                  onLaunch={(a) => setProvisionForAgentId(a.id)}
                   onDeleteTemplate={handleDeleteTemplate}
                 />
               ))}

@@ -147,17 +147,17 @@ export default function Quotas() {
             limited is how many you keep and how long you spend building them.
             A storage figure here would reintroduce the idea that they cost
             money, which is exactly what this model removed. */}
-        <Section title="Templates">
+        <Section title="Agents">
           <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 4px", lineHeight: "18px" }}>
-            Building and storing templates is free. These limits <span style={{ color: C.fg }}>refuse</span> a
+            An agent carries one template. Registering and building are free; these limits <span style={{ color: C.fg }}>refuse</span> a
             request — they never produce a charge.
           </p>
-          <Row label="Templates" used={`${TEMPLATE_QUOTA.used}`} limit={`${TEMPLATE_QUOTA.allowed}`}
+          <Row label="Agents" used={`${TEMPLATE_QUOTA.used}`} limit={`${TEMPLATE_QUOTA.allowed}`}
                warn={TEMPLATE_QUOTA.used / TEMPLATE_QUOTA.allowed >= 0.8}
                note={<>
-                 At the limit, Register is rejected — delete one you are not using, or upgrade to{" "}
-                 {TEMPLATE_QUOTA.nextTier.name} for {TEMPLATE_QUOTA.nextTier.templates}.{" "}
-                 <Link href="/templates" style={{ color: C.link, textDecoration: "none" }}>See templates →</Link>
+                 At the limit, Register is rejected — delete an agent you are not using, or upgrade to{" "}
+                 {TEMPLATE_QUOTA.nextTier.name} for {TEMPLATE_QUOTA.nextTier.agents}.{" "}
+                 <Link href="/dashboard" style={{ color: C.link, textDecoration: "none" }}>See agents →</Link>
                </>} />
           <Row label="Build time (month)" used={`${TEMPLATE_QUOTA.buildHoursUsed} h`} limit={`${TEMPLATE_QUOTA.buildHoursAllowed} h`}
                warn={TEMPLATE_QUOTA.buildHoursUsed / TEMPLATE_QUOTA.buildHoursAllowed >= 0.8}

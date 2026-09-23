@@ -586,7 +586,7 @@ function AgentDetail({ agentId, onOpenSandbox }: { agentId: string; onOpenSandbo
       <div style={{ display: "flex", alignItems: "center", gap: 9, margin: "24px 0 10px" }}>
         <h2 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: 0 }}>Templates</h2>
         <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Free</span>
-        <Link href="/templates" style={{ fontFamily: FONT, fontSize: 12, color: C.link, textDecoration: "none" }}>Manage templates →</Link>
+        <Link href="/dashboard" style={{ fontFamily: FONT, fontSize: 12, color: C.link, textDecoration: "none" }}>Open in My Agents →</Link>
       </div>
       <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
         {templates.length === 0 ? (

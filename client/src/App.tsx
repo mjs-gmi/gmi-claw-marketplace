@@ -12,7 +12,6 @@ import DeployWizard from "./pages/DeployWizard";
 import Plans from "./pages/Plans";
 import UsageBilling from "./pages/UsageBilling";
 import Quotas from "./pages/Quotas";
-import Templates from "./pages/Templates";
 // Task-first pages (RunTask / Tasks / TaskDetail) are parked — the product follows
 // the existing Console structure (Browse Agents / My Agents / Register Template).
 
@@ -37,7 +36,6 @@ function Router() {
       <Route path={"/settings/usage/agentbox/:agentId"} component={UsageBilling} />
       <Route path={"/settings/usage/agentbox/:agentId/:sandboxId"} component={UsageBilling} />
       <Route path={"/settings/quotas"} component={Quotas} />
-      <Route path={"/templates"} component={Templates} />
       <Route component={NotFound} />
     </Switch>
   );
