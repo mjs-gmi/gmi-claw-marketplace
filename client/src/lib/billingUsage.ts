@@ -12,6 +12,7 @@
 
 import {
   RATE, HOURS_PER_MONTH, STANDARD_SPECS, runningRate, pausedRate, round4, sumRounded,
+  billedMinutes, perMinute,
   type BillingItem, type BillingStatus, type Spec,
 } from "./billingModel";
 
@@ -34,14 +35,12 @@ export const ACCOUNT_DISCOUNT = 0.10;
  */
 export const METER: Record<BillingItem, BillingStatus> = {
   running: "billed",
+  paused: "billed",              // ships in 2.0
   model_usage: "billed",
-  template_storage: "no_meter",
   egress: "no_meter",
-  paused: "no_meter",            // 2.1
   snapshot_storage: "no_meter",  // 2.1
 };
 export const BILLING_STARTS: Partial<Record<BillingItem, string>> = {
-  template_storage: "2026-11-01",
   egress: "2026-11-01",
 };
 export const metered = (i: BillingItem): boolean => METER[i] !== "no_meter";
@@ -61,8 +60,16 @@ export const RESOURCE_SPLIT_AVAILABLE = false;
 
 // ── Sandboxes ───────────────────────────────────────────────────────────────
 export type SandboxState = "running" | "paused" | "deleted" | "creating" | "error";
-/** §P2 — 2.0 has hourly buckets, not true segments. Same row shape either way. */
-export interface HourBucket { hourStart: string; minutes: number; amount: number }
+export type SegmentState = "running" | "paused";
+/**
+ * §P2 — 2.0 reports hourly buckets rather than true segments, and each bucket
+ * must carry its state: a paused hour prices at the paused rate, which is about
+ * 1% of running. Without `state` on the row the two are indistinguishable and
+ * a paused sandbox looks like it was billed as running.
+ *
+ * Billing returning `state` on /ce/usage is the open item this depends on.
+ */
+export interface HourBucket { hourStart: string; minutes: number; state: SegmentState; amount: number }
 
 export interface SandboxUsage {
   id: string;
@@ -79,64 +86,82 @@ export interface SandboxUsage {
   legacy?: { instanceType: string; durationLabel: string };
 }
 
-const bucket = (hourStart: string, minutes: number, hourlyRate: number): HourBucket =>
-  ({ hourStart, minutes, amount: round4(hourlyRate * (minutes / 60)) });
+/** Minutes are rounded up before pricing — see billedMinutes(). */
+const seg = (hourStart: string, minutes: number, state: SegmentState, sp: Spec, productName?: string): HourBucket => {
+  const hourly = state === "running" ? runningRate(sp, productName) : pausedRate(sp, productName);
+  return { hourStart, minutes, state, amount: round4(perMinute(hourly) * minutes) };
+};
 
 const MEDIUM = STANDARD_SPECS.medium;
 const LARGE = STANDARD_SPECS.large;
 const CUSTOM: Spec = { vcpu: 3, ramGiB: 6, diskGB: 30 };
 
 export const SANDBOXES: SandboxUsage[] = [
+  // §P2 acceptance — `medium` runs one hour.
   {
     id: "sbx_7c41a9", name: "nightly-scrape", agentId: "wickwood3",
     region: "us-central-iowa1", productName: "medium", spec: MEDIUM,
     state: "deleted", created: "2026-09-03 08:12:05", deleted: "2026-09-03 09:12:05",
-    buckets: [bucket("2026-09-03 08:00", 60, runningRate(MEDIUM, "medium"))],
+    buckets: [seg("2026-09-03 08:00", 60, "running", MEDIUM, "medium")],
   },
+  // §P2 acceptance — run 10 min, pause 20 min, resume. Three segments, the
+  // middle one at the paused price.
   {
     id: "sbx_2b90ff", name: "matchday-worker", agentId: "matchday",
     region: "us-central-iowa1", productName: "medium", spec: MEDIUM,
-    state: "deleted", created: "2026-09-07 09:20:44", deleted: "2026-09-07 12:20:44",
+    state: "deleted", created: "2026-09-07 09:20:44", deleted: "2026-09-07 10:00:44",
     buckets: [
-      bucket("2026-09-07 09:00", 39, runningRate(MEDIUM, "medium")),
-      bucket("2026-09-07 11:00", 9,  runningRate(MEDIUM, "medium")),
-      bucket("2026-09-07 12:00", 12, runningRate(MEDIUM, "medium")),
+      seg("2026-09-07 09:20", 10, "running", MEDIUM, "medium"),
+      seg("2026-09-07 09:30", 20, "paused",  MEDIUM, "medium"),
+      seg("2026-09-07 09:50", 10, "running", MEDIUM, "medium"),
     ],
   },
+  // A custom spec: priced by formula, no product code to look up.
   {
     id: "sbx_e5d130", name: "fde-batch-03", agentId: "fde-003",
-    region: "eu-de-frankfurt1", spec: CUSTOM,     // custom: no product code
+    region: "eu-de-frankfurt1", spec: CUSTOM,
     state: "running", created: "2026-09-21 13:05:00",
     buckets: [
-      bucket("2026-09-21 13:00", 55, runningRate(CUSTOM)),
-      bucket("2026-09-21 14:00", 60, runningRate(CUSTOM)),
-      bucket("2026-09-22 09:00", 40, runningRate(CUSTOM)),
+      seg("2026-09-21 13:00", 55, "running", CUSTOM),
+      seg("2026-09-21 14:00", 60, "running", CUSTOM),
+      seg("2026-09-22 09:00", 40, "running", CUSTOM),
     ],
   },
+  // Paused and still accruing disk — and the API returns no display_name.
   {
-    // §P2 — the API returns no display_name for this one, so the row is its id.
     id: "sbx_a11c84", name: "sbx_a11c84", agentId: "viva",
     region: "ap-sg-singapore1", productName: "large", spec: LARGE,
-    state: "running", created: undefined,
+    state: "paused", created: undefined,
     buckets: [
-      bucket("2026-09-16 03:00", 19, runningRate(LARGE, "large")),
-      bucket("2026-09-16 04:00", 60, runningRate(LARGE, "large")),
-      bucket("2026-09-16 05:00", 47, runningRate(LARGE, "large")),
+      seg("2026-09-16 03:00", 19,   "running", LARGE, "large"),
+      seg("2026-09-16 04:00", 60,   "running", LARGE, "large"),
+      seg("2026-09-16 05:00", 2880, "paused",  LARGE, "large"),
     ],
   },
+  // A 30-second run: one billed minute, and it must not render as $0.00.
   {
-    // §P1/§P2 — pre-redesign: one session row, original type, no split.
+    id: "sbx_0f77c2", name: "probe-run", agentId: "matchday",
+    region: "us-central-iowa1", productName: "medium", spec: MEDIUM,
+    state: "deleted", created: "2026-09-18 22:04:10", deleted: "2026-09-18 22:04:40",
+    buckets: [seg("2026-09-18 22:00", 1, "running", MEDIUM, "medium")],
+  },
+  // Pre-redesign: one session, original type, no hourly breakdown.
+  {
     id: "49d9a362…b104", name: "49d9a362…b104", agentId: "wickwood3",
     region: "us-central-iowa1", productName: "gmi.container.intel.x4660.small.ext",
     spec: STANDARD_SPECS.small, state: "deleted",
     created: "2026-07-09 11:39:34", deleted: "2026-07-10 22:18:34",
-    buckets: [{ hourStart: "2026-07-09 11:00", minutes: 2079, amount: 0.34 }],
+    buckets: [{ hourStart: "2026-07-09 11:00", minutes: 2079, state: "running", amount: 0.34 }],
     legacy: { instanceType: "gmi.container.intel.x4660.small.ext", durationLabel: "34 hours 39 minutes" },
   },
 ];
 
 export const sandboxById = (id: string): SandboxUsage | undefined => SANDBOXES.find((s) => s.id === id);
 export const sandboxRunning = (sb: SandboxUsage): number => sumRounded(sb.buckets.map((b) => b.amount));
+export const sandboxItem = (sb: SandboxUsage, state: SegmentState): number =>
+  sumRounded(sb.buckets.filter((b) => b.state === state).map((b) => b.amount));
+/** §P2 — shown in the header while an account is overdue. */
+export const TERMINATE_AT: string | null = null;
 export const sandboxMinutes = (sb: SandboxUsage): number => sb.buckets.reduce((a, b) => a + b.minutes, 0);
 export const isAccruing = (sb: SandboxUsage): boolean => sb.state === "running" || sb.state === "paused";
 export const sandboxVersion = (sb: SandboxUsage): "v1" | "v2" => (sb.legacy ? "v1" : "v2");
@@ -152,20 +177,40 @@ export const MODEL_USAGE: ModelUsageRow[] = [
 export const modelUsageFor = (sandboxId: string): ModelUsageRow[] => MODEL_USAGE.filter((m) => m.sandboxId === sandboxId);
 export const modelNet = (m: ModelUsageRow): number => round4(m.amount - m.creditApplied);
 
-// ── Templates (one per agent) ───────────────────────────────────────────────
-export interface TemplateStorage {
-  id: string; agentId: string; name: string; version: string;
-  sizeGB: number; lastLaunch: string; storedHours: number; deleted?: boolean;
+// ── Templates — lifecycle records, not a cost (§P1a / §P4) ─────────────────
+// Templates are not billed. They are capped by COUNT, enforced at Register, and
+// their lifecycle is recorded now so a future charge has a timeline to bill
+// from. `imageSizeBytes` is reserved and stays null until Runloop exposes it or
+// manifest reading lands — it is deliberately not rendered as a size of zero.
+export type TemplateStatus = "ready" | "building" | "error" | "archived";
+export interface TemplateRecord {
+  id: string;
+  agentId: string;
+  name: string;
+  version: string;
+  status: TemplateStatus;
+  createdAt: string;
+  readyAt?: string;
+  deletedAt?: string;
+  lastLaunch?: string;
+  imageSizeBytes: number | null;   // reserved
 }
-export const TEMPLATES: TemplateStorage[] = [
-  { id: "d6b808ba", agentId: "wickwood3", name: "wickwood3",           version: "v4",  sizeGB: 46, lastLaunch: "2026-09-03", storedHours: 730 },
-  { id: "7c1e0a44", agentId: "fde-003",   name: "FDE Agent 003-rev20", version: "v20", sizeGB: 38, lastLaunch: "2026-09-21", storedHours: 730 },
-  { id: "51a7fb30", agentId: "matchday",  name: "matchday",            version: "v2",  sizeGB: 16, lastLaunch: "2026-09-07", storedHours: 730 },
-  { id: "e9d31c87", agentId: "sevenTest", name: "sevenTest",           version: "v1",  sizeGB: 10, lastLaunch: "2026-07-09", storedHours: 48, deleted: true },
+export const TEMPLATES: TemplateRecord[] = [
+  { id: "d6b808ba", agentId: "wickwood3", name: "wickwood3",           version: "v4",  status: "ready",    createdAt: "2026-06-02", readyAt: "2026-06-02", lastLaunch: "2026-09-03", imageSizeBytes: null },
+  { id: "7c1e0a44", agentId: "fde-003",   name: "FDE Agent 003-rev20", version: "v20", status: "ready",    createdAt: "2026-08-14", readyAt: "2026-08-14", lastLaunch: "2026-09-21", imageSizeBytes: null },
+  { id: "51a7fb30", agentId: "matchday",  name: "matchday",            version: "v2",  status: "ready",    createdAt: "2026-07-20", readyAt: "2026-07-20", lastLaunch: "2026-09-07", imageSizeBytes: null },
+  { id: "e9d31c87", agentId: "sevenTest", name: "sevenTest",           version: "v1",  status: "ready",    createdAt: "2026-05-11", readyAt: "2026-05-11", lastLaunch: "2026-07-09", imageSizeBytes: null },
+  { id: "a40c2b91", agentId: "viva",      name: "viva",                version: "v3",  status: "building", createdAt: "2026-09-22", imageSizeBytes: null },
 ];
-export const templateGBh = (t: TemplateStorage): number => t.sizeGB * t.storedHours;
-export const templateCost = (t: TemplateStorage): number =>
-  round4((templateGBh(t) / HOURS_PER_MONTH) * RATE.storageGBMonth);
+export const ARCHIVE_AFTER_DAYS = 90;
+/** Days until a template with no launch is archived; null when it has none. */
+export function daysToArchive(t: TemplateRecord, today = "2026-09-22"): number | null {
+  if (!t.lastLaunch || t.status !== "ready") return null;
+  const gap = Math.floor((Date.parse(today) - Date.parse(t.lastLaunch)) / 86_400_000);
+  return Math.max(0, ARCHIVE_AFTER_DAYS - gap);
+}
+export const templatesForAgent = (agentId: string): TemplateRecord[] => TEMPLATES.filter((t) => t.agentId === agentId);
+export const TEMPLATE_COUNT = TEMPLATES.filter((t) => !t.deletedAt).length;
 
 // ── Egress ──────────────────────────────────────────────────────────────────
 export interface EgressRow { sandboxId: string; bytesGB: number }
@@ -178,13 +223,12 @@ export const egressFor = (sandboxId: string): number =>
   EGRESS.find((e) => e.sandboxId === sandboxId)?.bytesGB ?? 0;
 
 // ── Allowances ──────────────────────────────────────────────────────────────
-export const TEMPLATE_FREE_GB = 100;
+// Templates have no allowance because they have no charge — they have a COUNT
+// limit, which lives on the quota page.
 export const EGRESS_FREE_GB = 20;
 export const SNAPSHOT_FREE_GB = 50;
 
-export const templateGBmo = TEMPLATES.reduce((a, t) => a + templateGBh(t), 0) / HOURS_PER_MONTH;
 export const egressUsedGB = EGRESS.reduce((a, e) => a + e.bytesGB, 0);
-export const templateBillableGBmo = Math.max(0, templateGBmo - TEMPLATE_FREE_GB);
 export const egressBillableGB = Math.max(0, egressUsedGB - EGRESS_FREE_GB);
 
 // ── Agent rollup — what P1 lists ────────────────────────────────────────────
@@ -197,9 +241,10 @@ export interface AgentRow {
   deletedAt?: string;
   accruing: boolean;
   running: number;
+  paused: number;
   modelUsage: number;
-  templateStorage: number | null;   // null = no meter, which is not zero
-  egress: number | null;
+  egress: number | null;   // null = no meter, which is not zero
+  templates: number;       // a count, not a cost
 }
 
 const AGENT_META: Record<string, { name: string; templateId: string; deletedAt?: string }> = {
@@ -212,15 +257,12 @@ const AGENT_META: Record<string, { name: string; templateId: string; deletedAt?:
 export function sandboxesForAgent(agentId: string): SandboxUsage[] {
   return SANDBOXES.filter((s) => s.agentId === agentId);
 }
-export function templateForAgent(agentId: string): TemplateStorage | undefined {
-  return TEMPLATES.find((t) => t.agentId === agentId);
-}
+
 
 export function agentRows(): AgentRow[] {
   return Object.entries(AGENT_META).map(([agentId, meta]) => {
     const boxes = sandboxesForAgent(agentId);
     const versions = new Set(boxes.map(sandboxVersion));
-    const tpl = templateForAgent(agentId);
     return {
       agentId,
       name: meta.name,
@@ -229,20 +271,21 @@ export function agentRows(): AgentRow[] {
       version: (versions.size > 1 ? "v1+v2" : (versions.values().next().value ?? "v2")) as AgentRow["version"],
       deletedAt: meta.deletedAt,
       accruing: boxes.some(isAccruing),
-      running: sumRounded(boxes.map(sandboxRunning)),
+      running: sumRounded(boxes.map((b) => sandboxItem(b, "running"))),
+      paused: sumRounded(boxes.map((b) => sandboxItem(b, "paused"))),
       modelUsage: sumRounded(boxes.flatMap((b) => modelUsageFor(b.id).map(modelNet))),
-      // §P1 — "—", not $0: nothing is counting these yet.
-      templateStorage: metered("template_storage") && tpl ? templateCost(tpl) : null,
+      // §P1 — "—", not $0: nothing is counting egress yet.
       egress: metered("egress")
         ? round4(boxes.reduce((a, b) => a + egressFor(b.id), 0) * RATE.egressGB)
         : null,
+      templates: templatesForAgent(agentId).length,
     };
   }).sort((a, b) => agentTotal(b) - agentTotal(a));
 }
 
 /** Only metered items count toward a total anyone is being asked to pay. */
 export function agentTotal(a: AgentRow): number {
-  return sumRounded([a.running, a.modelUsage, a.templateStorage ?? 0, a.egress ?? 0]);
+  return sumRounded([a.running, a.paused, a.modelUsage, a.egress ?? 0]);
 }
 export function agentById(agentId: string): AgentRow | undefined {
   return agentRows().find((a) => a.agentId === agentId);
@@ -251,9 +294,9 @@ export function agentById(agentId: string): AgentRow | undefined {
 export const itemTotal = (item: BillingItem): number | null => {
   if (!metered(item)) return null;
   switch (item) {
-    case "running":     return sumRounded(SANDBOXES.map(sandboxRunning));
+    case "running":     return sumRounded(SANDBOXES.map((s) => sandboxItem(s, "running")));
+    case "paused":      return sumRounded(SANDBOXES.map((s) => sandboxItem(s, "paused")));
     case "model_usage": return sumRounded(MODEL_USAGE.map(modelNet));
-    case "template_storage": return round4(templateBillableGBmo * RATE.storageGBMonth);
     case "egress":      return round4(egressBillableGB * RATE.egressGB);
     default:            return 0;
   }
@@ -271,8 +314,11 @@ export const QUOTA = {
   buildTimeoutLabel: "1 h",
   buildCores: 2,
   sessionLimit: "24 h",
-  templateStorageUsedGB: 110,
-  templateStorageCapGB: 500,
+  /** §P4 — templates are limited by COUNT. There is no GB cap. */
+  templatesUsed: TEMPLATES.filter((t) => !t.deletedAt).length,
+  templatesAllowed: 20,
+  /** Checked at build submit; a template over this is refused, not charged. */
+  imageSizeCapGB: 30,
   archivingSoon: [
     { kind: "Template", name: "sevenTest", detail: "no launch for 74 days · archived at 90" },
   ],

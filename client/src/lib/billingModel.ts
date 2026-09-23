@@ -11,11 +11,18 @@
 //     acceptance case (30m run + 2h paused + 30m run = $0.1842) only comes out
 //     right that way, and it matches what a reader gets adding up the column.
 
+/**
+ * Templates are NOT billed. They are capped by count, enforced at Register, and
+ * their lifecycle is recorded so a future charge has a timeline to bill from —
+ * but nothing about them appears on an invoice, so nothing about them belongs
+ * in this union. Putting a zero-cost row in a cost list is how a customer ends
+ * up asking why their template storage is free this month.
+ */
 export type BillingItem =
-  | "running" | "paused" | "snapshot_storage" | "template_storage" | "egress" | "model_usage";
+  | "running" | "paused" | "model_usage" | "egress" | "snapshot_storage";
 
 export const BILLING_ITEMS: BillingItem[] = [
-  "running", "paused", "snapshot_storage", "template_storage", "egress", "model_usage",
+  "running", "paused", "model_usage", "egress", "snapshot_storage",
 ];
 
 /**
@@ -27,33 +34,26 @@ export const BILLING_ITEMS: BillingItem[] = [
 export const ITEM_LABEL: Record<BillingItem, string> = {
   running: "Running",
   paused: "Paused",
-  snapshot_storage: "Snapshot storage",
-  template_storage: "Template storage",
-  egress: "Egress",
   model_usage: "Model usage",
+  egress: "Egress",
+  snapshot_storage: "Snapshot storage",
 };
 
 export const ITEM_COLOR: Record<BillingItem, string> = {
   running: "#DDEA4D",
   paused: "#2dd4bf",
-  snapshot_storage: "#a78bfa",
-  template_storage: "#38bdf8",
-  egress: "#f472b6",
   model_usage: "#fbbf24",
+  egress: "#f472b6",
+  snapshot_storage: "#a78bfa",
 };
 
 /** §10 — one line each, for the empty state and the tooltips. */
 export const ITEM_BLURB: Record<BillingItem, string> = {
-  running: "Billed per second while running, by vCPU, memory and disk. No minimum.",
-  paused: "Only disk is billed while a sandbox is paused.",
-  snapshot_storage: "Billed per GB-month beyond the free 50 GB.",
-  template_storage: "Billed per GB-month beyond the free 100 GB. Building templates is free.",
-  egress: "Billed per GB beyond the free 20 GB per month. Inbound traffic is always free.",
+  running: "Billed per minute while running, by vCPU, memory and disk. No minimum.",
+  paused: "Only disk is billed while a sandbox is paused — about 1% of the running rate.",
   model_usage: "Model calls from your sandboxes, at Inference rates. Coding Plan credits apply.",
-};
-/** §9 — a tier with no allowance gets different copy, not a "free 0 GB". */
-export const ITEM_BLURB_NO_ALLOWANCE: Partial<Record<BillingItem, string>> = {
-  template_storage: "Billed per GB-month. This tier has no free allowance. Building templates is free.",
+  egress: "Billed per GB beyond the free 20 GB per month. Inbound traffic is always free.",
+  snapshot_storage: "Billed per GB-month beyond the free 50 GB.",
 };
 
 /**
@@ -61,7 +61,7 @@ export const ITEM_BLURB_NO_ALLOWANCE: Partial<Record<BillingItem, string>> = {
  * usage SHOULD attribute per sandbox; when the upstream cannot, they fall back
  * to account level, which is a degraded state and is labelled as one.
  */
-export const ACCOUNT_LEVEL: BillingItem[] = ["template_storage"];
+export const ACCOUNT_LEVEL: BillingItem[] = [];
 
 /**
  * Pause / Resume / Snapshot land in Agentbox 2.1. Their billing items are
@@ -71,7 +71,7 @@ export const ACCOUNT_LEVEL: BillingItem[] = ["template_storage"];
  * for the same reason the Terminal and Extend controls are drawn — a billing
  * model reviewed with two of its six items missing has not been reviewed.
  */
-export const V21_ITEMS: BillingItem[] = ["paused", "snapshot_storage"];
+export const V21_ITEMS: BillingItem[] = ["snapshot_storage"];
 
 // ── Rates ───────────────────────────────────────────────────────────────────
 export const RATE = {
@@ -159,33 +159,56 @@ export interface Tier {
   sessionLimit: string;
   buildHours: string;
   buildConcurrency: string;
-  templateStorage: string;
+  templates: string;
   egress: string;
   /** tier4-5 are extrapolated and not yet agreed. */
   provisional?: boolean;
 }
 export const TIERS: Record<TierId, Tier> = {
-  tier1: { id: "tier1", condition: "Email verified (default)", concurrencyVcpu: 4,   sessionLimit: "1 h",     buildHours: "2.5 h",  buildConcurrency: "1 / 30 min / 2 cores",  templateStorage: "30 GB cap · no free allowance",    egress: "Package mirrors only" },
-  tier2: { id: "tier2", condition: "Settled top-up ≥ $25",      concurrencyVcpu: 40,  sessionLimit: "24 h",    buildHours: "10 h, grows with 30-day usage", buildConcurrency: "5 / 1 h / 2 cores", templateStorage: "500 GB cap · 100 GB free", egress: "20 GB/month free" },
-  tier3: { id: "tier3", condition: "≥ $500",                     concurrencyVcpu: 200, sessionLimit: "Unlimited", buildHours: "Floor 40 h",  buildConcurrency: "10 / 2 h / 4 cores", templateStorage: "Balance pre-check · 100 GB free", egress: "20 GB/month free" },
-  tier4: { id: "tier4", condition: "≥ $2,000",                   concurrencyVcpu: 400, sessionLimit: "Unlimited", buildHours: "Floor 100 h", buildConcurrency: "20 / 2 h / 4 cores", templateStorage: "Balance pre-check · 250 GB free", egress: "100 GB/month free", provisional: true },
-  tier5: { id: "tier5", condition: "Committed-volume contract",  concurrencyVcpu: "Per contract", sessionLimit: "Unlimited", buildHours: "Per contract", buildConcurrency: "Per contract", templateStorage: "Per contract", egress: "Per contract", provisional: true },
+  tier1: { id: "tier1", condition: "Email verified (default)", concurrencyVcpu: 4,   sessionLimit: "1 h",     buildHours: "2.5 h",  buildConcurrency: "1 / 30 min / 2 cores",  templates: "3",   egress: "Package mirrors only" },
+  tier2: { id: "tier2", condition: "Settled top-up ≥ $25",      concurrencyVcpu: 40,  sessionLimit: "24 h",    buildHours: "10 h, grows with 30-day usage", buildConcurrency: "5 / 1 h / 2 cores", templates: "20",  egress: "20 GB/month free" },
+  tier3: { id: "tier3", condition: "≥ $500",                     concurrencyVcpu: 200, sessionLimit: "Unlimited", buildHours: "Floor 40 h",  buildConcurrency: "10 / 2 h / 4 cores", templates: "50",  egress: "20 GB/month free" },
+  tier4: { id: "tier4", condition: "≥ $2,000",                   concurrencyVcpu: 400, sessionLimit: "Unlimited", buildHours: "Floor 100 h", buildConcurrency: "20 / 2 h / 4 cores", templates: "100", egress: "100 GB/month free", provisional: true },
+  tier5: { id: "tier5", condition: "Committed-volume contract",  concurrencyVcpu: "Per contract", sessionLimit: "Unlimited", buildHours: "Per contract", buildConcurrency: "Per contract", templates: "Per contract", egress: "Per contract", provisional: true },
 };
 
 // ── Formatting (§10) ────────────────────────────────────────────────────────
 // Four decimals in detail, two in summaries, six for unit prices. Per-second
 // billing means a 30-second segment on `medium` is $0.0015 — at two decimals
 // the whole detail table reads "$0.00" and looks broken.
-export const money2 = (n: number): string =>
-  `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 export const money4 = (n: number): string =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`;
+/**
+ * Summaries use two decimals — except where that would turn a real charge into
+ * "$0.00". Per-minute billing makes small amounts ordinary: a 30-second run on
+ * `medium` is $0.0030 and 20 minutes paused is $0.0007, and rendering either as
+ * zero tells the customer they were not billed when they were. Below half a
+ * cent the number falls back to four decimals rather than rounding away.
+ */
+export const money2 = (n: number): string => {
+  if (n > 0 && n < 0.005) return money4(n);
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
 export const rate6 = (n: number): string =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: 6, maximumFractionDigits: 6 })}`;
 
 /** Detail amounts round to 4dp, and a total is the sum of those — see header. */
 export const round4 = (n: number): number => Math.round(n * 10_000) / 10_000;
 export const sumRounded = (xs: number[]): number => xs.reduce((a, x) => a + round4(x), 0);
+
+/**
+ * Billing granularity. The SKU spec says per second; Fiona's PRD says per
+ * minute rounded up. The page is built on the minute, because it is the one
+ * that changes a displayed number: a 30-second run bills as one minute, which
+ * is $0.0030 on `medium` rather than $0.0015. Both readings agree that it must
+ * not render as $0.00, which is what four decimals is for.
+ *
+ * Whichever wins, only this function changes.
+ */
+export function billedMinutes(seconds: number): number {
+  return Math.ceil(seconds / 60);
+}
+export const perMinute = (hourlyRate: number): number => hourlyRate / 60;
 
 export function durationLabel(seconds: number): string {
   const h = Math.floor(seconds / 3600);

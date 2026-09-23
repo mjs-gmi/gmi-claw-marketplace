@@ -5,21 +5,21 @@ import V2Badge from "@/components/V2Badge";
 import V21Badge from "@/components/V21Badge";
 import {
   BILLING_ITEMS, ITEM_LABEL, ITEM_COLOR, ITEM_BLURB, V21_ITEMS, RATE,
-  money2, money4, rate6, sumRounded, specDetail,
+  money2, money4, rate6, sumRounded, specDetail, runningRate, pausedRate,
   type BillingItem,
 } from "@/lib/billingModel";
 import {
   BILLING_MONTH, DATA_AS_OF, MONTH_OPTIONS, BILLING_STARTS, metered,
   INFERENCE_MODELS, INFERENCE_MODELS_MORE, INFERENCE_TOTAL, INFERENCE_ROWS,
   STUDIO_TOTAL, STUDIO_ROWS, inferenceSeries, USAGE_PERIOD,
-  SANDBOXES, sandboxById, sandboxRunning, sandboxMinutes, sandboxVersion,
-  sandboxesForAgent, templateForAgent, agentRows, agentTotal, agentById,
-  MODEL_USAGE, modelUsageFor, modelNet, TEMPLATES, templateCost, templateGBh,
-  EGRESS, egressFor, EGRESS_ATTRIBUTABLE, MODEL_USAGE_ATTRIBUTABLE,
-  templateGBmo, templateBillableGBmo, egressUsedGB, egressBillableGB,
-  TEMPLATE_FREE_GB, EGRESS_FREE_GB, SNAPSHOT_FREE_GB,
+  SANDBOXES, sandboxById, sandboxRunning, sandboxItem, sandboxMinutes, sandboxVersion,
+  sandboxesForAgent, agentRows, agentTotal, agentById,
+  MODEL_USAGE, modelUsageFor, modelNet,
+  TEMPLATES, templatesForAgent, daysToArchive, ARCHIVE_AFTER_DAYS,
+  EGRESS, EGRESS_ATTRIBUTABLE, MODEL_USAGE_ATTRIBUTABLE,
+  egressUsedGB, egressBillableGB, EGRESS_FREE_GB, SNAPSHOT_FREE_GB, TERMINATE_AT,
   itemTotal, periodListTotal, periodBilledTotal,
-  type UsageScope, type SandboxState, type SandboxUsage,
+  type UsageScope, type SandboxState, type SandboxUsage, type TemplateRecord,
 } from "@/lib/billingUsage";
 
 // ─── Settings › Usage & Billing ─────────────────────────────────────────────
@@ -274,38 +274,9 @@ function ItemDrilldown({ item, onClose }: { item: BillingItem; onClose: () => vo
     <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", marginTop: 12 }}>
       {head}
 
-      {item === "template_storage" && (
-        !metered("template_storage") ? notMetered("every template with its size, age and cost, and a delete action") : (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>
-              <th style={thStyle}>Template</th><th style={thStyle}>Agent</th><th style={thStyle}>Version</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>Size</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>Stored</th>
-              <th style={thStyle}>Last launch</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>Period cost</th>
-              <th style={{ ...thStyle, width: 90 }} />
-            </tr></thead>
-            <tbody>
-              {TEMPLATES.map((t) => (
-                <tr key={t.id}>
-                  <td style={tdStyle}>{t.name}<div style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>{t.id}</div></td>
-                  <td style={{ ...tdStyle, color: C.muted }}>
-                    {agentById(t.agentId)?.name ?? t.agentId}
-                    {t.deleted && <div style={{ fontSize: 11, color: C.warn }}>agent deleted</div>}
-                  </td>
-                  <td style={{ ...tdStyle, fontFamily: MONO, color: C.muted }}>{t.version}</td>
-                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{t.sizeGB} GB</td>
-                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: C.muted }}>{templateGBh(t).toLocaleString()} GB·h</td>
-                  <td style={{ ...tdStyle, color: C.muted }}>{t.lastLaunch}</td>
-                  <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money4(templateCost(t))}</td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}>{del()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )
-      )}
-
+      {/* §P3 — there is no Template storage list. Templates are not billed:
+          they are capped by count, and that limit lives on the quota page. A
+          cost list for something with no cost is a question generator. */}
       {item === "egress" && (
         !metered("egress") ? notMetered("outbound traffic per sandbox") :
         EGRESS_ATTRIBUTABLE ? (
@@ -522,8 +493,8 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
             const total = agentTotal(a);
             const parts: { item: BillingItem; amount: number }[] = [
               { item: "running", amount: a.running },
+              { item: "paused", amount: a.paused },
               { item: "model_usage", amount: a.modelUsage },
-              { item: "template_storage", amount: a.templateStorage ?? 0 },
               { item: "egress", amount: a.egress ?? 0 },
             ];
             return (
@@ -550,7 +521,7 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 16, marginTop: 18, flexWrap: "wrap" }}>
-          {(["running", "model_usage", "template_storage", "egress"] as BillingItem[]).map((it) => (
+          {(["running", "paused", "model_usage", "egress"] as BillingItem[]).map((it) => (
             <span key={it} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 11.5, color: metered(it) ? C.fg : C.muted }}>
               <span style={{ width: 8, height: 8, borderRadius: 2, background: ITEM_COLOR[it], opacity: metered(it) ? 1 : 0.4 }} />
               {ITEM_LABEL[it]}
@@ -567,9 +538,6 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
           </div>
           {wholeMonth ? (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 20 }}>
-              <AllowanceBar label="Template storage" used={templateGBmo} free={TEMPLATE_FREE_GB} unit="GB·mo"
-                unavailable={!metered("template_storage")}
-                note={templateBillableGBmo > 0 ? `${templateBillableGBmo.toFixed(2)} GB·mo billable` : "Within the free allowance"} />
               <AllowanceBar label="Egress" used={egressUsedGB} free={EGRESS_FREE_GB} unit="GB"
                 unavailable={!metered("egress")}
                 note={`Resets ${BILLING_MONTH.end.slice(0, 10)} · inbound is always free`} />
@@ -605,8 +573,8 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
                 <th style={thStyle}>Agent</th>
                 <th style={{ ...thStyle, width: 80 }}>Sandboxes</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Running</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Paused</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Model usage</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>Template storage</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Egress</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Total</th>
                 <th style={{ ...thStyle, width: 44 }} />
@@ -632,8 +600,8 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
                   </td>
                   <td style={{ ...tdStyle, fontFamily: MONO }}>{a.runs}</td>
                   <td style={{ ...tdStyle, textAlign: "right" }}><Amount value={a.running} /></td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}><Amount value={a.paused} /></td>
                   <td style={{ ...tdStyle, textAlign: "right" }}><Amount value={a.modelUsage} /></td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}><Amount value={a.templateStorage} item="template_storage" /></td>
                   <td style={{ ...tdStyle, textAlign: "right" }}><Amount value={a.egress} item="egress" /></td>
                   <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>
                     {money2(agentTotal(a))}
@@ -697,15 +665,14 @@ function itemUsage(item: BillingItem): string {
   switch (item) {
     case "running":          return `${(SANDBOXES.reduce((a, s) => a + sandboxMinutes(s), 0) / 60).toFixed(1)} h`;
     case "model_usage":      return `${(MODEL_USAGE.reduce((a, m) => a + m.tokens, 0) / 1e6).toFixed(0)}M tokens`;
-    case "template_storage": return `${templateGBmo.toFixed(2)} GB·mo`;
     case "egress":           return `${egressUsedGB.toFixed(1)} GB`;
+    case "paused":           return `${(SANDBOXES.flatMap((s) => s.buckets).filter((b) => b.state === "paused").reduce((a, b) => a + b.minutes, 0) / 60).toFixed(1)} h`;
     default:                 return "—";
   }
 }
 function itemFree(item: BillingItem): string {
   if (!metered(item)) return "—";
   switch (item) {
-    case "template_storage": return `${Math.min(templateGBmo, TEMPLATE_FREE_GB).toFixed(2)} GB·mo`;
     case "egress":           return `${Math.min(egressUsedGB, EGRESS_FREE_GB).toFixed(1)} GB`;
     case "model_usage":      return MODEL_USAGE.some((m) => m.creditApplied > 0) ? "credits applied" : "—";
     default:                 return "—";
@@ -714,7 +681,6 @@ function itemFree(item: BillingItem): string {
 function itemBillable(item: BillingItem): string {
   if (!metered(item)) return "—";
   switch (item) {
-    case "template_storage": return `${templateBillableGBmo.toFixed(2)} GB·mo`;
     case "egress":           return `${egressBillableGB.toFixed(1)} GB`;
     default:                 return itemUsage(item);
   }
@@ -726,13 +692,16 @@ function itemBillable(item: BillingItem): string {
 function AgentDetail({ agentId, onOpenSandbox }: { agentId: string; onOpenSandbox: (id: string) => void }) {
   const a = agentById(agentId);
   const boxes = sandboxesForAgent(agentId);
-  const tpl = templateForAgent(agentId);
+  const templates = templatesForAgent(agentId);
   if (!a) return <div style={{ fontFamily: FONT, color: C.muted }}>No usage recorded for this agent.</div>;
 
+  // Three cost types in 2.0; Egress becomes the fourth once its meter is live.
+  // Templates are not here — they cost nothing, and a $0 card invites the
+  // question "why is my template storage free this month".
   const split: { item: BillingItem; amount: number | null }[] = [
     { item: "running", amount: a.running },
+    { item: "paused", amount: a.paused },
     { item: "model_usage", amount: a.modelUsage },
-    { item: "template_storage", amount: a.templateStorage },
     { item: "egress", amount: a.egress },
   ];
 
@@ -809,37 +778,64 @@ function AgentDetail({ agentId, onOpenSandbox }: { agentId: string; onOpenSandbo
         </table>
       </div>
 
-      {/* Block 3 — its template's storage. */}
-      <h2 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: "24px 0 10px" }}>Template storage</h2>
+      {/* Block 3 — its templates. No cost column: templates are free and
+          limited by count, so what matters here is state and how close each one
+          is to being archived for inactivity. Comes from the Sandbox API, so it
+          does not wait on a storage meter. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 9, margin: "24px 0 10px" }}>
+        <h2 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: 0 }}>Templates</h2>
+        <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>
+          Free · counted against your tier limit
+        </span>
+        <Link href="/settings/quotas" style={{ fontFamily: FONT, fontSize: 12, color: C.link, textDecoration: "none" }}>Quotas →</Link>
+      </div>
       <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
-        {!metered("template_storage") ? (
-          <div style={{ padding: "20px 18px", fontFamily: FONT, fontSize: 13, color: C.muted, lineHeight: "19px" }}>
-            Metering not yet available.{BILLING_STARTS.template_storage ? ` Billing starts ${BILLING_STARTS.template_storage}.` : ""}
-            {tpl && <> This agent's template is <span style={{ color: C.fg }}>{tpl.name} {tpl.version}</span>, {tpl.sizeGB} GB.</>}
-          </div>
-        ) : tpl ? (
+        {templates.length === 0 ? (
+          <div style={{ padding: "20px 18px", fontFamily: FONT, fontSize: 13, color: C.muted }}>No templates on record.</div>
+        ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>
-              <th style={thStyle}>Template</th><th style={thStyle}>Version</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>Size</th>
+              <th style={thStyle}>Template</th>
+              <th style={thStyle}>Version</th>
+              <th style={thStyle}>Status</th>
               <th style={thStyle}>Last launch</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>Period cost</th>
+              <th style={{ ...thStyle, textAlign: "right" }}>Archived in</th>
+              <th style={{ ...thStyle, width: 90 }} />
             </tr></thead>
             <tbody>
-              <tr>
-                <td style={tdStyle}>{tpl.name}</td>
-                <td style={{ ...tdStyle, fontFamily: MONO, color: C.muted }}>{tpl.version}</td>
-                <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{tpl.sizeGB} GB</td>
-                <td style={{ ...tdStyle, color: C.muted }}>{tpl.lastLaunch}</td>
-                <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money4(templateCost(tpl))}</td>
-              </tr>
+              {templates.map((t) => <TemplateRow key={t.id} t={t} />)}
             </tbody>
           </table>
-        ) : (
-          <div style={{ padding: "20px 18px", fontFamily: FONT, fontSize: 13, color: C.muted }}>No template on record.</div>
         )}
       </div>
     </>
+  );
+}
+
+function TemplateRow({ t }: { t: TemplateRecord }) {
+  const left = daysToArchive(t);
+  const soon = left !== null && left <= 21;
+  const color = t.status === "ready" ? C.ok : t.status === "building" ? C.warn : t.status === "error" ? C.err : C.muted;
+  return (
+    <tr>
+      <td style={tdStyle}>{t.name}<div style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>{t.id}</div></td>
+      <td style={{ ...tdStyle, fontFamily: MONO, color: C.muted }}>{t.version}</td>
+      <td style={tdStyle}>
+        <span style={{ display: "inline-flex", fontFamily: FONT, fontSize: 11.5, color, background: `${color}1f`, border: `1px solid ${color}55`, padding: "2px 9px", borderRadius: 5 }}>
+          {t.status}
+        </span>
+      </td>
+      <td style={{ ...tdStyle, color: C.muted }}>{t.lastLaunch ?? "Never launched"}</td>
+      {/* Inactivity is the only clock on a template, so it is the column. */}
+      <td style={{ ...tdStyle, textAlign: "right", fontFamily: MONO, color: soon ? C.warn : C.muted }}>
+        {left === null ? "—" : `${left} d`}
+      </td>
+      <td style={{ ...tdStyle, textAlign: "right" }}>
+        <button style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 500, background: "transparent", color: C.err, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+          Delete
+        </button>
+      </td>
+    </tr>
   );
 }
 
@@ -854,7 +850,7 @@ function SandboxDetail({ sandboxId }: { sandboxId: string }) {
   if (!sb) return <div style={{ fontFamily: FONT, color: C.muted }}>No usage recorded for this sandbox.</div>;
 
   const models = modelUsageFor(sb.id);
-  const periodTotal = sandboxRunning(sb);
+  const periodTotal = sandboxRunning(sb);   // running + paused, summed by row
   const lifetime = periodTotal;   // single-period in the prototype
   const modelTotal = sumRounded(models.map(modelNet));
 
@@ -884,6 +880,14 @@ function SandboxDetail({ sandboxId }: { sandboxId: string }) {
             {/* §P2 — the API may not return a creation time. "—" beats a guess. */}
             {field("Created", sb.created ?? <span style={{ color: C.muted }} title="Not returned by the API">—</span>)}
             {sb.deleted && field("Deleted", sb.deleted)}
+            {/* Shown only while the account is overdue — the moment this sandbox
+                is torn down if the balance is not settled. */}
+            {TERMINATE_AT && (
+              <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
+                <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.warn }}>Terminates</span>
+                <span style={{ fontFamily: MONO, fontSize: 12, color: C.warn }}>{TERMINATE_AT}</span>
+              </span>
+            )}
           </div>
           {sb.legacy && (
             <div style={{ marginTop: 10, display: "inline-flex", alignItems: "flex-start", gap: 7, background: "rgba(255,255,255,0.03)", border: `1px solid ${C.borderSoft}`, borderRadius: 7, padding: "7px 11px", fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "16px" }}>
@@ -927,27 +931,45 @@ function SandboxDetail({ sandboxId }: { sandboxId: string }) {
             <>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr>
-                  <th style={thStyle}>Hour</th>
+                  <th style={thStyle}>Segment</th>
+                  <th style={thStyle}>From</th>
                   <th style={{ ...thStyle, textAlign: "right" }}>Billed minutes</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>Rate</th>
                   <th style={{ ...thStyle, textAlign: "right" }}>Amount</th>
                 </tr></thead>
                 <tbody>
-                  {sb.buckets.map((b) => (
-                    <tr key={b.hourStart}>
-                      <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>{b.hourStart}</td>
-                      <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{b.minutes} min</td>
-                      <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money4(b.amount)}</td>
-                    </tr>
-                  ))}
+                  {sb.buckets.map((b) => {
+                    const hourly = b.state === "running"
+                      ? runningRate(sb.spec, sb.productName)
+                      : pausedRate(sb.spec, sb.productName);
+                    return (
+                      <tr key={b.hourStart + b.state}>
+                        {/* §P2 — each segment carries its state, and a paused one
+                            prices at the paused rate: about 1% of running. Without
+                            the state on the row the two are indistinguishable and a
+                            paused sandbox looks billed as if it had been running. */}
+                        <td style={tdStyle}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ width: 8, height: 8, borderRadius: 2, background: ITEM_COLOR[b.state] }} />
+                            {b.state === "running" ? "Running" : "Paused"}
+                          </span>
+                        </td>
+                        <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>{b.hourStart}</td>
+                        <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{b.minutes} min</td>
+                        <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", color: C.muted }}>{money4(hourly)}/h</td>
+                        <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{money4(b.amount)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
-              {/* §P2 — the two things this table cannot yet show, said plainly
-                  rather than faked. The resource split must NOT be computed from
+              {/* §P2 — what this table still cannot show, said plainly rather
+                  than faked. The resource split must NOT be computed from
                   spec × rate: rates change and discounts multiply the total, so
                   a derived figure would not match the invoice. */}
               <div style={{ padding: "11px 18px", borderTop: `1px solid ${C.borderSoft}`, fontFamily: FONT, fontSize: 11.5, color: C.muted, lineHeight: "17px" }}>
-                Billed by the hour. Start and end of each run, and the vCPU / memory / disk split, are not returned yet —
-                they appear here once Billing provides them.
+                Minutes are rounded up — a 30-second run bills as one minute. Exact segment start and end, and the
+                vCPU / memory / disk split, are not returned yet; they appear here once Billing provides them.
               </div>
             </>
           )

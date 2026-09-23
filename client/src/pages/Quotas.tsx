@@ -5,8 +5,7 @@ import V21Badge from "@/components/V21Badge";
 import { TIERS, RATE, rate6, type TierId } from "@/lib/billingModel";
 import {
   ACCOUNT_TIER, QUOTA, BILLING_MONTH, SANDBOXES, isAccruing, agentById,
-  templateGBmo, egressUsedGB, TEMPLATE_FREE_GB, EGRESS_FREE_GB, SNAPSHOT_FREE_GB,
-  metered,
+  egressUsedGB, EGRESS_FREE_GB, SNAPSHOT_FREE_GB, metered,
 } from "@/lib/billingUsage";
 
 // ─── Settings › Quotas & account tier (§P4) ─────────────────────────────────
@@ -52,7 +51,7 @@ function Section({ title, children, aside }: { title: string; children: React.Re
 export default function Quotas() {
   const tier = TIERS[ACCOUNT_TIER as TierId];
   const buildPct = QUOTA.buildHoursUsed / QUOTA.buildHoursAllowed;
-  const tplPct = QUOTA.templateStorageUsedGB / QUOTA.templateStorageCapGB;
+  const tplPct = QUOTA.templatesUsed / QUOTA.templatesAllowed;
   const order: TierId[] = ["tier1", "tier2", "tier3", "tier4", "tier5"];
 
   return (
@@ -100,7 +99,7 @@ export default function Quotas() {
                   ["Concurrency", (t: TierId) => `${TIERS[t].concurrencyVcpu} vCPU`],
                   ["Session limit", (t: TierId) => TIERS[t].sessionLimit],
                   ["Build time / month", (t: TierId) => TIERS[t].buildHours],
-                  ["Template storage", (t: TierId) => TIERS[t].templateStorage],
+                  ["Templates", (t: TierId) => TIERS[t].templates],
                   ["Egress", (t: TierId) => TIERS[t].egress],
                 ] as const).map(([label, get]) => (
                   <tr key={label}>
@@ -121,8 +120,11 @@ export default function Quotas() {
         </Section>
 
         <Section title="Concurrency">
-          <Row label="Sandboxes running now" used={`${QUOTA.concurrencyUsedVcpu} vCPU`} limit={`${tier.concurrencyVcpu} vCPU`}
-               note={<>From 2.1, paused sandboxes count toward this too — pausing frees compute, not quota. <V21Badge /></>} />
+          {/* §P4 — paused sandboxes hold quota from 2.0. Pausing frees the
+              compute bill, not the seat, and a user at the limit who paused
+              everything and still cannot launch needs to read that here. */}
+          <Row label="Sandboxes holding quota" used={`${QUOTA.concurrencyUsedVcpu} vCPU`} limit={`${tier.concurrencyVcpu} vCPU`}
+               note="Paused sandboxes count toward this — pausing frees compute, not quota." />
           {/* §P4 — the number alone is not actionable. At the limit the question
               is WHICH sandboxes hold it, and the answer belongs here. */}
           <div style={{ paddingBottom: 6 }}>
@@ -152,23 +154,26 @@ export default function Quotas() {
                warn={buildPct >= 0.8}
                note={`At 2 cores. Resets ${QUOTA.buildResets}. On ${tier.id}: ${tier.buildHours}.`} />
           <Row label="Concurrent builds / timeout / cores" used="0" limit={tier.buildConcurrency} />
+          <Row label="Image size pre-check" used="—" limit={`${QUOTA.imageSizeCapGB} GB`}
+               note="Validated before the build starts, so an oversize image fails fast rather than after a long build." />
         </Section>
 
-        <Section title="Storage and traffic" aside={<span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Resets {BILLING_MONTH.end}</span>}>
+        <Section title="Templates and traffic" aside={<span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Resets {BILLING_MONTH.end}</span>}>
           <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 4px", lineHeight: "18px" }}>
-            Caps refuse; allowances do not — usage beyond an allowance is billed at the rate shown.
+            A cap refuses the request. An allowance does not — usage beyond it is billed at the rate shown.
           </p>
-          <Row label="Template storage cap" used={`${QUOTA.templateStorageUsedGB} GB`} limit={`${QUOTA.templateStorageCapGB} GB`}
+          {/* §P4 — templates are capped by COUNT and cost nothing, so this is a
+              refusal limit, not an allowance. At the cap Register is rejected
+              with "Templates 20 / 20" and the remedy is to delete one or
+              upgrade — never an overage charge. */}
+          <Row label="Templates" used={`${QUOTA.templatesUsed}`} limit={`${QUOTA.templatesAllowed}`}
                warn={tplPct >= 0.8}
                note={<>
-                 {tplPct >= 0.8 ? "Over 80% of the cap — new templates are refused at 100%. " : ""}
+                 Templates are free. At the limit, Register is rejected — delete an unused template or upgrade.{" "}
                  <Link href="/settings/usage" style={{ color: C.link, textDecoration: "none" }}>See templates →</Link>
                </>} />
-          <Row label="Template storage allowance"
-               used={metered("template_storage") ? `${templateGBmo.toFixed(2)} GB·mo` : "—"}
-               limit={`${TEMPLATE_FREE_GB} GB·mo`}
-               warn={metered("template_storage") && templateGBmo > TEMPLATE_FREE_GB}
-               note={metered("template_storage") ? `Beyond the allowance: ${rate6(RATE.storageGBMonth)}/GB·mo` : "Metering not yet available"} />
+          <Row label="Image size per build" used="—" limit={`${QUOTA.imageSizeCapGB} GB`}
+               note="Checked when a build is submitted. A larger image is refused, not charged." />
           <Row label="Egress allowance"
                used={metered("egress") ? `${egressUsedGB.toFixed(1)} GB` : "—"}
                limit={tier.id === "tier1" ? "Package mirrors only" : `${EGRESS_FREE_GB} GB`}
