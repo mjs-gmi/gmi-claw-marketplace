@@ -7,6 +7,7 @@ import {
   ACCOUNT_TIER, QUOTA, BILLING_MONTH, SANDBOXES, isAccruing, agentById,
   SNAPSHOT_FREE_GB,
 } from "@/lib/billingUsage";
+import { TEMPLATE_QUOTA } from "@/lib/templates";
 
 // ─── Settings › Quotas & account tier (§P4) ─────────────────────────────────
 // One click from every rejection. The distinction the page exists to make:
@@ -142,39 +143,34 @@ export default function Quotas() {
                note="Maximum life of one sandbox on this tier. What happens at the limit is pending Product." />
         </Section>
 
-        <Section title="Template builds">
+        {/* §P4 — three rows, no GB anywhere. Templates are free; what is
+            limited is how many you keep and how long you spend building them.
+            A storage figure here would reintroduce the idea that they cost
+            money, which is exactly what this model removed. */}
+        <Section title="Templates">
           <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 4px", lineHeight: "18px" }}>
-            Builds are free — their cost is already in the running price. The quota exists to stop templates being built
-            and never run, so exhausting it <span style={{ color: C.fg }}>refuses the build; it does not charge you</span>.
+            Building and storing templates is free. These limits <span style={{ color: C.fg }}>refuse</span> a
+            request — they never produce a charge.
           </p>
-          {/* §P4 — published in hours at 2 cores. "CPU-hours" is not a unit
-              anyone can plan a build around. */}
-          <Row label="Build time this month" used={`${QUOTA.buildHoursUsed} h`} limit={`${QUOTA.buildHoursAllowed} h`}
-               warn={buildPct >= 0.8}
-               note={`At 2 cores. Resets ${QUOTA.buildResets}. On ${tier.id}: ${tier.buildHours}.`} />
-          <Row label="Concurrent builds / timeout / cores" used="0" limit={tier.buildConcurrency} />
-          <Row label="Image size pre-check" used="—" limit={`${QUOTA.imageSizeCapGB} GB`}
-               note="Validated before the build starts, so an oversize image fails fast rather than after a long build." />
+          <Row label="Templates" used={`${TEMPLATE_QUOTA.used}`} limit={`${TEMPLATE_QUOTA.allowed}`}
+               warn={TEMPLATE_QUOTA.used / TEMPLATE_QUOTA.allowed >= 0.8}
+               note={<>
+                 At the limit, Register is rejected — delete one you are not using, or upgrade to{" "}
+                 {TEMPLATE_QUOTA.nextTier.name} for {TEMPLATE_QUOTA.nextTier.templates}.{" "}
+                 <Link href="/templates" style={{ color: C.link, textDecoration: "none" }}>See templates →</Link>
+               </>} />
+          <Row label="Build time (month)" used={`${TEMPLATE_QUOTA.buildHoursUsed} h`} limit={`${TEMPLATE_QUOTA.buildHoursAllowed} h`}
+               warn={TEMPLATE_QUOTA.buildHoursUsed / TEMPLATE_QUOTA.buildHoursAllowed >= 0.8}
+               note={`Resets ${TEMPLATE_QUOTA.buildResets}. Running more sandboxes raises this allowance.`} />
+          <Row label="Build limits" used="—"
+               limit={`${TEMPLATE_QUOTA.buildConcurrent} concurrent · ${TEMPLATE_QUOTA.buildTimeout} timeout · ${TEMPLATE_QUOTA.buildCores} cores`} />
         </Section>
 
-        <Section title="Templates and allowances" aside={<span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Resets {BILLING_MONTH.end}</span>}>
+        <Section title="Free allowances" aside={<span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Resets {BILLING_MONTH.end}</span>}>
           <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 4px", lineHeight: "18px" }}>
-            A cap refuses the request. An allowance does not — usage beyond it is billed at the rate shown.
-            Nothing in 2.0 carries an allowance: the first one arrives with Snapshots.
+            Nothing in 2.0 carries a free allowance. The first one arrives with Snapshots.
           </p>
-          {/* §P4 — templates are capped by COUNT and cost nothing, so this is a
-              refusal limit, not an allowance. At the cap Register is rejected
-              with "Templates 20 / 20" and the remedy is to delete one or
-              upgrade — never an overage charge. */}
-          <Row label="Templates" used={`${QUOTA.templatesUsed}`} limit={`${QUOTA.templatesAllowed}`}
-               warn={tplPct >= 0.8}
-               note={<>
-                 Templates are free. At the limit, Register is rejected — delete an unused template or upgrade.{" "}
-                 <Link href="/settings/usage" style={{ color: C.link, textDecoration: "none" }}>See templates →</Link>
-               </>} />
-          <Row label="Image size per build" used="—" limit={`${QUOTA.imageSizeCapGB} GB`}
-               note="Checked when a build is submitted. A larger image is refused, not charged." />
-          <Row label="Snapshot storage allowance" v21 used="—" limit={`${SNAPSHOT_FREE_GB} GB·mo`}
+          <Row label="Snapshot storage" v21 used="—" limit={`${SNAPSHOT_FREE_GB} GB·mo`}
                note="Snapshots ship in 2.1." />
         </Section>
 

@@ -10,6 +10,7 @@ import { PlanBadge, DiscountedPrice } from "@/components/PlanUI";
 import { isPlanEligibleModel, discountPriceString, CODING_AGENT_PLAN } from "@/lib/modelsPlan";
 import { ALL_MODELS, isStandardModel, getModel, paygUsdPer1M, type CatalogModel } from "@/lib/pricingModel";
 import V2Badge from "@/components/V2Badge";
+import { TEMPLATE_QUOTA, buildHoursLeft } from "@/lib/templates";
 import {
   CostNotice, InsufficientCredits, TopUpCredits, RedeemCoupon, LeaveRegistration,
   hasAcknowledged, acknowledge,
@@ -1666,19 +1667,19 @@ function StepReview({
 
       {/* Cost Estimate */}
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Cost Estimate</div>
+        <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>What this costs</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          {/* §B — no compute price. The field exists and is always 0, and a
-              "$0.0000/hr" reads as a bug rather than as free. Model usage below
-              is metered for real, so that half stays. */}
-          {/* No rate is quoted: the price field comes back zero, and a
-              "$0.0000/hr" reads as a bug. Sandbox time IS metered though — it
-              lands under Settings › Usage & Billing › Agentbox as Container
-              Amount — so this must not say the compute is free. */}
+          {/* §P5 — Register quotes no price. Registering a template and
+              building it are free, and a sandbox's rate belongs beside the Spec
+              picker at Launch, where the choice that sets it is made. What is
+              useful here is the build allowance, because that is the only thing
+              that can actually refuse this form. */}
           <div style={costCard}>
-            <div style={costLabel}>Compute</div>
-            <div style={{ ...bigNum, fontSize: 18 }}>Metered</div>
-            <div style={{ fontSize: 12, color: C.muted, textAlign: "right" }}>Billed per Sandbox session · no rate quoted up front</div>
+            <div style={costLabel}>Build time left</div>
+            <div style={{ ...bigNum, fontSize: 18 }}>{buildHoursLeft().toFixed(1)} h</div>
+            <div style={{ fontSize: 12, color: C.muted, textAlign: "right" }}>
+              this month · resets {TEMPLATE_QUOTA.buildResets} · building is free
+            </div>
           </div>
           <div style={costCard}>
             <div style={costLabel}>Default model</div>
@@ -1697,7 +1698,9 @@ function StepReview({
             )}
           </div>
         </div>
-        <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Billing begins immediately upon clicking Register.</div>
+        <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>
+          Registering is free. Billing starts when you launch a sandbox from this template.
+        </div>
       </div>
 
       {/* Notification — Registration ≠ Listing */}
@@ -1788,10 +1791,11 @@ function EditCostPanel({
       <div style={{ background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg }}>Cost</div>
         <div style={{ fontFamily: FONT, fontSize: 20, fontWeight: 700, color: C.fg, letterSpacing: "-0.02em", lineHeight: "26px" }}>
-          Compute is metered
+          Free to register
         </div>
         <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>
-          Billed per Sandbox session. See it under <span style={{ color: C.fg }}>Usage &amp; Billing → Agentbox</span>.
+          Building and storing a template costs nothing. Sandboxes are billed when you launch them —
+          the rate is shown there.
         </div>
         <div style={{ borderTop: `1px solid ${C.borderSoft}`, marginTop: 4, paddingTop: 10, display: "flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 12, color: C.muted }}>
           <span style={{ width: 8, height: 8, borderRadius: 2, background: C.lime, display: "inline-block", flexShrink: 0 }} />

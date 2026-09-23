@@ -15,10 +15,11 @@ import {
   SANDBOXES, sandboxById, sandboxRunning, sandboxItem, sandboxVersion,
   sandboxesForAgent, agentRows, agentTotal, agentById,
   MODEL_USAGE, modelUsageFor, modelNet,
-  templatesForAgent, daysToArchive, TERMINATE_AT,
+  TERMINATE_AT,
   itemTotal, periodListTotal, periodBilledTotal,
-  type UsageScope, type SandboxState, type SandboxUsage, type TemplateRecord,
+  type UsageScope, type SandboxState, type SandboxUsage,
 } from "@/lib/billingUsage";
+import { templatesForAgent, daysToArchive, relativeDay, ARCHIVE_WARN_DAYS, type TemplateRecord } from "@/lib/templates";
 
 // ─── Settings › Usage & Billing ─────────────────────────────────────────────
 // Modelled on the live console. Three scopes share one screen: Inference and
@@ -321,7 +322,8 @@ function BillingEmptyState() {
     <Card>
       <div style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, marginBottom: 4 }}>No Agentbox usage yet</div>
       <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 16px", lineHeight: "18px" }}>
-        These are the things Agentbox bills for. Registering a template and building it are free.
+        Sandboxes are billed for the time they spend running and paused; model calls are billed per token.
+        {" "}<span style={{ color: C.fg }}>Building and storing templates is free.</span>
       </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
         {live.map((it) => (
@@ -577,16 +579,14 @@ function AgentDetail({ agentId, onOpenSandbox }: { agentId: string; onOpenSandbo
         </table>
       </div>
 
-      {/* Block 3 — its templates. No cost column: templates are free and
-          limited by count, so what matters here is state and how close each one
-          is to being archived for inactivity. Comes from the Sandbox API, so it
-          does not wait on a storage meter. */}
+      {/* Block 3 — its templates, read-only. Same rows as the Templates page
+          but no actions: this is a billing screen, and a Delete button here
+          would be a destructive control in a place nobody came to act. It
+          links out instead. Templates carry no cost anywhere. */}
       <div style={{ display: "flex", alignItems: "center", gap: 9, margin: "24px 0 10px" }}>
         <h2 style={{ fontFamily: FONT, fontSize: 14, fontWeight: 600, color: C.fg, margin: 0 }}>Templates</h2>
-        <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>
-          Free · counted against your tier limit
-        </span>
-        <Link href="/settings/quotas" style={{ fontFamily: FONT, fontSize: 12, color: C.link, textDecoration: "none" }}>Quotas →</Link>
+        <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Free</span>
+        <Link href="/templates" style={{ fontFamily: FONT, fontSize: 12, color: C.link, textDecoration: "none" }}>Manage templates →</Link>
       </div>
       <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
         {templates.length === 0 ? (
@@ -597,9 +597,8 @@ function AgentDetail({ agentId, onOpenSandbox }: { agentId: string; onOpenSandbo
               <th style={thStyle}>Template</th>
               <th style={thStyle}>Version</th>
               <th style={thStyle}>Status</th>
-              <th style={thStyle}>Last launch</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>Archived in</th>
-              <th style={{ ...thStyle, width: 90 }} />
+              <th style={thStyle}>Last launched</th>
+              <th style={{ ...thStyle, textAlign: "right" }}>Archives in</th>
             </tr></thead>
             <tbody>
               {templates.map((t) => <TemplateRow key={t.id} t={t} />)}
@@ -613,7 +612,7 @@ function AgentDetail({ agentId, onOpenSandbox }: { agentId: string; onOpenSandbo
 
 function TemplateRow({ t }: { t: TemplateRecord }) {
   const left = daysToArchive(t);
-  const soon = left !== null && left <= 21;
+  const soon = left !== null && left <= ARCHIVE_WARN_DAYS;
   const color = t.status === "ready" ? C.ok : t.status === "building" ? C.warn : t.status === "error" ? C.err : C.muted;
   return (
     <tr>
@@ -624,15 +623,10 @@ function TemplateRow({ t }: { t: TemplateRecord }) {
           {t.status}
         </span>
       </td>
-      <td style={{ ...tdStyle, color: C.muted }}>{t.lastLaunch ?? "Never launched"}</td>
+      <td style={{ ...tdStyle, color: C.muted }}>{relativeDay(t.lastLaunch)}</td>
       {/* Inactivity is the only clock on a template, so it is the column. */}
       <td style={{ ...tdStyle, textAlign: "right", fontFamily: MONO, color: soon ? C.warn : C.muted }}>
         {left === null ? "—" : `${left} d`}
-      </td>
-      <td style={{ ...tdStyle, textAlign: "right" }}>
-        <button style={{ fontFamily: FONT, fontSize: 11.5, fontWeight: 500, background: "transparent", color: C.err, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
-          Delete
-        </button>
       </td>
     </tr>
   );
