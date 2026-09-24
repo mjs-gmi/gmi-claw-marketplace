@@ -373,10 +373,10 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
                   <span style={{ fontFamily: MONO }}>{money2(listTotal)}</span> list
                 </span>
               )}
-              <V2Badge title="V2 splits each agent's cost by billing item rather than the old Container/Token pair." />
-              {/* One positive confirmation per surface. Batch 1 is the default,
-                  so tagging every element that ships now would be wallpaper. */}
-              <BatchBadge batch={1} title="Batch 1 — this page ships with the 2.0 UI release. Only the Paused figures wait on batch 2." />
+              {/* One marker per surface, and it carries both facts: new in V2,
+                  and shipping in the first batch. A V2 badge beside it would be
+                  a second badge making the same claim. */}
+              <BatchBadge batch={1} title="V2 batch 1 — this page is new in Agentbox 2.0 and ships with the UI release. Only the Paused figures wait for batch 2." />
             </div>
             <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, marginTop: 3 }}>
               {rows.reduce((a, r) => a + r.runs, 0)} sandboxes · month to date, includes in-progress usage

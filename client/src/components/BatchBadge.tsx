@@ -6,12 +6,18 @@
 //   Batch 1 — ships now. The whole UI change set, Running included.
 //   Batch 2 — Pause and Resume, roughly two weeks behind, waiting on backend.
 //
-// This is a different axis from V2 and 2.1, and the three must not be conflated:
-//   V2Badge   — "this is new in Agentbox 2.0" (what changed)
-//   BatchBadge — "which half of 2.0 does it ship in" (when)
-//   V21Badge  — "not in 2.0 at all; Snapshots land in 2.1" (later release)
-// A surface can honestly carry a V2 and a Batch badge. Nothing carries both a
-// Batch and a 2.1 badge — if it is 2.1 it is in neither batch.
+// The batch IS a V2 batch, so the badge says so and carries the V2 statement
+// with it. Anything marked V2 BATCH 1 or V2 BATCH 2 is new in 2.0 by
+// definition, which means a plain V2 badge beside one is redundant and gets
+// dropped — two badges making the same claim is how a reader learns to skip
+// both.
+//
+//   V2Badge    — new in 2.0, batch not called out (what changed)
+//   BatchBadge — new in 2.0 AND which half it ships in (what changed + when)
+//   V21Badge   — not in 2.0 at all; Snapshots land in 2.1 (a later release)
+//
+// Nothing carries both a Batch and a 2.1 badge: if it is 2.1 it is in neither
+// batch.
 //
 // Only Batch 2 is marked on individual controls. Batch 1 is the default and
 // tagging every element that ships now is what turns a badge into wallpaper;
@@ -20,8 +26,8 @@
 import { C, FONT } from "@/lib/tokens";
 
 export const BATCH_REASON: Record<1 | 2, string> = {
-  1: "Batch 1 — ships with the 2.0 UI release.",
-  2: "Batch 2 — Pause and Resume follow about two weeks later; the backend is not ready. The control is drawn so the flow can be reviewed.",
+  1: "V2 batch 1 — new in Agentbox 2.0, shipping with the UI release.",
+  2: "V2 batch 2 — new in Agentbox 2.0, but Pause and Resume follow about two weeks later: the backend is not ready. The control is drawn so the flow can be reviewed.",
 };
 
 export default function BatchBadge({
@@ -46,7 +52,7 @@ export default function BatchBadge({
         ...style,
       }}
     >
-      {one ? "BATCH 1" : "BATCH 2"}
+      {one ? "V2 BATCH 1" : "V2 BATCH 2"}
     </span>
   );
 }

@@ -1,6 +1,5 @@
 import { Link } from "wouter";
 import { C, FONT, MONO } from "@/lib/tokens";
-import V2Badge from "@/components/V2Badge";
 import V21Badge from "@/components/V21Badge";
 import BatchBadge from "@/components/BatchBadge";
 import { TIERS, RATE, rate6, type TierId } from "@/lib/billingModel";
@@ -68,8 +67,7 @@ export default function Quotas() {
           <h1 style={{ fontFamily: FONT, fontSize: 23, fontWeight: 700, color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>
             Quotas &amp; account tier
           </h1>
-          <V2Badge title="New in V2 — quotas, tiers and allowances had no surface before." />
-          <BatchBadge batch={1} title="Batch 1 — this page ships with the 2.0 UI release." />
+          <BatchBadge batch={1} title="V2 batch 1 — quotas, tiers and allowances had no surface before 2.0, and this one ships with the UI release." />
         </div>
         <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, margin: "0 0 20px" }}>
           Limits on what you can run at once. Hitting one refuses the request — <span style={{ color: C.fg }}>nothing here bills you</span>.
