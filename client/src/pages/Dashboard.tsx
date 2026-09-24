@@ -16,6 +16,7 @@ import V2Badge from "@/components/V2Badge";
 import TerminalV2 from "@/components/TerminalV2";
 import NoApiBadge, { NoApiNote, NO_API_REASON } from "@/components/NoApiBadge";
 import V21Badge, { V21Note } from "@/components/V21Badge";
+import BatchBadge, { Batch2Note } from "@/components/BatchBadge";
 import { TEMPLATE_QUOTA, agentsAtLimit } from "@/lib/templates";
 import SdkPlaygroundV2 from "@/components/SdkPlaygroundV2";
 import OpenQuestionBadge from "@/components/OpenQuestionBadge";
@@ -3657,7 +3658,7 @@ function InstanceDrawer({
     </div>
   );
 
-  const actionBtn = (label: string, icon: React.ReactNode, action: RowAction, kind: "primary" | "ghost" | "danger", noApi = false, v21 = false) => (
+  const actionBtn = (label: string, icon: React.ReactNode, action: RowAction, kind: "primary" | "ghost" | "danger", noApi = false, v21 = false, batch2 = false) => (
     <button
       onClick={() => onAction(inst.id, action)}
       title={
@@ -3674,7 +3675,7 @@ function InstanceDrawer({
         padding: "5px 11px", borderRadius: 7, cursor: "pointer",
       }}
     >
-      {icon} {label} {v21 && <V21Badge />} {noApi && <NoApiBadge />}
+      {icon} {label} {batch2 && <BatchBadge batch={2} />} {v21 && <V21Badge />} {noApi && <NoApiBadge />}
     </button>
   );
 
@@ -3745,11 +3746,13 @@ function InstanceDrawer({
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-          {/* Pause / Resume / Snapshot have no endpoint in the R1 swagger. Kept,
-              marked, and left clickable so the flows stay demoable. */}
-          {/* Pause / Resume / Snapshot are drawn but not built — Agentbox 2.1. */}
-          {running && actionBtn("Pause", <IconSuspend />, "suspend", "ghost", true, true)}
-          {inst.status === "suspended" && actionBtn("Resume", <IconResume />, "resume", "primary", true, true)}
+          {/* Three different release stories, three different markers:
+              Pause and Resume are 2.0 but batch 2 — designed, drawn, waiting on
+              the sandbox API, about two weeks behind the UI release.
+              Snapshot is not in 2.0 at all; it lands in 2.1.
+              Everything else here ships in batch 1. */}
+          {running && actionBtn("Pause", <IconSuspend />, "suspend", "ghost", false, false, true)}
+          {inst.status === "suspended" && actionBtn("Resume", <IconResume />, "resume", "primary", false, false, true)}
           {running && actionBtn("Create Snapshot", <IconSnapshot />, "snapshot", "ghost", true, true)}
           {(inst.status === "error" || inst.unconfirmed) && actionBtn("Retry", <IconRestart />, "retry", "ghost")}
           {inst.status !== "deleted" && inst.status !== "deleting" && actionBtn("Delete", <IconTrash />, "delete", "danger")}
@@ -4336,13 +4339,13 @@ function MonitorPane({
                       )}
                       {/* One primary lifecycle verb per state; the rest live in the drawer */}
                       {inst.status === "running" && (
-                        <button onClick={() => onAction(inst.id, "suspend")} title="Pause compute and keep the sandbox files." style={rowBtnGhost}>
-                          <IconSuspend /> Pause
+                        <button onClick={() => onAction(inst.id, "suspend")} title="Pause compute and keep the sandbox files. Ships in batch 2." style={rowBtnGhost}>
+                          <IconSuspend /> Pause <BatchBadge batch={2} />
                         </button>
                       )}
                       {inst.status === "suspended" && (
-                        <button onClick={() => onAction(inst.id, "resume")} title="Resume the sandbox from its kept files." style={rowBtnPrimary}>
-                          <IconResume /> Resume
+                        <button onClick={() => onAction(inst.id, "resume")} title="Resume the sandbox from its kept files. Ships in batch 2." style={rowBtnPrimary}>
+                          <IconResume /> Resume <BatchBadge batch={2} />
                         </button>
                       )}
                       {inst.status === "error" && (
@@ -5924,6 +5927,8 @@ export default function Dashboard() {
           title: "Pause sandbox?",
           body: (
             <>
+              <span style={{ display: "inline-flex", marginBottom: 8 }}><BatchBadge batch={2} /></span>{" "}
+              <span style={{ color: C.muted }}>Pause and Resume arrive about two weeks after the 2.0 UI release.</span>{" "}
               Only disk is billed while paused — vCPU and memory stop. The reduced rate starts once the
               sandbox <span style={{ color: C.fg }}>reaches</span> paused, not when you ask for it.
               The sandbox keeps its ID and files until you Resume or Delete. Memory, running processes and
@@ -6246,6 +6251,7 @@ export default function Dashboard() {
               </h1>
               {/* v1.2 §D1 */}
               <PublishStatusEntry onOpen={() => setPublishStatusOpen(true)} />
+              <BatchBadge batch={1} title="Batch 1 — My Agents, Templates, Run Command, Terminal and Filesystem all ship with the 2.0 UI release. Only Pause and Resume wait for batch 2." />
             </div>
 
             {/* An agent IS its template, so the template quota belongs here and

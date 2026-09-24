@@ -2,6 +2,7 @@ import { Link } from "wouter";
 import { C, FONT, MONO } from "@/lib/tokens";
 import V2Badge from "@/components/V2Badge";
 import V21Badge from "@/components/V21Badge";
+import BatchBadge from "@/components/BatchBadge";
 import { TIERS, RATE, rate6, type TierId } from "@/lib/billingModel";
 import {
   ACCOUNT_TIER, QUOTA, BILLING_MONTH, SANDBOXES, isAccruing, agentById,
@@ -68,6 +69,7 @@ export default function Quotas() {
             Quotas &amp; account tier
           </h1>
           <V2Badge title="New in V2 — quotas, tiers and allowances had no surface before." />
+          <BatchBadge batch={1} title="Batch 1 — this page ships with the 2.0 UI release." />
         </div>
         <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, margin: "0 0 20px" }}>
           Limits on what you can run at once. Hitting one refuses the request — <span style={{ color: C.fg }}>nothing here bills you</span>.
@@ -124,7 +126,10 @@ export default function Quotas() {
               compute bill, not the seat, and a user at the limit who paused
               everything and still cannot launch needs to read that here. */}
           <Row label="Sandboxes holding quota" used={`${QUOTA.concurrencyUsedVcpu} vCPU`} limit={`${tier.concurrencyVcpu} vCPU`}
-               note="Paused sandboxes count toward this — pausing frees compute, not quota." />
+               note={<>
+                 Paused sandboxes count toward this — pausing frees compute, not quota.{" "}
+                 <BatchBadge batch={2} /> from batch 2, when Pause arrives.
+               </>} />
           {/* §P4 — the number alone is not actionable. At the limit the question
               is WHICH sandboxes hold it, and the answer belongs here. */}
           <div style={{ paddingBottom: 6 }}>
@@ -178,7 +183,7 @@ export default function Quotas() {
           <p style={{ fontFamily: FONT, fontSize: 12.5, color: C.muted, margin: "0 0 4px", lineHeight: "18px" }}>
             A template with no launch for 90 days is archived, then deleted.{" "}
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              Paused sandboxes not resumed for 30 days are archived. <V21Badge />
+              Paused sandboxes not resumed for 30 days are archived. <BatchBadge batch={2} />
             </span>
           </p>
           {QUOTA.archivingSoon.map((r) => (

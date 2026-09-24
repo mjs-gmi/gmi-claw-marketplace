@@ -3,6 +3,7 @@ import { useLocation, useRoute, Link } from "wouter";
 import { C, FONT, MONO } from "@/lib/tokens";
 import V2Badge from "@/components/V2Badge";
 import V21Badge from "@/components/V21Badge";
+import BatchBadge from "@/components/BatchBadge";
 import {
   BILLING_ITEMS_2_0, ITEM_LABEL, ITEM_COLOR, ITEM_BLURB, V21_ITEMS,
   money2, money4, rate6, sumRounded, round2, specDetail, runningRate, pausedRate,
@@ -264,6 +265,9 @@ function CostBreakdown({ rows }: { rows: ReturnType<typeof agentRows> }) {
           <div style={{ display: "flex", alignItems: "center", gap: 7, fontFamily: FONT, fontSize: 12, color: C.muted }}>
             <span style={{ width: 8, height: 8, borderRadius: 2, background: ITEM_COLOR[item] }} />
             {ITEM_LABEL[item]}
+            {/* Paused figures are real in the model but cannot accrue until the
+                backend lands, so the cell says which batch it belongs to. */}
+            {item === "paused" && <BatchBadge batch={2} />}
           </div>
           <div style={{ fontFamily: MONO, fontSize: 19, fontWeight: 600, color: amount > 0 ? C.fg : C.muted, marginTop: 5 }}>
             {money2(amount)}
@@ -369,7 +373,10 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
                   <span style={{ fontFamily: MONO }}>{money2(listTotal)}</span> list
                 </span>
               )}
-              <V2Badge title="V2 splits each agent's cost into Running, Model usage, Template storage and Egress." />
+              <V2Badge title="V2 splits each agent's cost by billing item rather than the old Container/Token pair." />
+              {/* One positive confirmation per surface. Batch 1 is the default,
+                  so tagging every element that ships now would be wallpaper. */}
+              <BatchBadge batch={1} title="Batch 1 — this page ships with the 2.0 UI release. Only the Paused figures wait on batch 2." />
             </div>
             <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, marginTop: 3 }}>
               {rows.reduce((a, r) => a + r.runs, 0)} sandboxes · month to date, includes in-progress usage
@@ -419,6 +426,7 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
             <span key={it} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 11.5, color: metered(it) ? C.fg : C.muted }}>
               <span style={{ width: 8, height: 8, borderRadius: 2, background: ITEM_COLOR[it], opacity: metered(it) ? 1 : 0.4 }} />
               {ITEM_LABEL[it]}
+              {it === "paused" && <BatchBadge batch={2} />}
             </span>
           ))}
         </div>
@@ -445,7 +453,9 @@ function Agentbox({ onOpenAgent }: { onOpenAgent: (id: string) => void }) {
                 <th style={thStyle}>Agent</th>
                 <th style={{ ...thStyle, width: 80 }}>Sandboxes</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Running</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>Paused</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Paused <BatchBadge batch={2} /></span>
+                </th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Model usage</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Total</th>
                 <th style={{ ...thStyle, width: 44 }} />
@@ -755,6 +765,7 @@ function SandboxDetail({ sandboxId }: { sandboxId: string }) {
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                             <span style={{ width: 8, height: 8, borderRadius: 2, background: ITEM_COLOR[b.state] }} />
                             {b.state === "running" ? "Running" : "Paused"}
+                            {b.state === "paused" && <BatchBadge batch={2} />}
                           </span>
                         </td>
                         <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12.5 }}>{b.hourStart}</td>
