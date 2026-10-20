@@ -210,19 +210,6 @@ function capsOf(inst: Instance): SandboxCapabilities {
 // the prototype has one viewer.
 const CAN_WRITE_FILES = true;
 
-const CAP = {
-  // P-04 Snapshot retention is Conditional R1 — off until Q16 and commercial
-  // review are approved. When off, snapshots have no auto-expiry (§4.3).
-  snapshotAutoRetention: false,
-  // F-07 / §4.1 — capture from a Suspended Runtime is conditional on Q8. While
-  // off, Snapshot is Running-only and AgentBox never silently resumes a
-  // Suspended Runtime: Resume → Snapshot → Suspend stays three explicit steps.
-  snapshotFromSuspended: false,
-  // F-07 R1 gate is an Organization COUNT limit checked before capture — not a
-  // pre-reserved storage quota. Storage bills per GiB from Ready (§4.5).
-  orgSnapshotLimit: 20,
-};
-
 // ─── Release tag — which release a surface belongs to (PRD §1 delivery scope).
 // The prototype is reviewed release-by-release, so every net-new surface says
 // whether it ships in R0, R1, or on the independent model-selection track.
@@ -498,6 +485,8 @@ interface InstanceConfig {
   endpointActivity?: boolean; // P-02: declared-Endpoint traffic counts as activity (D-05 opt-out)
   model?: string;        // F-08 resolved model id (injected as GMI_MODEL_ID)
   metadata?: MetaEntry[]; // §4.7 customer metadata
+  egressControl?: boolean; // create-time only; can't be changed afterwards
+  egress?: string[];       // initial outbound allowlist when egressControl is on
 }
 
 interface Instance {
@@ -541,6 +530,12 @@ interface Instance {
   // §4.1 — three separate fields, never a tenth state: runtime.state (status),
   // runtime.confirmation_status (unconfirmed) and latest_operation.status.
   latestOperation?: { kind: string; status: "in_progress" | "succeeded" | "failed" | "unknown"; at: string };
+  /**
+   * Prototype-only: which snapshot this sandbox was launched from, so deleting
+   * that snapshot can be refused. Not drawn — whether sandbox detail exposes
+   * this field is still unconfirmed.
+   */
+  fromSnapshotId?: string;
 }
 
 const TEMPLATE_DEFAULT_CONFIG: InstanceConfig = {
@@ -654,6 +649,7 @@ const INITIAL_INSTANCES: Instance[] = [
     lifecycleStartedAt: _seedMinsAgo(3),
     unconfirmed: true,
     latestOperation: { kind: "create", status: "unknown", at: _seedMinsAgo(3) },
+    fromSnapshotId: "snap_7c3f9a21b8e4", // keeps that snapshot from being deleted
   },
 ];
 
@@ -785,134 +781,151 @@ function newSnapshotId(): string {
   return `snap_${r()}${r().slice(0, 4)}`;
 }
 
-// ─── F-07 Snapshot ──────────────────────────────────────────────────────────
-// Immutable, Organization-owned, point-in-time disk copy. creating → ready.
-// The Snapshot ID is canonical: nothing is ever addressed by name. The display
-// name is optional at the API, editable, and Organization-unique when present.
-type SnapshotStatus = "creating" | "ready" | "failed" | "deleting";
+// ─── Snapshot (test-environment swagger) ────────────────────────────────────
+// A copy of a running sandbox's filesystem. Processes and memory are not kept,
+// and the source keeps running while it is taken. Launching from one is a cold
+// boot: new sandbox ID, CPU / memory / disk / architecture fixed by the snapshot,
+// network and lifecycle filled in again at launch.
+//
+// Only what the swagger states is modelled. It has no actual stored size, no
+// list of dependent sandboxes, no metering, no quota or count limit and no sort
+// order — so none of those are drawn anywhere.
+type SnapshotStatus = "creating" | "ready" | "error" | "deleting" | "delete_failed";
 interface Snapshot {
-  id: string;                   // immutable, system-generated, canonical reference
-  name?: string;                // optional — Console falls back to the ID
-  description?: string;
-  sourceAgentId: string;
-  sourceAgentName: string;
-  sourceAgentVersion: string;   // lineage metadata — survives rename / cleared name
-  sourceRuntimeId: string;
-  sourceDeleted?: boolean;      // source runtime/agent gone — snapshot still usable
-  category: string;             // captured runtime category (launch-eligibility check)
-  region: string;               // inherited automatically, never selected at capture
-  runtimeClass: string;
-  architecture: string;
-  createdAt: string;
-  readyAt?: string;             // retention (P-04) counts from Ready, not from create
-  billableGiB?: number | null;  // nullable — compressed size may arrive after Ready
-  retentionDays: number;        // P-04 retention window (conditional on Q16)
+  id: string;
+  name?: string;                // optional; several snapshots may all be unnamed
   status: SnapshotStatus;
-  error?: string;
-  metadata?: MetaEntry[];       // §4.7 customer metadata
+  sourceSandboxId: string;
+  sourceTemplate: string;
+  cpu: number;
+  memoryGb: number;
+  diskGb: number;               // the inherited disk spec, NOT the stored size
+  architecture: string;
+  product: string;
+  idc: string;
+  metadata?: MetaEntry[];
+  errorCode?: string;           // error / delete_failed only
+  errorReason?: string;
+  createdAt: string;
+  readyAt?: string;
+  updatedAt: string;
 }
+
+/** What each status allows — the swagger's transition table, in one place. */
+const SNAPSHOT_STATUS_META: Record<SnapshotStatus, { label: string; color: string; pulse?: boolean; hint: string }> = {
+  creating:      { label: "Creating",      color: "#fbbf24", pulse: true, hint: "Being created in the background. It can only be cancelled." },
+  ready:         { label: "Ready",         color: C.ok,                   hint: "Can launch sandboxes, be renamed, have its metadata edited, or be deleted." },
+  error:         { label: "Error",         color: C.err,                  hint: "Creation failed. It can be renamed, have its metadata edited, or be deleted." },
+  deleting:      { label: "Deleting",      color: C.muted, pulse: true,   hint: "Delete accepted and still in progress. View only." },
+  delete_failed: { label: "Delete failed", color: C.err,                  hint: "The delete did not go through. Retry it. It can't be renamed." },
+};
+function snapshotCanEdit(s: Snapshot): boolean {
+  return s.status === "ready" || s.status === "error";
+}
+
 const INITIAL_SNAPSHOTS: Snapshot[] = [
   {
     id: "snap_7c3f9a21b8e4",
     name: "hermes-deps-installed",
-    description: "Playwright + chromium preinstalled so cold starts skip the 90s install.",
-    sourceAgentId: "agent_hermes",
-    sourceAgentName: "Hermes",
-    sourceAgentVersion: "hermes-v1",
-    sourceRuntimeId: "8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36",
-    category: "Code & Dev Tools",
-    region: "us-ia-iowa-1",
-    runtimeClass: "container",
+    status: "ready",
+    sourceSandboxId: "8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36",
+    sourceTemplate: "hermes-v1",
+    cpu: 2, memoryGb: 4, diskGb: 20,
     architecture: "linux/amd64",
+    product: productForTier("container"),
+    idc: "us-ia-iowa-1",
+    metadata: [{ id: "ms1", key: "tenant", value: "acme-corp" }],
     createdAt: _seedDaysAgo(3),
     readyAt: _seedDaysAgo(3),
-    billableGiB: 4.2,
-    retentionDays: 30,
-    status: "ready",
-    metadata: [{ id: "ms1", key: "tenant", value: "acme-corp" }],
+    updatedAt: _seedDaysAgo(3),
   },
   {
-    // Name omitted via the API — the Console labels it by ID (F-07 naming rules).
+    // No name — the Console labels it by ID.
     id: "snap_2b8d47f1c9a0",
-    sourceAgentId: "agent_hermes",
-    sourceAgentName: "Hermes",
-    sourceAgentVersion: "hermes-v1",
-    sourceRuntimeId: "1e1bd452-9a3c-4b8e-bf21-7d40c9e6095a",
-    category: "Code & Dev Tools",
-    region: "us-ia-iowa-1",
-    runtimeClass: "container",
-    architecture: "linux/amd64",
-    createdAt: _seedDaysAgo(27),  // 30-day retention → ~3 days left (risk tier)
-    readyAt: _seedDaysAgo(27),
-    billableGiB: null,            // compressed size never reported — stays "Pending"
-    retentionDays: 30,
     status: "ready",
+    sourceSandboxId: "8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36",
+    sourceTemplate: "hermes-v1",
+    cpu: 2, memoryGb: 4, diskGb: 20,
+    architecture: "linux/amd64",
+    product: productForTier("container"),
+    idc: "us-ia-iowa-1",
+    createdAt: _seedDaysAgo(1),
+    readyAt: _seedDaysAgo(1),
+    updatedAt: _seedDaysAgo(1),
+  },
+  {
+    // A failed create keeps an Error record and has its name cleared.
+    id: "snap_e41a0c7d2f95",
+    status: "error",
+    sourceSandboxId: "8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36",
+    sourceTemplate: "hermes-v1",
+    cpu: 2, memoryGb: 4, diskGb: 20,
+    architecture: "linux/amd64",
+    product: productForTier("container"),
+    idc: "us-ia-iowa-1",
+    errorCode: "snapshot_capture_failed",
+    errorReason: "The provider timed out while copying the root filesystem.",
+    createdAt: _seedMinsAgo(140),
+    updatedAt: _seedMinsAgo(132),
+  },
+  {
+    // Source sandbox is long gone; the snapshot outlives it.
+    id: "snap_91d5b3e8a6c2",
+    name: "openclaw-baseline",
+    status: "delete_failed",
+    sourceSandboxId: "5d0e7a19-3c2b-4f8d-a641-8e9b0c1d2f37",
+    sourceTemplate: "openclaw-v5",
+    cpu: 2, memoryGb: 4, diskGb: 20,
+    architecture: "linux/amd64",
+    product: productForTier("container"),
+    idc: "us-ia-iowa-1",
+    errorCode: "snapshot_delete_failed",
+    errorReason: "Storage did not confirm the release in time.",
+    createdAt: _seedDaysAgo(12),
+    readyAt: _seedDaysAgo(12),
+    updatedAt: _seedMinsAgo(25),
   },
 ];
-// Console label — name when present, otherwise the canonical ID (F-07).
+// Console label — name when present, otherwise the ID.
 function snapshotLabel(s: Snapshot): string {
   return s.name && s.name.trim() ? s.name.trim() : s.id;
 }
-// Capture-time size estimate → "Requires up to X GiB" (mock: OS + used + margin).
-function estimateSnapshotGiB(): number {
-  return 4.2;
-}
-// F-07 name rules — 1–64 chars, lowercase letters, digits, hyphen, underscore;
-// unique within the Organization; duplicates are rejected, never overwritten.
-const SNAPSHOT_NAME_RE = /^[a-z0-9_-]{1,64}$/;
+// Name rules: up to 255 characters, case-sensitive, unique across the whole
+// Organization (every IDC). Empty is allowed. A name is held until its
+// snapshot's delete has fully finished, so Deleting rows still count as taken.
+const SNAPSHOT_NAME_MAX = 255;
 function snapshotNameError(name: string, taken: string[]): string | null {
   const v = name.trim();
-  if (!v) return null; // clearing the name is valid — the Console falls back to the ID
-  if (v.length > 64) return "Maximum 64 characters.";
-  if (!SNAPSHOT_NAME_RE.test(v)) return "Use lowercase letters, digits, hyphen, or underscore.";
-  if (taken.includes(v)) return "A Snapshot with this name already exists in your Organization.";
+  if (!v) return null;
+  if (v.length > SNAPSHOT_NAME_MAX) return `Maximum ${SNAPSHOT_NAME_MAX} characters.`;
+  if (taken.includes(v)) return "Another snapshot in your organization already uses this name.";
   return null;
 }
-// Console pre-fill: <agent-version-name>-<source-instance-short-id>-<YYYYMMDD-HHMM>
-// in the Organization's display timezone. The user may overwrite or clear it.
-function snapshotNamePrefill(agentVersion: string, instId: string): string {
+// Console pre-fill: <template>-<source-sandbox-short-id>-<YYYYMMDD-HHMM>.
+function snapshotNamePrefill(template: string, sandboxId: string): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
   const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
-  const short = `i${instId.replace(/[^a-z0-9]/gi, "").slice(0, 6)}`;
-  return `${agentVersion}-${short}-${stamp}`;
-}
-// Snapshot retention expiry (P-04) — counts from Ready; 7/3/1 risk color.
-function snapshotDaysLeft(s: Snapshot): number {
-  const anchor = s.readyAt ?? s.createdAt;
-  const start = new Date(anchor.replace(" ", "T")).getTime();
-  const elapsed = Math.floor((Date.now() - start) / 86400000);
-  return Math.max(0, s.retentionDays - elapsed);
-}
-function riskColor(daysLeft: number): { color: string; warn: boolean } {
-  if (daysLeft <= 1) return { color: C.err, warn: true };
-  if (daysLeft <= 3) return { color: "#fb923c", warn: true };
-  if (daysLeft <= 7) return { color: C.warn, warn: true };
-  return { color: C.muted, warn: false };
+  const short = `i${sandboxId.replace(/[^a-z0-9]/gi, "").slice(0, 6)}`;
+  return `${template}-${short}-${stamp}`;
 }
 
 // ─── Cost estimates (PRD §4.5 metering; exact billing lives in Usage & Billing) ──
 // Mock rates — the reliability of a $/month figure is a Decision needed (review).
 const SUSPENDED_STORAGE_PER_GIB_MO = 0.08;
-const SNAPSHOT_STORAGE_PER_GIB_MO = 0.05;
 const SUSPENDED_DISK_GIB = 10;   // mock retained-disk size per suspended runtime
 const HRS_PER_MONTH = 730;
 const CONTAINER_RATE_HR = 0.0098; // Container tier $/hr (matches Register's Live Cost)
-interface CostBreakdown { computeMo: number; suspendedMo: number; snapMo: number; total: number; suspendedGiB: number; snapGiB: number }
-function agentCostBreakdown(agentId: string, instances: Instance[], snapshots: Snapshot[]): CostBreakdown {
+// Snapshot storage has no metering yet — it arrives with Snapshots in 2.1.
+interface CostBreakdown { computeMo: number; suspendedMo: number; total: number; suspendedGiB: number }
+function agentCostBreakdown(agentId: string, instances: Instance[]): CostBreakdown {
   const rate = CONTAINER_RATE_HR;
   const mine = instances.filter((i) => i.agentId === agentId);
   const activeCompute = mine.filter((i) => i.status === "running" || i.status === "resuming" || i.status === "suspending").length;
   const computeMo = activeCompute * rate * HRS_PER_MONTH;
   const suspendedGiB = mine.filter((i) => i.status === "suspended").length * SUSPENDED_DISK_GIB;
   const suspendedMo = suspendedGiB * SUSPENDED_STORAGE_PER_GIB_MO;
-  // Snapshot storage bills from Ready on the provider-reported billable size —
-  // a Snapshot whose size hasn't been reported yet contributes nothing (§4.5).
-  const snapGiB = snapshots
-    .filter((s) => s.sourceAgentId === agentId && s.status === "ready")
-    .reduce((a, s) => a + (s.billableGiB ?? 0), 0);
-  const snapMo = snapGiB * SNAPSHOT_STORAGE_PER_GIB_MO;
-  return { computeMo, suspendedMo, snapMo, total: computeMo + suspendedMo + snapMo, suspendedGiB, snapGiB };
+  return { computeMo, suspendedMo, total: computeMo + suspendedMo, suspendedGiB };
 }
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
@@ -1980,15 +1993,14 @@ function InstanceRowMenu({
   if (caps.shell) jumps.push({ tab: "terminal", label: "Terminal",      icon: <IconTerminal />, on: live });
 
   // Lifecycle actions by state — the §4.1 transition matrix is authoritative.
-  type MenuAction = { action: RowAction; label: string; icon: React.ReactNode; release?: Release; danger?: boolean; title?: string; noApi?: boolean; v21?: boolean };
+  type MenuAction = { action: RowAction; label: string; icon: React.ReactNode; release?: Release; danger?: boolean; title?: string; noApi?: boolean; v21?: boolean; disabled?: boolean };
   const lifecycle: MenuAction[] = [];
-  if (inst.status === "running") {
-    lifecycle.push({ action: "snapshot", label: "Save as Snapshot", icon: <IconSnapshot />, release: "R1", noApi: true, v21: true });
-  }
-  // Snapshot from Suspended is conditional on Q8. While it's unresolved AgentBox
-  // never silently resumes: Resume → Snapshot → Suspend stays three steps.
-  if (inst.status === "suspended" && CAP.snapshotFromSuspended && canConvert) {
-    lifecycle.push({ action: "convert", label: "Save as Snapshot", icon: <IconSnapshot />, release: "R1?", v21: true });
+  // Shown on every live sandbox so the option is discoverable; only Running can use it.
+  if (inst.status !== "deleted" && inst.status !== "deleting") {
+    lifecycle.push({
+      action: "snapshot", label: "Create Snapshot", icon: <IconSnapshot />, v21: true,
+      disabled: !live, title: live ? undefined : "Only a running sandbox can be snapshotted.",
+    });
   }
   // F-04 / §4.2 — Delete is available from every non-terminal state, confirmed or
   // not, and is never rejected as a lifecycle conflict. Deleting is an idempotent
@@ -2062,8 +2074,9 @@ function InstanceRowMenu({
             <button
               key={it.action}
               title={it.title}
-              onClick={() => { setOpen(false); onAction(inst.id, it.action); }}
-              style={itemStyle(false, it.danger)}
+              disabled={it.disabled}
+              onClick={() => { if (it.disabled) return; setOpen(false); onAction(inst.id, it.action); }}
+              style={{ ...itemStyle(false, it.danger), ...(it.disabled ? { opacity: 0.45, cursor: "not-allowed" } : {}) }}
             >
               {it.icon}
               <span style={{ flex: 1 }}>{it.label}</span>
@@ -3658,11 +3671,13 @@ function InstanceDrawer({
     </div>
   );
 
-  const actionBtn = (label: string, icon: React.ReactNode, action: RowAction, kind: "primary" | "ghost" | "danger", noApi = false, v21 = false, batch2 = false) => (
+  const actionBtn = (label: string, icon: React.ReactNode, action: RowAction, kind: "primary" | "ghost" | "danger", noApi = false, v21 = false, batch2 = false, disabledReason?: string) => (
     <button
-      onClick={() => onAction(inst.id, action)}
+      onClick={() => !disabledReason && onAction(inst.id, action)}
+      disabled={!!disabledReason}
       title={
-        noApi ? NO_API_REASON
+        disabledReason ? disabledReason
+        : noApi ? NO_API_REASON
         : action === "delete" ? "Available in every state, confirmed or not — never rejected as a lifecycle conflict."
         : undefined
       }
@@ -3672,7 +3687,8 @@ function InstanceDrawer({
         background: kind === "primary" ? C.lime : "transparent",
         color: kind === "primary" ? C.limeText : kind === "danger" ? C.err : C.fg,
         border: kind === "primary" ? "none" : `1px solid ${C.border}`,
-        padding: "5px 11px", borderRadius: 7, cursor: "pointer",
+        padding: "5px 11px", borderRadius: 7, cursor: disabledReason ? "not-allowed" : "pointer",
+        opacity: disabledReason ? 0.45 : 1,
       }}
     >
       {icon} {label} {batch2 && <BatchBadge batch={2} />} {v21 && <V21Badge />} {noApi && <NoApiBadge />}
@@ -3753,7 +3769,7 @@ function InstanceDrawer({
               Everything else here ships in batch 1. */}
           {running && actionBtn("Pause", <IconSuspend />, "suspend", "ghost", false, false, true)}
           {inst.status === "suspended" && actionBtn("Resume", <IconResume />, "resume", "primary", false, false, true)}
-          {running && actionBtn("Create Snapshot", <IconSnapshot />, "snapshot", "ghost", true, true)}
+          {inst.status !== "deleted" && inst.status !== "deleting" && actionBtn("Create Snapshot", <IconSnapshot />, "snapshot", "ghost", false, true, false, running ? undefined : "Only a running sandbox can be snapshotted.")}
           {(inst.status === "error" || inst.unconfirmed) && actionBtn("Retry", <IconRestart />, "retry", "ghost")}
           {inst.status !== "deleted" && inst.status !== "deleting" && actionBtn("Delete", <IconTrash />, "delete", "danger")}
         </div>
@@ -4480,12 +4496,11 @@ function IntegrationPane({ agent }: { agent: MyAgent }) {
 }
 
 // ─── Analytics pane — cost + usage by model + usage by API key ─────────────
-function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instances: Instance[]; snapshots: Snapshot[] }) {
-  const cost = agentCostBreakdown(agent.id, instances, snapshots);
+function AnalyticsPane({ agent, instances }: { agent: MyAgent; instances: Instance[] }) {
+  const cost = agentCostBreakdown(agent.id, instances);
   const costLines = [
     { label: "Compute", note: "per active sandbox", val: cost.computeMo },
     { label: "Paused storage", note: `${cost.suspendedGiB} GiB`, val: cost.suspendedMo },
-    { label: "Snapshot storage", note: `${cost.snapGiB.toFixed(1)} GiB`, val: cost.snapMo },
   ];
   const planPrice = discountPriceString(CODING_AGENT_PLAN.featuredModelInPrice);
   return (
@@ -4514,7 +4529,6 @@ function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instan
           <li>Every meter starts and stops on a confirmed state — never on request acceptance.</li>
           <li>Starting, pausing, and resuming time is free to you; GMI absorbs the provider cost for those states.</li>
           <li>Paused Sandboxes bill retained disk only, from confirmed Pause until Resume or confirmed release.</li>
-          <li>Snapshot storage bills from Ready — never during capture — on the reported billable size.</li>
           <li>Unconfirmed periods accrue provisional usage only; nothing is invoiced until reconciliation settles it.</li>
           <li>Failed, retried, or delayed operations never produce a duplicate or incorrect charge.</li>
         </ul>
@@ -4550,13 +4564,12 @@ function AnalyticsPane({ agent, instances, snapshots }: { agent: MyAgent; instan
 
 // ─── Right detail pane ────────────────────────────────────────────────────
 function AgentDetailPane({
-  agent, instances, snapshots, image, onProvision, onAction, onOpenDetail, activeInstanceId,
+  agent, instances, image, onProvision, onAction, onOpenDetail, activeInstanceId,
   onPublishListing, onUnpublishListing,
   onEditTemplate, onDeleteAgent, onDismissSetup, canConvert = false,
 }: {
   agent: MyAgent;
   instances: Instance[];
-  snapshots: Snapshot[];
   image?: RuntimeImage;
   onPublishListing: (agentId: string) => void;
   onUnpublishListing: (agentId: string) => void;
@@ -4880,7 +4893,7 @@ function AgentDetailPane({
         />
       )}
       {tab === "integration" && <IntegrationPane agent={agent} />}
-      {tab === "analytics" && <AnalyticsPane agent={agent} instances={instances} snapshots={snapshots} />}
+      {tab === "analytics" && <AnalyticsPane agent={agent} instances={instances} />}
 
       {/* §2 — the one place this agent can be deleted. Deleting the template
           deletes the agent: they are the same object, so offering it twice
@@ -4909,417 +4922,632 @@ function AgentDetailPane({
   );
 }
 
-// ─── Snapshot status color + label ─────────────────────────────────────────
-function snapshotColor(s: SnapshotStatus): string {
-  switch (s) {
-    case "ready":    return C.ok;
-    case "creating": return "#fbbf24";
-    case "failed":   return C.err;
-    case "deleting": return "#fb923c";
-  }
-}
-
-// ─── F-07 Create Snapshot form ───────────────────────────────────────────────
-// Capture starts from Runtime Detail and does not change the source Runtime's
-// state. The user provides a name and an optional description; everything else —
-// source Runtime, source Agent Version, Organization, region, runtime class,
-// architecture — is inherited. Image, compute, storage, entrypoint and version
-// number are never selected here.
-function CreateSnapshotModal({
-  inst, agentName, agentVersion, region, runtimeClass, architecture,
-  existingNames, snapshotCount, onCancel, onCreate,
-}: {
-  inst: Instance | null;
-  agentName: string;
-  agentVersion: string;
-  region: string;
-  runtimeClass: string;
-  architecture: string;
-  existingNames: string[];
-  snapshotCount: number;
-  onCancel: () => void;
-  onCreate: (input: { name: string; description: string; metadata: MetaEntry[] }) => void;
-}) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [meta, setMeta] = useState<MetaEntry[]>([]);
-  // Re-prefill each time the form opens for a different Runtime.
-  useEffect(() => {
-    if (inst) {
-      setName(snapshotNamePrefill(agentVersion, inst.id));
-      setDescription("");
-      setMeta([]);
-    }
-  }, [inst?.id, agentVersion]);
-
-  if (!inst) return null;
-  const nameErr = snapshotNameError(name, existingNames);
-  const atLimit = snapshotCount >= CAP.orgSnapshotLimit;
-  const canCreate = !nameErr && !atLimit;
-  const est = estimateSnapshotGiB();
-
-  const inputStyle: React.CSSProperties = {
-    background: C.pillBg, border: `1px solid ${C.border}`, color: C.fg,
-    fontFamily: MONO, fontSize: 12, padding: "7px 10px", borderRadius: 6, outline: "none", width: "100%",
-  };
-  const inherited: [string, string][] = [
-    ["Source Sandbox", midId(inst.id)],
-    ["Source Agent Version", agentVersion],
-    ["Region", region],
-    ["Spec", runtimeClass],
-    ["Architecture", architecture],
-  ];
-
+// ─── Snapshot status pill ───────────────────────────────────────────────────
+function SnapshotStatusPill({ status }: { status: SnapshotStatus }) {
+  const m = SNAPSHOT_STATUS_META[status];
   return (
-    <div onClick={onCancel} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.78)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 540, maxWidth: "100%", background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 10, display: "flex", flexDirection: "column", maxHeight: "90vh", overflow: "hidden" }}>
-        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}` }}>
-          <h3 style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>
-            Create Snapshot <V21Badge /> <ReleaseBadge r="R1" />
-          </h3>
-          <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "4px 0 0", lineHeight: "17px" }}>
-            Capture this Sandbox's filesystem so you can launch new Sandboxes without repeating setup. {agentName} · {midId(inst.id)} keeps running.
-          </p>
-        </div>
-
-        <div style={{ padding: "16px 20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
-          {atLimit && (
-            <div style={{ fontFamily: FONT, fontSize: 12, color: C.fg, background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.35)", borderRadius: 8, padding: "9px 11px", lineHeight: "17px" }}>
-              Your Organization is at its Snapshot count limit ({snapshotCount}/{CAP.orgSnapshotLimit}). Delete a Snapshot to capture a new one.
-            </div>
-          )}
-
-          <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>
-              Name <span style={{ color: C.muted, fontWeight: 400 }}>· optional</span>
-            </label>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="leave empty to label by ID" style={{ ...inputStyle, borderColor: nameErr ? "rgba(248,113,113,0.55)" : C.border }} />
-            {nameErr ? (
-              <span style={{ fontFamily: FONT, fontSize: 11, color: C.err, lineHeight: "15px" }}>{nameErr}</span>
-            ) : (
-              <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-                {name.trim()
-                  ? "1–64 characters · lowercase letters, digits, hyphen, underscore · unique in your Organization · renameable later."
-                  : "No name — this Snapshot will show as its ID in the Console. The ID is the canonical reference either way."}
-              </span>
-            )}
-          </section>
-
-          <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>
-              Description <span style={{ color: C.muted, fontWeight: 400 }}>· optional</span>
-            </label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={2}
-              placeholder="e.g. deps installed, model weights cached"
-              style={{ ...inputStyle, fontFamily: FONT, fontSize: 13, resize: "vertical" }}
-            />
-          </section>
-
-          {/* Inherited automatically — never selected at capture time */}
-          <section style={{ display: "flex", flexDirection: "column", gap: 6, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "11px 12px" }}>
-            <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>Inherited from the source</span>
-            {inherited.map(([k, v]) => (
-              <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: FONT, fontSize: 12, lineHeight: "18px" }}>
-                <span style={{ color: C.muted }}>{k}</span>
-                <span style={{ color: C.fg, fontFamily: MONO, fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</span>
-              </div>
-            ))}
-            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-              Snapshots have no version number of their own — versioning belongs to the Agent Version, and one Version may have many Snapshots.
-            </span>
-          </section>
-
-          <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <label style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg }}>
-                Metadata <span style={{ color: C.muted, fontWeight: 400 }}>· optional</span>
-              </label>
-              <ReleaseBadge r="R0" />
-            </div>
-            <MetadataEditor entries={meta} onChange={setMeta} />
-          </section>
-
-          {/* Exact disclosure required by F-07 */}
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "rgba(251,191,36,0.05)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: 8, padding: "10px 12px" }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.warn} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M12 9v4M12 17h.01" /><circle cx="12" cy="12" r="10" /></svg>
-            <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "17px" }}>
-              Snapshots preserve the Sandbox filesystem only. Memory, running processes, active connections, and temporary secrets are not preserved.
-              Stop or flush stateful applications before capture where that matters — application-consistent state is not guaranteed.
-            </span>
-          </div>
-
-          <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-            Capture is asynchronous: you get a Snapshot ID in Creating, and it becomes usable only from Ready.
-            Requires up to <span style={{ color: C.fg, fontWeight: 600 }}>{est} GiB</span>; storage billing starts when the provider confirms capture,
-            and the billable size may be reported after Ready. A failed capture creates no usable Snapshot, no provider storage, and no charge.
-          </span>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 20px", borderTop: `1px solid ${C.borderSoft}` }}>
-          <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted }}>
-            Snapshots {snapshotCount}/{CAP.orgSnapshotLimit} in your Organization
-          </span>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={onCancel} style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, background: "transparent", color: C.fg, border: `1px solid ${C.border}`, padding: "6px 14px", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
-            <button
-              onClick={() => canCreate && onCreate({ name: name.trim(), description: description.trim(), metadata: meta.filter((m) => m.key.trim()) })}
-              disabled={!canCreate}
-              style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, background: canCreate ? C.lime : "#3a3a1f", color: canCreate ? C.limeText : "#6b6b52", border: "none", padding: "6px 16px", borderRadius: 8, cursor: canCreate ? "pointer" : "not-allowed" }}
-            >
-              Create Snapshot
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <span
+      title={m.hint}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: FONT, fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap", color: m.color, background: `${m.color}1f`, border: `1px solid ${m.color}55`, padding: "2px 8px", borderRadius: 6 }}
+    >
+      {m.pulse && <span style={{ width: 6, height: 6, borderRadius: 999, background: m.color, animation: "pulse 1.2s ease-in-out infinite" }} />}
+      {m.label}
+    </span>
   );
 }
 
-// ─── Restore modal — Create Runtime from a snapshot (PRD F-08 / §5.5) ───────
-function RestoreSnapshotModal({
-  snapshot, agents, onClose, onLaunch,
+// Shared modal shell for the three snapshot forms.
+function SnapshotModalShell({
+  title, subtitle, width = 520, onClose, footer, children,
 }: {
-  snapshot: Snapshot | null;
-  agents: MyAgent[];
+  title: React.ReactNode;
+  subtitle?: React.ReactNode;
+  width?: number;
   onClose: () => void;
-  onLaunch: (targetAgentId: string, version: string) => void;
+  footer: React.ReactNode;
+  children: React.ReactNode;
 }) {
-  const [targetId, setTargetId] = useState<string | null>(null);
-  if (!snapshot) return null;
-  // F-07 eligibility: the source Agent Version, or an explicitly compatible
-  // Version of the SAME Agent. Cross-Agent launch is Post-R1, so no other Agent
-  // is ever offered here. Runtime class, architecture, region and provider
-  // requirements are validated before any resource is created.
-  const sourceAgent = agents.find((a) => a.id === snapshot.sourceAgentId);
-  const versions = sourceAgent
-    ? [
-        { id: snapshot.sourceAgentVersion, note: "Source version — always eligible" },
-        { id: `${snapshot.sourceAgentVersion}-patch2`, note: "Marked compatible by the developer" },
-      ]
-    : [];
-  const anyCompatible = versions.length > 0;
-
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.78)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 520, maxWidth: "100%", background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 10, display: "flex", flexDirection: "column", maxHeight: "90vh", overflow: "hidden" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width, maxWidth: "100%", background: C.cardSolid, border: `1px solid ${C.border}`, borderRadius: 10, display: "flex", flexDirection: "column", maxHeight: "90vh", overflow: "hidden" }}>
         <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}` }}>
-          <h3 style={{ fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>Launch New Sandbox</h3>
-          <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "4px 0 0" }}>
-            <span style={{ fontFamily: MONO }}>{snapshotLabel(snapshot)}</span> · loads the captured filesystem into a Version of the same Agent
-          </p>
+          <h3 style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 16, fontWeight: 600, color: C.fg, margin: 0 }}>{title}</h3>
+          {subtitle && <p style={{ fontFamily: FONT, fontSize: 12, color: C.muted, margin: "4px 0 0", lineHeight: "17px" }}>{subtitle}</p>}
         </div>
-        <div style={{ padding: "14px 20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
-          <span style={{ fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.fg }}>
-            Target Agent Version {sourceAgent && <span style={{ color: C.muted, fontWeight: 400 }}>· {sourceAgent.name}</span>}
-          </span>
-          {!anyCompatible && (
-            <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "10px 12px", lineHeight: "18px" }}>
-              The source Agent for this Snapshot is no longer available, so there is no eligible target.
-              A Snapshot can only launch into the same Agent — cross-Agent launch is Post-R1, and creating a new Agent from a Snapshot is not supported.
-            </div>
-          )}
-          {versions.map((v) => {
-            const selected = targetId === v.id;
-            return (
-              <button
-                key={v.id}
-                onClick={() => setTargetId(v.id)}
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, textAlign: "left",
-                  background: selected ? "rgba(221,234,77,0.10)" : "rgba(255,255,255,0.02)",
-                  border: `1px solid ${selected ? C.lime : C.borderSoft}`,
-                  borderRadius: 8, padding: "10px 12px",
-                  cursor: "pointer", fontFamily: FONT,
-                }}
-              >
-                <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: C.fg, fontFamily: MONO }}>{v.id}</span>
-                  <span style={{ fontSize: 11, color: C.muted }}>{v.note}</span>
-                </span>
-                <span style={{ fontSize: 11, fontWeight: 600, color: C.lime }}>Eligible</span>
-              </button>
-            );
-          })}
-          {anyCompatible && (
-            <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-              Only Versions of this Agent are eligible. Region, Spec, and architecture
-              ({snapshot.region} · {snapshot.runtimeClass} · {snapshot.architecture}) are validated before any resource is created.
-            </span>
-          )}
-
-          {/* What restores / re-applied · secrets · cost · permission (PRD F-08 / §4.4) */}
-          {anyCompatible && (() => {
-            const d = discountPriceString(CODING_AGENT_PLAN.featuredModelInPrice);
-            return (
-              <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 9, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "11px 12px" }}>
-                <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px" }}>
-                  <span style={{ color: C.fg, fontWeight: 600 }}>Snapshot provides</span> filesystem state · <span style={{ color: C.fg, fontWeight: 600 }}>Target Version provides</span> startup command, permissions, network, Endpoints, lifecycle and fresh secrets. The new Sandbox gets its own ID, Endpoints and access.
-                </div>
-                <div style={{ display: "flex", gap: 6, alignItems: "flex-start", fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px" }}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1, color: C.warn }}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-                  <span><span style={{ color: C.fg, fontWeight: 600 }}>Secrets are injected fresh</span> — never taken from the Snapshot. Credentials that were written to the captured disk may still be there.</span>
-                </div>
-                <div style={{ fontFamily: FONT, fontSize: 12, color: C.muted, lineHeight: "17px" }}>
-                  Each launch is independent and there is no batch API. Sending the same request twice produces one Sandbox, not two.
-                  A failed launch leaves this Snapshot Ready and unchanged.
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, fontFamily: FONT, fontSize: 12 }}>
-                  <span style={{ color: C.muted }}>Est. cost</span>
-                  <span style={{ color: C.fg }}>Target compute + MaaS{d ? <> · <span style={{ color: C.lime, fontWeight: 600 }}>{d.discounted}</span></> : ""}</span>
-                </div>
-                <div style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" }}>
-                  Requires permission on both the snapshot and the Target Agent.
-                </div>
-              </div>
-            );
-          })()}
-        </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "12px 20px", borderTop: `1px solid ${C.borderSoft}` }}>
-          <button onClick={onClose} style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, background: "transparent", color: C.fg, border: `1px solid ${C.border}`, padding: "6px 14px", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
-          <button
-            onClick={() => targetId && sourceAgent && onLaunch(sourceAgent.id, targetId)}
-            disabled={!targetId}
-            style={{ fontFamily: FONT, fontSize: 13, fontWeight: 600, background: targetId ? C.lime : "#3a3a1f", color: targetId ? C.limeText : "#666", border: "none", padding: "6px 16px", borderRadius: 8, cursor: targetId ? "pointer" : "not-allowed" }}
-          >
-            Launch New Sandbox
-          </button>
-        </div>
+        <div style={{ padding: "16px 20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 16 }}>{children}</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, padding: "12px 20px", borderTop: `1px solid ${C.borderSoft}` }}>{footer}</div>
       </div>
     </div>
   );
 }
+const snapInputStyle: React.CSSProperties = {
+  background: C.pillBg, border: `1px solid ${C.border}`, color: C.fg,
+  fontFamily: MONO, fontSize: 12, padding: "7px 10px", borderRadius: 6, outline: "none", width: "100%",
+};
+const snapLabelStyle: React.CSSProperties = { fontFamily: FONT, fontSize: 13, fontWeight: 600, color: C.fg };
+const snapHelpStyle: React.CSSProperties = { fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "15px" };
+function snapButton(kind: "primary" | "ghost", enabled = true): React.CSSProperties {
+  return kind === "primary"
+    ? { fontFamily: FONT, fontSize: 13, fontWeight: 600, background: enabled ? C.lime : "#3a3a1f", color: enabled ? C.limeText : "#6b6b52", border: "none", padding: "6px 16px", borderRadius: 8, cursor: enabled ? "pointer" : "not-allowed" }
+    : { fontFamily: FONT, fontSize: 13, fontWeight: 500, background: "transparent", color: C.fg, border: `1px solid ${C.border}`, padding: "6px 14px", borderRadius: 8, cursor: "pointer" };
+}
+function SnapshotErrorBox({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontFamily: FONT, fontSize: 12, color: C.fg, background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.35)", borderRadius: 8, padding: "9px 11px", lineHeight: "17px" }}>
+      {children}
+    </div>
+  );
+}
+/** Read-only key/value block for what the snapshot fixes. */
+function SnapshotFixedBox({ title, rows, note }: { title: string; rows: [string, string][]; note?: React.ReactNode }) {
+  return (
+    <section style={{ display: "flex", flexDirection: "column", gap: 6, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "11px 12px" }}>
+      <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>{title}</span>
+      {rows.map(([k, v]) => (
+        <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: FONT, fontSize: 12, lineHeight: "18px" }}>
+          <span style={{ color: C.muted, flexShrink: 0 }}>{k}</span>
+          <span style={{ color: C.fg, fontFamily: MONO, fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</span>
+        </div>
+      ))}
+      {note && <span style={snapHelpStyle}>{note}</span>}
+    </section>
+  );
+}
+function NameField({ value, onChange, error }: { value: string; onChange: (v: string) => void; error: string | null }) {
+  return (
+    <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <label style={snapLabelStyle}>Name <span style={{ color: C.muted, fontWeight: 400 }}>· optional</span></label>
+      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder="leave empty to label by ID" style={{ ...snapInputStyle, borderColor: error ? "rgba(248,113,113,0.55)" : C.border }} />
+      {error
+        ? <span style={{ ...snapHelpStyle, color: C.err }}>{error}</span>
+        : <span style={snapHelpStyle}>Up to {SNAPSHOT_NAME_MAX} characters · case-sensitive · unique across your organization, in every IDC. Leave it empty and the snapshot shows as its ID.</span>}
+    </section>
+  );
+}
 
-// ─── Organization Snapshots view (PRD §5.5) ─────────────────────────────────
+// ─── Create Snapshot ────────────────────────────────────────────────────────
+// Entry: a Running sandbox (row menu or Sandbox Detail). Source is fixed by the
+// entry point; the user fills only name and metadata. The server can still
+// refuse — `onCreate` returns that refusal so the form stays open and says why.
+interface SnapshotSource {
+  sandboxId: string;
+  running: boolean;
+  template: string;
+  cpu: number; memoryGb: number; diskGb: number;
+  architecture: string;
+  idc: string;
+}
+function CreateSnapshotModal({
+  source, existingNames, creatingForSource, onCancel, onCreate,
+}: {
+  source: SnapshotSource | null;
+  existingNames: string[];
+  /** A snapshot of this sandbox is already Creating — the API refuses a second one. */
+  creatingForSource: boolean;
+  onCancel: () => void;
+  onCreate: (input: { name: string; metadata: MetaEntry[] }) => string | null;
+}) {
+  const [name, setName] = useState("");
+  const [meta, setMeta] = useState<MetaEntry[]>([]);
+  const [serverErr, setServerErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (source) {
+      setName(snapshotNamePrefill(source.template, source.sandboxId));
+      setMeta([]);
+      setServerErr(null);
+    }
+  }, [source?.sandboxId, source?.template]);
+
+  if (!source) return null;
+  const nameErr = snapshotNameError(name, existingNames);
+  const blocked = !source.running
+    ? "This sandbox is no longer running. Snapshots can only be created from a running sandbox."
+    : creatingForSource
+      ? "A snapshot of this sandbox is already being created. Wait for it to finish, or cancel it, before creating another."
+      : null;
+  const canCreate = !nameErr && !blocked;
+
+  return (
+    <SnapshotModalShell
+      title={<>Create Snapshot <V21Badge /></>}
+      subtitle={<>From sandbox <span style={{ fontFamily: MONO }}>{midId(source.sandboxId)}</span>. The sandbox keeps running while the snapshot is taken.</>}
+      width={540}
+      onClose={onCancel}
+      footer={<>
+        <button onClick={onCancel} style={snapButton("ghost")}>Cancel</button>
+        <button
+          disabled={!canCreate}
+          onClick={() => {
+            if (!canCreate) return;
+            setServerErr(onCreate({ name: name.trim(), metadata: meta.filter((m) => m.key.trim()) }));
+          }}
+          style={snapButton("primary", canCreate)}
+        >
+          Create Snapshot
+        </button>
+      </>}
+    >
+      {blocked && <SnapshotErrorBox>{blocked}</SnapshotErrorBox>}
+      {serverErr && <SnapshotErrorBox>{serverErr}</SnapshotErrorBox>}
+
+      {/* What gets saved — the one fact the user must not miss */}
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "rgba(251,191,36,0.05)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: 8, padding: "10px 12px" }}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.warn} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M12 9v4M12 17h.01" /><circle cx="12" cy="12" r="10" /></svg>
+        <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg, lineHeight: "17px" }}>
+          <strong>Only files are saved.</strong> Running processes and memory are not. A sandbox launched from this snapshot starts fresh from these files.
+          This is not a template — a template is built from an image; a snapshot is taken from this running sandbox.
+        </span>
+      </div>
+
+      <NameField value={name} onChange={(v) => { setName(v); setServerErr(null); }} error={nameErr} />
+
+      <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <label style={snapLabelStyle}>Metadata <span style={{ color: C.muted, fontWeight: 400 }}>· optional</span></label>
+        <MetadataEditor entries={meta} onChange={setMeta} />
+      </section>
+
+      <SnapshotFixedBox
+        title="Taken from the source sandbox"
+        rows={[
+          ["Source sandbox", midId(source.sandboxId)],
+          ["Template", source.template],
+          ["CPU · Memory · Disk", `${source.cpu} vCPU · ${source.memoryGb} GB · ${source.diskGb} GB`],
+          ["Architecture", source.architecture],
+          ["IDC", regionLabel(source.idc)],
+        ]}
+        note="Sandboxes launched from this snapshot use the same CPU, memory, disk and architecture. These can't be changed at launch."
+      />
+
+      <span style={snapHelpStyle}>
+        The snapshot appears in the list straight away as <strong style={{ color: C.fg }}>Creating</strong>, and a few seconds later
+        turns Ready or Error. While it is Creating you can only cancel it.
+      </span>
+    </SnapshotModalShell>
+  );
+}
+
+// ─── Edit Snapshot — name and metadata, Ready / Error only ──────────────────
+function EditSnapshotModal({
+  snapshot, existingNames, onClose, onSave,
+}: {
+  snapshot: Snapshot | null;
+  existingNames: string[];
+  onClose: () => void;
+  onSave: (input: { name: string; metadata: MetaEntry[] }) => void;
+}) {
+  const [name, setName] = useState("");
+  const [meta, setMeta] = useState<MetaEntry[]>([]);
+  useEffect(() => {
+    if (snapshot) {
+      setName(snapshot.name ?? "");
+      setMeta((snapshot.metadata ?? []).map((m) => ({ ...m })));
+    }
+  }, [snapshot?.id]);
+  if (!snapshot) return null;
+  const nameErr = snapshotNameError(name, existingNames.filter((n) => n !== snapshot.name));
+  return (
+    <SnapshotModalShell
+      title={<>Edit Snapshot <V21Badge /></>}
+      subtitle={<span style={{ fontFamily: MONO }}>{snapshot.id}</span>}
+      onClose={onClose}
+      footer={<>
+        <button onClick={onClose} style={snapButton("ghost")}>Cancel</button>
+        <button
+          disabled={!!nameErr}
+          onClick={() => !nameErr && onSave({ name: name.trim(), metadata: meta.filter((m) => m.key.trim()) })}
+          style={snapButton("primary", !nameErr)}
+        >
+          Save
+        </button>
+      </>}
+    >
+      <NameField value={name} onChange={setName} error={nameErr} />
+      <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <label style={snapLabelStyle}>Metadata</label>
+        <MetadataEditor entries={meta} onChange={setMeta} />
+        <span style={snapHelpStyle}>Saving replaces the whole set. Remove every entry to clear it.</span>
+      </section>
+    </SnapshotModalShell>
+  );
+}
+
+// ─── Launch Sandbox from a snapshot — Ready only ────────────────────────────
+// A cold boot with a new sandbox ID. CPU / memory / disk / architecture come
+// from the snapshot and are shown read-only; network and lifecycle are the only
+// things set here.
+interface SnapshotLaunchInput { maxLifetime: string; egressControl: boolean; egress: string[] }
+function LaunchFromSnapshotModal({
+  snapshot, canLaunch, onClose, onLaunch,
+}: {
+  snapshot: Snapshot | null;
+  /** False when the snapshot's template has no agent in My Agents to launch under. */
+  canLaunch: boolean;
+  onClose: () => void;
+  onLaunch: (input: SnapshotLaunchInput) => void;
+}) {
+  const [maxLifetime, setMaxLifetime] = useState(TEMPLATE_DEFAULT_CONFIG.maxLifetime);
+  const [egressControl, setEgressControl] = useState(false);
+  const [egressText, setEgressText] = useState("");
+  useEffect(() => {
+    if (snapshot) {
+      setMaxLifetime(TEMPLATE_DEFAULT_CONFIG.maxLifetime);
+      setEgressControl(false);
+      setEgressText("");
+    }
+  }, [snapshot?.id]);
+  if (!snapshot) return null;
+  const egress = egressText.split("\n").map((l) => l.trim()).filter(Boolean);
+  return (
+    <SnapshotModalShell
+      title={<>Launch Sandbox <V21Badge /></>}
+      subtitle={<>From snapshot <span style={{ fontFamily: MONO }}>{snapshotLabel(snapshot)}</span>. A cold start: the new sandbox gets a new ID and restores the files only — no processes are resumed.</>}
+      width={540}
+      onClose={onClose}
+      footer={<>
+        <button onClick={onClose} style={snapButton("ghost")}>Cancel</button>
+        <button disabled={!canLaunch} onClick={() => canLaunch && onLaunch({ maxLifetime, egressControl, egress })} style={snapButton("primary", canLaunch)}>
+          Launch Sandbox
+        </button>
+      </>}
+    >
+      {!canLaunch && (
+        <SnapshotErrorBox>
+          Template <span style={{ fontFamily: MONO }}>{snapshot.sourceTemplate}</span> isn't in My Agents any more, so this prototype has nowhere to show the new sandbox.
+        </SnapshotErrorBox>
+      )}
+
+      <SnapshotFixedBox
+        title="Fixed by the snapshot"
+        rows={[
+          ["Template", snapshot.sourceTemplate],
+          ["CPU · Memory · Disk", `${snapshot.cpu} vCPU · ${snapshot.memoryGb} GB · ${snapshot.diskGb} GB`],
+          ["Architecture", snapshot.architecture],
+          ["IDC", regionLabel(snapshot.idc)],
+        ]}
+        note="Resources and IDC come from the snapshot and can't be changed."
+      />
+
+      {/* Network */}
+      <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 7, ...snapLabelStyle }}>
+          <span style={{ color: C.muted, display: "inline-flex" }}><IconNetwork size={13} /></span>Network
+        </span>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+          <input type="checkbox" checked={egressControl} onChange={(e) => setEgressControl(e.target.checked)} style={{ accentColor: C.lime, width: 15, height: 15 }} />
+          <span style={{ fontFamily: FONT, fontSize: 12, color: C.fg }}>Restrict outbound traffic to an allowlist</span>
+        </label>
+        {egressControl && (
+          <textarea
+            value={egressText}
+            onChange={(e) => setEgressText(e.target.value)}
+            rows={3}
+            placeholder={"api.github.com\npypi.org"}
+            style={{ ...snapInputStyle, resize: "vertical" }}
+          />
+        )}
+        <span style={snapHelpStyle}>
+          {egressControl
+            ? egress.length === 0
+              ? "Allowlist is empty — all outbound traffic will be blocked. One host per line."
+              : `${egress.length} allowed host${egress.length === 1 ? "" : "s"}. The allowlist can be replaced later; restriction itself can't be turned off after launch.`
+            : "Outbound traffic is open. Whether to restrict it can only be chosen now, at launch."}
+        </span>
+      </section>
+
+      {/* Lifecycle */}
+      <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <label style={snapLabelStyle}>Lifecycle</label>
+        <span style={{ fontFamily: FONT, fontSize: 12, color: C.muted }}>Maximum active time</span>
+        <select value={maxLifetime} onChange={(e) => setMaxLifetime(e.target.value)} style={{ ...snapInputStyle, fontFamily: FONT, fontSize: 13 }}>
+          <option value="15min">15 minutes</option>
+          <option value="30min">30 minutes</option>
+          <option value="1h">1 hour</option>
+          <option value="4h">4 hours</option>
+        </select>
+        <span style={snapHelpStyle}>Counted from launch. When it runs out the sandbox is deleted with its files — the snapshot itself is not affected.</span>
+      </section>
+    </SnapshotModalShell>
+  );
+}
+
+// ─── Snapshots list (My Agents → Snapshots tab) ─────────────────────────────
+// Paged, with a total. Filters are exactly the API's: status, name, source
+// sandbox. Clicking a row opens Snapshot Details on the right (Daytona pattern).
+const SNAPSHOT_STATUS_FILTERS: ("all" | SnapshotStatus)[] = ["all", "creating", "ready", "error", "deleting", "delete_failed"];
+const SNAPSHOT_PAGE_SIZES = [20, 50, 100];
+const SNAPSHOT_EXPLAINER =
+  "A snapshot saves a running sandbox's files — not its processes or memory — so new sandboxes can start from it without repeating setup. " +
+  "It is not a template: a template is built from an image, a snapshot is taken from a running sandbox.";
+
+interface SnapshotActions {
+  onLaunch: (s: Snapshot) => void;
+  onEdit: (s: Snapshot) => void;
+  /** Ready / Error → delete; Creating → cancel. Both confirm first. */
+  onDelete: (s: Snapshot) => void;
+  onRetryDelete: (s: Snapshot) => void;
+}
+function snapSmallBtn(kind: "primary" | "ghost" | "danger"): React.CSSProperties {
+  return {
+    display: "inline-flex", alignItems: "center", gap: 5,
+    fontFamily: FONT, fontSize: 11.5, fontWeight: kind === "primary" ? 600 : 500, whiteSpace: "nowrap",
+    color: kind === "primary" ? C.limeText : kind === "danger" ? C.err : C.fg,
+    background: kind === "primary" ? C.lime : "transparent",
+    border: kind === "primary" ? "none" : `1px solid ${C.border}`,
+    padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+  };
+}
+/** One set of verbs per status — the table in the 2.1 spec. */
+function SnapshotActionButtons({ s, a, size = "row" }: { s: Snapshot; a: SnapshotActions; size?: "row" | "drawer" }) {
+  const big = size === "drawer";
+  const st = (k: "primary" | "ghost" | "danger") => ({ ...snapSmallBtn(k), ...(big ? { fontSize: 12.5, padding: "6px 14px", borderRadius: 7 } : {}) });
+  return (
+    <>
+      {s.status === "creating" && <button onClick={() => a.onDelete(s)} style={st("ghost")}>Cancel</button>}
+      {s.status === "ready" && <button onClick={() => a.onLaunch(s)} style={st("primary")}>Launch Sandbox</button>}
+      {snapshotCanEdit(s) && <button onClick={() => a.onEdit(s)} style={st("ghost")}>Edit</button>}
+      {snapshotCanEdit(s) && <button onClick={() => a.onDelete(s)} style={st("danger")}>Delete</button>}
+      {s.status === "delete_failed" && <button onClick={() => a.onRetryDelete(s)} style={st("ghost")}><IconRestart /> Retry delete</button>}
+      {s.status === "deleting" && <span style={{ fontFamily: FONT, fontSize: 11.5, color: C.muted }}>Deleting…</span>}
+    </>
+  );
+}
+function SnapshotFailure({ s }: { s: Snapshot }) {
+  if (s.status !== "error" && s.status !== "delete_failed") return null;
+  return (
+    <SnapshotErrorBox>
+      <div style={{ fontFamily: MONO, fontSize: 11, color: C.err, marginBottom: 2 }}>{s.errorCode}</div>
+      {s.errorReason}
+      <div style={{ color: C.muted, marginTop: 4 }}>
+        {s.status === "error"
+          ? "This snapshot can't launch sandboxes. Delete it, or create a new one from a running sandbox."
+          : "Retry the delete. The name stays reserved until the delete finishes."}
+      </div>
+    </SnapshotErrorBox>
+  );
+}
+
+// ─── Snapshot Details drawer ────────────────────────────────────────────────
+function SnapshotDetailsDrawer({
+  snapshot, agentName, onPrev, onNext, onClose, actions,
+}: {
+  snapshot: Snapshot;
+  agentName?: string;
+  onPrev?: () => void;
+  onNext?: () => void;
+  onClose: () => void;
+  actions: SnapshotActions;
+}) {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [onClose]);
+  const s = snapshot;
+  const kv = (k: string, v: React.ReactNode, copy?: string) => (
+    <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, minHeight: 22 }}>
+      <span style={{ color: C.muted, flexShrink: 0 }}>{k}</span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, color: C.fg, textAlign: "right" }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</span>
+        {copy && <CopyButton value={copy} label={false} />}
+      </span>
+    </div>
+  );
+  const section = (title: string, body: React.ReactNode) => (
+    <div style={{ padding: "16px 20px", borderTop: `1px solid ${C.borderSoft}`, display: "flex", flexDirection: "column", gap: 8 }}>
+      <span style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.muted, letterSpacing: "0.06em", textTransform: "uppercase" }}>{title}</span>
+      {body}
+    </div>
+  );
+  const chip = (icon: React.ReactNode, text: string) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: FONT, fontSize: 12, color: C.fg, background: "rgba(255,255,255,0.05)", border: `1px solid ${C.border}`, padding: "3px 9px", borderRadius: 999 }}>{icon}{text}</span>
+  );
+  const navBtn = (label: string, on: (() => void) | undefined, path: string) => (
+    <button aria-label={label} title={label} disabled={!on} onClick={on} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, background: "transparent", border: "none", color: on ? C.fg : C.borderSoft, cursor: on ? "pointer" : "default", borderRadius: 6 }}>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={path} /></svg>
+    </button>
+  );
+  return (
+    <>
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 900, background: "rgba(0,0,0,0.45)" }} />
+      <aside style={{ position: "fixed", top: 0, right: 0, bottom: 0, zIndex: 901, width: 440, maxWidth: "100vw", background: C.cardSolid, borderLeft: `1px solid ${C.border}`, display: "flex", flexDirection: "column", fontFamily: FONT, fontSize: 13, animation: "row-fade-in 160ms ease-out" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 14px 16px 20px" }}>
+          <h3 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 17, fontWeight: 600, color: C.fg, margin: 0 }}>Snapshot Details <V21Badge /></h3>
+          <div style={{ display: "flex", gap: 2 }}>
+            {navBtn("Previous snapshot", onPrev, "m18 15-6-6-6 6")}
+            {navBtn("Next snapshot", onNext, "m6 9 6 6 6-6")}
+            {navBtn("Close", onClose, "M18 6 6 18M6 6l12 12")}
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto" }}>
+          <div style={{ padding: "4px 20px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+            {kv("Name", s.name ? <span style={{ fontFamily: MONO }}>{s.name}</span> : <span style={{ color: C.muted }}>—</span>, s.name)}
+            {kv("ID", <span style={{ fontFamily: MONO }}>{s.id}</span>, s.id)}
+            {kv("Status", <SnapshotStatusPill status={s.status} />)}
+            <SnapshotFailure s={s} />
+          </div>
+
+          {section("Source", <>
+            {kv("Sandbox", <span style={{ fontFamily: MONO }} title={s.sourceSandboxId}>{midId(s.sourceSandboxId)}</span>, s.sourceSandboxId)}
+            {kv("Agent", agentName ?? <span style={{ color: C.muted }}>—</span>)}
+            {kv("Template", <span style={{ fontFamily: MONO }}>{s.sourceTemplate}</span>)}
+          </>)}
+
+          {section("Resources", <>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {chip(null, `${s.cpu} vCPU`)}
+              {chip(null, `${s.memoryGb} GiB memory`)}
+              {chip(null, `${s.diskGb} GiB disk`)}
+              {chip(null, s.architecture)}
+            </div>
+            {kv("Product", <span style={{ fontFamily: MONO, fontSize: 12 }}>{s.product}</span>)}
+            <span style={snapHelpStyle}>Sandboxes launched from this snapshot use these resources. They can't be changed.</span>
+          </>)}
+
+          {section("IDC", <span style={{ color: C.fg }}>{regionLabel(s.idc)}</span>)}
+
+          {section("Metadata", s.metadata && s.metadata.length > 0 ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {s.metadata.map((m) => (
+                <span key={m.id} style={{ fontFamily: MONO, fontSize: 11.5, color: C.fg, background: "rgba(255,255,255,0.05)", border: `1px solid ${C.border}`, padding: "2px 7px", borderRadius: 4 }}>{m.key}={m.value}</span>
+              ))}
+            </div>
+          ) : <span style={{ color: C.muted }}>—</span>)}
+
+          {section("Timestamps", <>
+            {kv("Created", <span title={s.createdAt}>{agoLabel(s.createdAt)}</span>)}
+            {kv("Ready", s.readyAt ? <span title={s.readyAt}>{agoLabel(s.readyAt)}</span> : <span style={{ color: C.muted }}>—</span>)}
+            {kv("Updated", <span title={s.updatedAt}>{agoLabel(s.updatedAt)}</span>)}
+          </>)}
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 8, padding: "12px 20px", borderTop: `1px solid ${C.border}` }}>
+          <SnapshotActionButtons s={s} a={actions} size="drawer" />
+        </div>
+      </aside>
+    </>
+  );
+}
+
 function OrganizationSnapshots({
-  snapshots, onRestore, onDelete,
+  snapshots, agentNameFor, ...actions
 }: {
   snapshots: Snapshot[];
-  onRestore: (s: Snapshot) => void;
-  onDelete: (id: string) => void;
-}) {
-  const [q, setQ] = useState("");
-  const rows = snapshots.filter((s) => {
-    if (!q.trim()) return true;
-    const query = q.toLowerCase();
-    if (query.includes("=")) return metadataMatches(s.metadata, query);
-    const hay = `${snapshotLabel(s)} ${s.id} ${s.description ?? ""} ${s.sourceAgentVersion}`.toLowerCase();
-    return hay.includes(query) || metadataMatches(s.metadata, query);
-  });
-  const cols = "1.5fr 1.4fr 1fr 0.8fr 1.1fr 1fr";
+  /** Source template → the Agent it belongs to in My Agents, if it still exists. */
+  agentNameFor: (template: string) => string | undefined;
+} & SnapshotActions) {
+  const [status, setStatus] = useState<"all" | SnapshotStatus>("all");
+  const [nameQ, setNameQ] = useState("");
+  const [source, setSource] = useState("all");
+  const [pageSize, setPageSize] = useState(20);
+  const [page, setPage] = useState(0);
+  const [openId, setOpenId] = useState<string | null>(null);
+  useEffect(() => setPage(0), [status, nameQ, source, pageSize]);
+
+  const sources = Array.from(new Set(snapshots.map((s) => s.sourceSandboxId)));
+  const rows = snapshots.filter((s) =>
+    (status === "all" || s.status === status) &&
+    (source === "all" || s.sourceSandboxId === source) &&
+    (!nameQ.trim() || (s.name ?? "").includes(nameQ.trim())),
+  );
+  const total = rows.length;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const pageRows = rows.slice(page * pageSize, page * pageSize + pageSize);
+  const openIdx = pageRows.findIndex((s) => s.id === openId);
+  const openSnap = snapshots.find((s) => s.id === openId);
+
+  const cols = "minmax(0,1.5fr) minmax(0,1.3fr) minmax(0,1.2fr) minmax(0,0.9fr) minmax(0,1.2fr) minmax(0,0.7fr) 210px";
+  const fieldStyle: React.CSSProperties = { background: C.pillBg, border: `1px solid ${C.border}`, color: C.fg, fontFamily: FONT, fontSize: 12.5, padding: "7px 10px", borderRadius: 8, outline: "none" };
+  const pageBtn = (label: string, on: boolean, go: () => void, path: string) => (
+    <button aria-label={label} title={label} disabled={!on} onClick={go} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 30, height: 28, background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, color: on ? C.fg : C.borderSoft, cursor: on ? "pointer" : "not-allowed" }}>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={path} /></svg>
+    </button>
+  );
+
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <h1 style={{ display: "flex", alignItems: "center", gap: 10, fontFamily: FONT, fontSize: 24, fontWeight: 700, lineHeight: "30px", color: C.fg, margin: 0, letterSpacing: "-0.02em" }}>
           Snapshots <V21Badge />
         </h1>
-        <V21Note>
-          Snapshots are not built yet — capture, restore and retention all land in Agentbox 2.1.
-          Everything below is here so the flow can be reviewed; none of it runs.
-        </V21Note>
-        <ReleaseBadge r="R1" />
+        <V21Note>Snapshots land in Agentbox 2.1. This page follows the test-environment API so the flow can be reviewed; none of it runs.</V21Note>
       </div>
-      <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, margin: 0, lineHeight: "19px" }}>
-        Immutable, Organization-owned, point-in-time copies of a Sandbox's disk. Launch a new Sandbox from one into the same Agent —
-        this is where Launch and Delete happen. Snapshots outlive their source Sandbox, and the Snapshot ID is the canonical reference
-        for API, SDK, launch, update, and delete. Nothing is ever addressed by name.
+      <p style={{ fontFamily: FONT, fontSize: 13, color: C.muted, margin: 0, lineHeight: "19px", maxWidth: 860 }}>
+        {SNAPSHOT_EXPLAINER} Create one from a running sandbox in My Agents.
       </p>
 
-      {/* R1 gate is an Organization COUNT limit checked before capture — storage
-          is billed per GiB from Ready, not pre-reserved (F-07 / §4.5). */}
-      {(() => {
-        const committed = snapshots.filter((s) => s.status === "ready" || s.status === "creating");
-        const gib = committed.reduce((a, s) => a + (s.billableGiB ?? 0), 0);
-        const reported = committed.filter((s) => s.billableGiB != null).length;
-        return (
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "6px 12px" }}>
-              Count <span style={{ color: C.fg }}>{committed.length}/{CAP.orgSnapshotLimit}</span>
-              <span style={{ color: C.borderSoft }}>·</span>
-              Billed storage <span style={{ color: C.fg }}>{gib.toFixed(1)} GiB</span>
-              {reported < committed.length && <span style={{ color: C.muted }}>({committed.length - reported} size pending)</span>}
-            </div>
-            <div style={{ position: "relative", display: "flex", alignItems: "center", flex: 1, minWidth: 220, maxWidth: 360 }}>
-              <span style={{ position: "absolute", left: 10, color: C.muted, display: "flex" }}><IconSearch /></span>
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="Search name, ID, or metadata (tenant=acme)"
-                style={{ width: "100%", background: C.pillBg, border: `1px solid ${C.border}`, color: C.fg, fontFamily: FONT, fontSize: 13, padding: "7px 12px 7px 30px", borderRadius: 8, outline: "none" }}
-              />
-            </div>
-          </div>
-        );
-      })()}
-
-      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "visible", marginTop: 4 }}>
-        <div style={{ display: "grid", gridTemplateColumns: cols, padding: "10px 16px", borderBottom: `1px solid ${C.border}`, background: "rgba(255,255,255,0.02)", fontFamily: FONT, fontSize: 12, fontWeight: 500, color: C.muted }}>
-          <div>Snapshot</div><div>Source</div><div>Placement</div><div>Size</div><div>Created · Ready</div><div style={{ textAlign: "right" }}>Actions</div>
+      {/* Filters — name, status, source sandbox */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 4 }}>
+        <div style={{ position: "relative", display: "flex", alignItems: "center", flex: 1, minWidth: 200, maxWidth: 320 }}>
+          <span style={{ position: "absolute", left: 10, color: C.muted, display: "flex" }}><IconSearch /></span>
+          <input value={nameQ} onChange={(e) => setNameQ(e.target.value)} placeholder="Search by name" style={{ ...fieldStyle, width: "100%", fontSize: 13, padding: "7px 12px 7px 30px" }} />
         </div>
-        {rows.length === 0 ? (
+        <select value={status} onChange={(e) => setStatus(e.target.value as "all" | SnapshotStatus)} style={fieldStyle}>
+          {SNAPSHOT_STATUS_FILTERS.map((f) => <option key={f} value={f}>{f === "all" ? "All statuses" : SNAPSHOT_STATUS_META[f].label}</option>)}
+        </select>
+        <select value={source} onChange={(e) => setSource(e.target.value)} style={fieldStyle}>
+          <option value="all">All source sandboxes</option>
+          {sources.map((id) => <option key={id} value={id}>{midId(id)}</option>)}
+        </select>
+      </div>
+
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: cols, gap: 12, padding: "10px 16px", borderBottom: `1px solid ${C.border}`, background: "rgba(255,255,255,0.02)", fontFamily: FONT, fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>
+          <div>Name</div><div>Source</div><div>Resources</div><div>IDC</div><div>Status</div><div>Created</div><div />
+        </div>
+        {pageRows.length === 0 ? (
           <div style={{ padding: "48px 16px", textAlign: "center", fontFamily: FONT, fontSize: 13, color: C.muted }}>
             {snapshots.length === 0
-              ? "No snapshots yet. Capture one from a running sandbox in My Agents → Sandbox Detail."
-              : "No snapshots match this filter."}
+              ? "No snapshots yet. Create one from a running sandbox in My Agents."
+              : "No snapshots match these filters."}
           </div>
         ) : (
-          rows.map((s, i) => (
-            <div key={s.id} style={{ display: "grid", gridTemplateColumns: cols, padding: "12px 16px", borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`, alignItems: "center", fontFamily: FONT, fontSize: 13, color: C.fg }}>
-              <div style={{ minWidth: 0 }}>
-                <div title={snapshotLabel(s)} style={{ fontFamily: MONO, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{snapshotLabel(s)}</div>
-                {s.name && <div title={s.id} style={{ fontFamily: MONO, fontSize: 10.5, color: C.borderSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.id}</div>}
-                {s.description && <div title={s.description} style={{ fontFamily: FONT, fontSize: 11, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.description}</div>}
+          pageRows.map((s, i) => {
+            const failed = s.status === "error" || s.status === "delete_failed";
+            const agent = agentNameFor(s.sourceTemplate);
+            const active = s.id === openId;
+            return (
+              <div
+                key={s.id}
+                onClick={() => setOpenId(s.id)}
+                style={{ display: "grid", gridTemplateColumns: cols, gap: 12, padding: "12px 16px", alignItems: "center", borderTop: i === 0 ? "none" : `1px solid ${C.borderSoft}`, fontFamily: FONT, fontSize: 13, color: C.fg, cursor: "pointer", background: active ? "rgba(221,234,77,0.05)" : "transparent", opacity: s.status === "deleting" ? 0.6 : 1 }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div title={snapshotLabel(s)} style={{ fontFamily: MONO, fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: s.name ? C.fg : C.muted }}>{snapshotLabel(s)}</div>
+                  {s.name && <div title={s.id} style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.id}</div>}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <span title={s.sourceSandboxId} style={{ display: "block", fontFamily: MONO, fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{midId(s.sourceSandboxId)}</span>
+                  <span style={{ display: "block", fontSize: 11.5, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent ?? s.sourceTemplate}</span>
+                </div>
+                <div style={{ minWidth: 0, fontSize: 12 }}>
+                  <span style={{ display: "block", whiteSpace: "nowrap" }}>{s.cpu} vCPU · {s.memoryGb} GiB · {s.diskGb} GiB</span>
+                  <span style={{ display: "block", fontFamily: MONO, fontSize: 10.5, color: C.muted }}>{s.architecture}</span>
+                </div>
+                <div title={regionLabel(s.idc)} style={{ minWidth: 0, color: C.muted, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{REGION_LABELS[s.idc] ?? s.idc}</div>
+                <div style={{ minWidth: 0, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
+                  <SnapshotStatusPill status={s.status} />
+                  {failed && s.errorReason && (
+                    <span title={s.errorReason} style={{ maxWidth: "100%", fontSize: 11, color: C.err, lineHeight: "15px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.errorReason}</span>
+                  )}
+                </div>
+                <div title={s.createdAt} style={{ color: C.muted, fontSize: 12, whiteSpace: "nowrap" }}>{agoLabel(s.createdAt)}</div>
+                <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
+                  <SnapshotActionButtons s={s} a={actions} />
+                </div>
               </div>
-              <div style={{ color: C.muted, minWidth: 0 }}>
-                <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.fg }}>{s.sourceAgentVersion}</span>
-                {s.sourceDeleted && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 600, color: C.muted, background: "rgba(255,255,255,0.05)", border: `1px solid ${C.border}`, padding: "0 5px", borderRadius: 4 }}>Agent deleted</span>}
-                <span style={{ display: "block", fontFamily: MONO, fontSize: 11, color: C.borderSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{midId(s.sourceRuntimeId)}</span>
-              </div>
-              <div style={{ color: C.muted, fontSize: 11.5, minWidth: 0 }}>
-                <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{REGION_LABELS[s.region] ?? s.region}</span>
-                <span style={{ display: "block", fontFamily: MONO, fontSize: 10.5, color: C.borderSoft }}>{s.runtimeClass} · {s.architecture}</span>
-              </div>
-              <div style={{ color: C.muted }} title={s.billableGiB == null ? "Compressed size is computed asynchronously — readiness never waits on usage reporting" : undefined}>
-                {s.status !== "ready" ? "—" : s.billableGiB == null ? <span style={{ color: C.warn }}>Pending</span> : `${s.billableGiB} GiB`}
-              </div>
-              <div style={{ color: C.muted, fontSize: 11.5 }}>
-                <span style={{ display: "block" }}>{agoLabel(s.createdAt)}</span>
-                <span style={{ display: "block", color: C.borderSoft }}>{s.readyAt ? `ready ${agoLabel(s.readyAt)}` : "not ready"}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}>
-                <span
-                  title={CAP.snapshotAutoRetention ? `Deletes in ${snapshotDaysLeft(s)} days` : "No automatic expiry — retention (P-04) is conditional on Q16 and commercial review"}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: FONT, fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: snapshotColor(s.status), background: `${snapshotColor(s.status)}1f`, border: `1px solid ${snapshotColor(s.status)}55`, padding: "2px 8px", borderRadius: 6, marginRight: 4 }}
-                >
-                  {s.status === "creating" && <span style={{ width: 6, height: 6, borderRadius: 999, background: snapshotColor(s.status), animation: "pulse 1.2s ease-in-out infinite" }} />}
-                  {s.status}
-                </span>
-                {CAP.snapshotAutoRetention && s.status === "ready" && (() => {
-                  const left = snapshotDaysLeft(s);
-                  const r = riskColor(left);
-                  return <span style={{ fontFamily: FONT, fontSize: 11, color: r.color }}>{left}d left</span>;
-                })()}
-                {/* Launch is blocked while Creating — a Snapshot is usable only from Ready */}
-                {s.status === "ready" && (
-                  <button onClick={() => onRestore(s)} style={{ fontFamily: FONT, fontSize: 11, fontWeight: 600, color: C.limeText, background: C.lime, border: "none", padding: "3px 10px", borderRadius: 6, cursor: "pointer" }}>Launch New Sandbox</button>
-                )}
-                {/* Delete is permission-gated and blocked while Creating */}
-                {(s.status === "ready" || s.status === "failed") && (
-                  <button onClick={() => onDelete(s.id)} style={{ fontFamily: FONT, fontSize: 11, fontWeight: 500, color: C.err, background: "transparent", border: `1px solid ${C.border}`, padding: "3px 9px", borderRadius: 6, cursor: "pointer" }}>Delete</button>
-                )}
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
-      <span style={{ fontFamily: FONT, fontSize: 11, color: C.muted, lineHeight: "16px" }}>
-        A Snapshot is captured from a live Sandbox's disk. It is not a Template — Templates are built from developer config at
-        Register → Agent Version build and are reproducible by construction. Renaming or clearing a name never breaks the link to the
-        source Agent Version. Deleting a Snapshot prevents future launches and stops its storage metering; Sandboxes already launched
-        from it own their own disk and are unaffected.
-      </span>
+
+      {/* Pagination — 20 per page by default, up to 100, total from the API */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", fontFamily: FONT, fontSize: 12.5, color: C.muted }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))} style={fieldStyle}>
+            {SNAPSHOT_PAGE_SIZES.map((n) => <option key={n} value={n}>{n} per page</option>)}
+          </select>
+          <span>{total} snapshot{total === 1 ? "" : "s"}</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ marginRight: 6 }}>Page {page + 1} of {pages}</span>
+          {pageBtn("First page", page > 0, () => setPage(0), "m11 17-5-5 5-5M18 17l-5-5 5-5")}
+          {pageBtn("Previous page", page > 0, () => setPage((p) => p - 1), "m15 18-6-6 6-6")}
+          {pageBtn("Next page", page < pages - 1, () => setPage((p) => p + 1), "m9 18 6-6-6-6")}
+          {pageBtn("Last page", page < pages - 1, () => setPage(pages - 1), "m13 17 5-5-5-5M6 17l5-5-5-5")}
+        </div>
+      </div>
+
+      {openSnap && (
+        <SnapshotDetailsDrawer
+          snapshot={openSnap}
+          agentName={agentNameFor(openSnap.sourceTemplate)}
+          onPrev={openIdx > 0 ? () => setOpenId(pageRows[openIdx - 1].id) : undefined}
+          onNext={openIdx >= 0 && openIdx < pageRows.length - 1 ? () => setOpenId(pageRows[openIdx + 1].id) : undefined}
+          onClose={() => setOpenId(null)}
+          actions={actions}
+        />
+      )}
     </section>
   );
 }
@@ -5347,13 +5575,11 @@ function Toaster({ toasts }: { toasts: ToastMsg[] }) {
 
 // ─── Notification entry (PRD §4.3) — resources nearing auto-deletion ────────
 function NotificationBell({
-  instances, snapshots, agents, onOpenSnapshots, onOpenPublishStatus,
+  instances, agents, onOpenPublishStatus,
 }: {
   instances: Instance[];
-  snapshots: Snapshot[];
   /** Listing review outcomes belong here — see group 0 below. */
   agents: MyAgent[];
-  onOpenSnapshots: () => void;
   onOpenPublishStatus: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -5365,13 +5591,8 @@ function NotificationBell({
     return () => document.removeEventListener("mousedown", h);
   }, [open]);
 
-  // PRD v2.3: instances NEVER appear as expiring. Two groups instead:
-  //  1) Expiring soon — snapshots only (they still auto-delete at retention).
-  //  2) Paused instances — cost reminders (storage keeps billing; no deletion).
-  const expiring = (CAP.snapshotAutoRetention ? snapshots : [])
-    .filter((s) => s.status === "ready" && snapshotDaysLeft(s) <= 7)
-    .map((s) => ({ id: s.id, name: snapshotLabel(s), left: snapshotDaysLeft(s) }))
-    .sort((a, b) => a.left - b.left);
+  // Paused instances — cost reminders (storage keeps billing; no deletion).
+  // Snapshots have no expiry in the API, so nothing here warns about one.
   const paused = instances
     .filter((i) => i.status === "suspended")
     .map((i) => ({ id: i.id, name: midId(i.id), cost: pausedCostMo(i) }));
@@ -5382,7 +5603,7 @@ function NotificationBell({
   const reviewed = agents
     .filter((a) => a.listingState === "live" || a.listingState === "rejected")
     .map((a) => ({ id: a.id, name: a.name, approved: a.listingState === "live" }));
-  const count = expiring.length + paused.length + reviewed.length;
+  const count = paused.length + reviewed.length;
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
@@ -5424,28 +5645,6 @@ function NotificationBell({
                     </span>
                   </button>
                 ))}
-              </>
-            )}
-
-            {/* Group 1 — Expiring soon (snapshots only) */}
-            {expiring.length > 0 && (
-              <>
-                <div style={{ padding: "10px 14px 6px", fontFamily: FONT, fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: "0.04em", textTransform: "uppercase" }}>Expiring soon</div>
-                {expiring.map((it) => {
-                  const r = riskColor(it.left);
-                  return (
-                    <button key={it.id} onClick={() => { setOpen(false); onOpenSnapshots(); }} style={{ width: "100%", textAlign: "left", display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "transparent", border: "none", borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={r.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h16.9a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 17h.01" /></svg>
-                      <span style={{ flex: 1, minWidth: 0 }}>
-                        <span style={{ display: "block", fontFamily: FONT, fontSize: 12, fontWeight: 600, color: C.fg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Snapshot · {it.name}</span>
-                        <span style={{ fontFamily: FONT, fontSize: 11, color: r.color }}>Deletes in {it.left} day{it.left === 1 ? "" : "s"}</span>
-                      </span>
-                    </button>
-                  );
-                })}
-                <div style={{ padding: "8px 14px", fontFamily: FONT, fontSize: 10.5, color: C.muted, lineHeight: "15px", borderBottom: paused.length ? `1px solid ${C.borderSoft}` : "none" }}>
-                  We attempt to notify you before automated deletion. Delivery is not guaranteed — the Console expiry time is authoritative.
-                </div>
               </>
             )}
 
@@ -5648,9 +5847,11 @@ export default function Dashboard() {
     });
   }, [registered, runtimeImages]);
   const [restoreSnapshot, setRestoreSnapshot] = useState<Snapshot | null>(null);
-  // F-07 — capture starts from Runtime Detail and opens a real form (name,
-  // description, metadata), not a bare confirm.
+  const [editSnapshot, setEditSnapshot] = useState<Snapshot | null>(null);
+  // Create opens a form (name + metadata), not a bare confirm.
   const [snapshotForInstanceId, setSnapshotForInstanceId] = useState<string | null>(null);
+  // Snapshots cancelled while Creating — their "Ready" toast must not fire.
+  const cancelledSnapshots = useRef(new Set<string>());
   // Instance drawer lives at page level so the layout can make room for it
   // instead of covering the list the user just clicked in.
   const [drawer, setDrawer] = useState<{ id: string; tab: DrawerTab } | null>(null);
@@ -5738,7 +5939,7 @@ export default function Dashboard() {
     onUnpublish: (row) => setUnpublishRow(row),
   };
 
-  const actuallyProvision = (agentId: string, config: InstanceConfig) => {
+  const actuallyProvision = (agentId: string, config: InstanceConfig, extra?: Partial<Instance>) => {
     const id = newInstanceId();
     // F-01 — the record is persisted in Pending and the ID returned immediately;
     // acknowledgement never waits on provider acceptance.
@@ -5756,6 +5957,7 @@ export default function Dashboard() {
       endAt: endAtFromNow(durationMins(config.maxLifetime) * 60),
       maxRuntimeAction: "suspend",            // P-01 default action at the limit
       latestOperation: { kind: "create", status: "in_progress", at: fmtNow() },
+      ...extra,
     };
     setInstances((prev) => [newInst, ...prev]);
     setProvisionForAgentId(null);
@@ -5981,95 +6183,129 @@ export default function Dashboard() {
         break;
       case "snapshot":
       case "convert":
-        // F-07 — capture opens the Create Snapshot form (name, description,
-        // metadata, disclosure); it does not change the source Runtime's state.
+        // Opens the Create Snapshot form (name + metadata); the source keeps running.
         setSnapshotForInstanceId(id);
         break;
     }
   };
 
-  // ── Snapshot mutations (PRD §3) ──────────────────────────────────────────
-  const createSnapshotFrom = (
-    instanceId: string,
-    input: { name: string; description: string; metadata: MetaEntry[] },
-  ) => {
-    const inst = instances.find((i) => i.id === instanceId);
-    if (!inst) return;
+  // ── Snapshot mutations (test-environment swagger) ────────────────────────
+  const patchSnapshot = (sid: string, patch: Partial<Snapshot>) =>
+    setSnapshots((prev) => prev.map((s) => (s.id === sid ? { ...s, ...patch, updatedAt: fmtNow() } : s)));
+  const snapshotSourceFor = (inst: Instance): SnapshotSource => {
     const agent = allAgents.find((a) => a.id === inst.agentId);
+    const spec = SPEC_CATALOG.find((x) => x.id === (inst.specId ?? agentSpecId(agent))) ?? SPEC_CATALOG[1];
+    return {
+      sandboxId: inst.id,
+      running: inst.status === "running",
+      template: agentVersionName(inst.agentId, agent?.name),
+      cpu: spec.vcpu, memoryGb: spec.ramGb, diskGb: spec.diskGb,
+      architecture: runtimeImages[inst.agentId]?.architecture ?? "linux/amd64",
+      idc: inst.config?.idc ?? agent?.region ?? "us-ia-iowa-1",
+    };
+  };
+  /** Returns the server's refusal, or null once the snapshot is accepted. */
+  const createSnapshotFrom = (instId: string, input: { name: string; metadata: MetaEntry[] }): string | null => {
+    const inst = instances.find((i) => i.id === instId);
+    if (!inst || inst.status !== "running") return "This sandbox is no longer running. Snapshots can only be created from a running sandbox.";
+    if (snapshots.some((s) => s.sourceSandboxId === instId && s.status === "creating")) {
+      return "A snapshot of this sandbox is already being created.";
+    }
+    if (input.name && snapshots.some((s) => s.name === input.name)) {
+      return "Another snapshot in your organization already uses this name.";
+    }
+    const src = snapshotSourceFor(inst);
     const sid = newSnapshotId();
+    const now = fmtNow();
     const snap: Snapshot = {
       id: sid,
-      name: input.name || undefined,          // omitted name → Console labels by ID
-      description: input.description || undefined,
-      sourceAgentId: inst.agentId,
-      sourceAgentName: agent?.name || "—",
-      sourceAgentVersion: agentVersionName(inst.agentId, agent?.name),
-      sourceRuntimeId: inst.id,
-      category: agent?.category || "Code & Dev Tools",
-      region: agent?.region || "us-ia-iowa-1",
-      runtimeClass: agent?.tier || "container",
-      architecture: "linux/amd64",
-      createdAt: fmtNow(),
-      billableGiB: null,                      // reported asynchronously after Ready
-      retentionDays: 30,
+      name: input.name || undefined,
       status: "creating",
+      sourceSandboxId: inst.id,
+      sourceTemplate: src.template,
+      cpu: src.cpu, memoryGb: src.memoryGb, diskGb: src.diskGb,
+      architecture: src.architecture,
+      product: productForTier(allAgents.find((a) => a.id === inst.agentId)?.tier),
+      idc: src.idc,
       metadata: input.metadata,
+      createdAt: now,
+      updatedAt: now,
     };
     setSnapshots((prev) => [snap, ...prev]);
     setSnapshotForInstanceId(null);
-    setTopTab("snapshots"); // jump to Organization Snapshots so the user sees it
-    const t = pushToast("progress", "Capture accepted — Snapshot created in Creating…");
-    // Storage metering starts once the provider confirms capture (§4.5), and the
-    // compressed billable size can land after Ready — readiness never waits on it.
+    setTopTab("snapshots");
+    const t = pushToast("progress", "Snapshot creating — it can be used once it's Ready");
+    // Long enough to see Creating and its Cancel. Only a still-Creating snapshot
+    // turns Ready; a cancelled one is already Deleting by then.
     setTimeout(() => {
-      setSnapshots((prev) => prev.map((s) => (s.id === sid ? { ...s, status: "ready", readyAt: fmtNow() } : s)));
-      settleToast(t, "success", "Snapshot ready — storage metering started");
-      setTimeout(() => {
-        setSnapshots((prev) => prev.map((s) => (s.id === sid ? { ...s, billableGiB: estimateSnapshotGiB() } : s)));
-      }, 2200);
-    }, 1600);
+      setSnapshots((prev) => prev.map((s) => (s.id === sid && s.status === "creating" ? { ...s, status: "ready", readyAt: fmtNow(), updatedAt: fmtNow() } : s)));
+      if (cancelledSnapshots.current.has(sid)) setToasts((p) => p.filter((x) => x.id !== t));
+      else settleToast(t, "success", `Snapshot ${input.name || sid} is Ready`);
+    }, 5000);
+    return null;
   };
-  const deleteSnapshot = (sid: string) => {
-    const t = pushToast("progress", "Deleting snapshot…");
-    setSnapshots((prev) => prev.map((s) => (s.id === sid ? { ...s, status: "deleting" } : s)));
+  // Async delete: Deleting first, gone once finished. Refused — with no list of
+  // which — while any sandbox still depends on the snapshot.
+  const deleteSnapshot = (snap: Snapshot) => {
+    const inUse = instances.some((i) => i.fromSnapshotId === snap.id && i.status !== "deleted");
+    if (inUse) {
+      pushToast("error", "This snapshot is still in use, so it can't be deleted");
+      return;
+    }
+    if (snap.status === "creating") cancelledSnapshots.current.add(snap.id);
+    patchSnapshot(snap.id, { status: "deleting", errorCode: undefined, errorReason: undefined });
+    const t = pushToast("progress", snap.status === "creating" ? "Cancelling snapshot…" : "Deleting snapshot…");
     setTimeout(() => {
-      setSnapshots((prev) => prev.filter((s) => s.id !== sid));
-      settleToast(t, "success", "Snapshot deleted");
-    }, 900);
+      setSnapshots((prev) => prev.filter((s) => s.id !== snap.id));
+      settleToast(t, "success", snap.status === "creating" ? "Snapshot cancelled" : "Snapshot deleted");
+    }, 1500);
   };
-  const confirmDeleteSnapshot = (sid: string) => {
-    const snap = snapshots.find((s) => s.id === sid);
+  const confirmDeleteSnapshot = (snap: Snapshot) => {
+    const cancel = snap.status === "creating";
     setConfirm({
-      title: "Delete snapshot?",
-      body: (
+      title: cancel ? "Stop creating this snapshot?" : "Delete snapshot?",
+      body: cancel ? (
         <>
-          Snapshot <span style={{ color: C.fg, fontFamily: MONO }}>{snap ? snapshotLabel(snap) : sid}</span> will be
-          permanently deleted once release is confirmed. This cannot be undone. Future launches from it are prevented and its
-          storage metering stops; Sandboxes already launched from it own their own disk and are unaffected.
-          The name becomes reusable only after the deletion is confirmed.
+          Snapshot <span style={{ color: C.fg, fontFamily: MONO }}>{snapshotLabel(snap)}</span> is still being created.
+          Stopping deletes it.
+        </>
+      ) : (
+        <>
+          Snapshot <span style={{ color: C.fg, fontFamily: MONO }}>{snapshotLabel(snap)}</span> will be deleted. This can't be undone.
+          It shows as Deleting until it's gone, and its name stays reserved until then.
+          If a sandbox still depends on it, the delete is refused.
         </>
       ),
-      confirmLabel: "Delete snapshot",
+      confirmLabel: cancel ? "Stop creating" : "Delete snapshot",
       destructive: true,
-      onConfirm: () => deleteSnapshot(sid),
+      onConfirm: () => deleteSnapshot(snap),
     });
   };
-  const launchFromSnapshot = (snapshot: Snapshot, targetAgentId: string, version: string) => {
-    // F-07 launch — reuses the F-01 create path. The Snapshot supplies filesystem
-    // state; the target Agent Version supplies startup, permissions, network,
-    // Endpoints, lifecycle, and fresh secrets. The Snapshot stays Ready either way.
+  const saveSnapshotEdit = (snap: Snapshot, input: { name: string; metadata: MetaEntry[] }) => {
+    patchSnapshot(snap.id, { name: input.name || undefined, metadata: input.metadata });
+    setEditSnapshot(null);
+    pushToast("success", "Snapshot updated");
+  };
+  const agentForTemplate = (template: string) =>
+    allAgents.find((a) => agentVersionName(a.id, a.name) === template);
+  const launchFromSnapshot = (snapshot: Snapshot, input: SnapshotLaunchInput) => {
+    const agent = agentForTemplate(snapshot.sourceTemplate);
+    if (!agent || snapshot.status !== "ready") return;
     setRestoreSnapshot(null);
     setTopTab("deployments");
-    setSelectedId(targetAgentId);
-    // Model is a per-sandbox choice, so a snapshot launch takes the featured
-    // one rather than consulting a stored default that no longer exists.
-    actuallyProvision(targetAgentId, {
+    setSelectedId(agent.id);
+    const spec = SPEC_CATALOG.find((x) => x.vcpu === snapshot.cpu && x.ramGb === snapshot.memoryGb && x.diskGb === snapshot.diskGb);
+    actuallyProvision(agent.id, {
       ...TEMPLATE_DEFAULT_CONFIG,
-      name: `from-${snapshotLabel(snapshot).replace(/^snap_/, "").slice(0, 18)}`,
+      idc: snapshot.idc,
+      specId: spec?.id,
+      maxLifetime: input.maxLifetime,
+      egressControl: input.egressControl,
+      egress: input.egress,
       model: FEATURED_MODEL.id,
       metadata: snapshot.metadata ?? [],
-    });
-    pushToast("success", `Launching a new sandbox from this Snapshot on ${version} — see My Agents`);
+    }, { fromSnapshotId: snapshot.id });
+    pushToast("success", `Launching a new sandbox from ${snapshotLabel(snapshot)}`);
   };
 
   const list = useMemo(() => {
@@ -6181,8 +6417,7 @@ export default function Dashboard() {
           {[
             { id: "deployments" as const, label: "My Agents", isNew: false, noApi: false },
             { id: "uses" as const, label: "Agents I Use", isNew: false, noApi: false },
-            // No /snapshots endpoint in the R1 swagger.
-            { id: "snapshots" as const, label: "Snapshots", isNew: true, noApi: true, v21: true },
+            { id: "snapshots" as const, label: "Snapshots", isNew: true, noApi: false, v21: true },
           ].map((t) => {
             const isActive = topTab === t.id;
             return (
@@ -6212,9 +6447,7 @@ export default function Dashboard() {
           </div>
           <NotificationBell
             instances={instances}
-            snapshots={snapshots}
             agents={allAgents}
-            onOpenSnapshots={() => setTopTab("snapshots")}
             onOpenPublishStatus={() => setPublishStatusOpen(true)}
           />
         </div>
@@ -6223,8 +6456,11 @@ export default function Dashboard() {
           <div style={{ padding: "20px 32px 32px", flex: 1, minHeight: 0 }}>
             <OrganizationSnapshots
               snapshots={snapshots}
-              onRestore={(s) => setRestoreSnapshot(s)}
+              agentNameFor={(t) => agentForTemplate(t)?.name}
+              onLaunch={(s) => setRestoreSnapshot(s)}
+              onEdit={(s) => setEditSnapshot(s)}
               onDelete={confirmDeleteSnapshot}
+              onRetryDelete={deleteSnapshot}
             />
           </div>
         )}
@@ -6342,7 +6578,6 @@ export default function Dashboard() {
             <AgentDetailPane
               agent={selected}
               instances={instances}
-              snapshots={snapshots}
               image={runtimeImages[selected.id]}
               onPublishListing={openListingForm}
               onUnpublishListing={requestUnpublish}
@@ -6371,29 +6606,29 @@ export default function Dashboard() {
         <Footer />
       </div>
 
-      <RestoreSnapshotModal
+      <LaunchFromSnapshotModal
         snapshot={restoreSnapshot}
-        agents={allAgents}
+        canLaunch={!!restoreSnapshot && !!agentForTemplate(restoreSnapshot.sourceTemplate)}
         onClose={() => setRestoreSnapshot(null)}
-        onLaunch={(targetAgentId, version) => restoreSnapshot && launchFromSnapshot(restoreSnapshot, targetAgentId, version)}
+        onLaunch={(input) => restoreSnapshot && launchFromSnapshot(restoreSnapshot, input)}
+      />
+      <EditSnapshotModal
+        snapshot={editSnapshot}
+        existingNames={snapshots.map((s) => s.name).filter((n): n is string => !!n)}
+        onClose={() => setEditSnapshot(null)}
+        onSave={(input) => editSnapshot && saveSnapshotEdit(editSnapshot, input)}
       />
 
-      {/* F-07 capture form — opened from the instance row / Instance Detail */}
+      {/* Create form — opened from a running sandbox's row menu or Sandbox Detail */}
       {(() => {
         const inst = instances.find((i) => i.id === snapshotForInstanceId) ?? null;
-        const agent = inst ? allAgents.find((a) => a.id === inst.agentId) : undefined;
         return (
           <CreateSnapshotModal
-            inst={inst}
-            agentName={agent?.name ?? "—"}
-            agentVersion={agentVersionName(inst?.agentId ?? "", agent?.name)}
-            region={regionLabel(agent?.region)}
-            runtimeClass={agent?.tier ?? "container"}
-            architecture="linux/amd64"
+            source={inst ? snapshotSourceFor(inst) : null}
             existingNames={snapshots.map((s) => s.name).filter((n): n is string => !!n)}
-            snapshotCount={snapshots.filter((s) => s.status === "ready" || s.status === "creating").length}
+            creatingForSource={!!inst && snapshots.some((s) => s.sourceSandboxId === inst.id && s.status === "creating")}
             onCancel={() => setSnapshotForInstanceId(null)}
-            onCreate={(input) => snapshotForInstanceId && createSnapshotFrom(snapshotForInstanceId, input)}
+            onCreate={(input) => (snapshotForInstanceId ? createSnapshotFrom(snapshotForInstanceId, input) : null)}
           />
         );
       })()}
