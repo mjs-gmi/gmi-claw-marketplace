@@ -1014,6 +1014,8 @@ interface RuntimeImage {
   /** Anchor for the "waited mm:ss" counter. Builds run 21s to 3min+. */
   buildStartedAt?: string;
   lastValidated: string;
+  /** The Template's current Build. Snapshots pin the Build they came from, so this can move on without them. */
+  buildId?: string;
 }
 const KNOWN_BUILD: TemplateBuildStatus[] = ["waiting", "building", "ready", "error"];
 
@@ -1086,6 +1088,7 @@ const INITIAL_RUNTIME_IMAGES: Record<string, RuntimeImage> = {
     url: "ghcr.io/mjs-gmi/hermes-gmi", tag: "v5", digest: "sha256:0bf9bdf13d544665a7188cce1423ab11c0de",
     registry: "ghcr.io", architecture: "linux/amd64", buildStatus: "ready",
     lastValidated: _seedDaysAgo(2),
+    buildId: "a4f9c3e2-5d17-4b80-9c6e-2f81d0b7e413", // rebuilt after the seed snapshots were taken
   },
   agent_hermes_mingjun: {
     url: "ghcr.io/mjs-gmi/hermes-gmi", tag: "v6-rc1", digest: "sha256:b73c1e082f4a4d198c6b5a9e0f21d7c4a1b2",
@@ -3674,11 +3677,16 @@ function InstanceDrawer({
   inst, deploymentName, agentVersion, endpoints, idc, product, tab, onTab,
   variant = "drawer", tabHref, onConnectSandbox, tokenStale = false,
   execHistory, setExecHistory,
-  onAction, onPatchMetadata, onClose,
+  onAction, onPatchMetadata, onClose, fromSnapshot,
 }: {
   inst: Instance | null;
   deploymentName: string;
   agentVersion: string;
+  /**
+   * Set when the sandbox was created from a snapshot. It runs the snapshot's
+   * pinned Build, not the Agent's current one, so the version row says which.
+   */
+  fromSnapshot?: { label: string; buildId: string; outdated: boolean };
   endpoints: AgentEndpoint[];
   idc: string;
   product: string;
@@ -3862,9 +3870,20 @@ function InstanceDrawer({
         {activeTab === "overview" && (
           <>
             {row("Deployment", deploymentName || "—")}
-            {row("Agent Version", agentVersion, true)}
+            {row("Agent Version", fromSnapshot ? (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontFamily: MONO }}>{agentVersion}</span>
+                <span style={{ color: C.muted }}>· build</span>
+                <span style={{ fontFamily: MONO }} title={fromSnapshot.buildId}>{midId(fromSnapshot.buildId)}</span>
+                {fromSnapshot.outdated && (
+                  <span title="The Template was rebuilt after this snapshot was taken. This sandbox runs the snapshot's files, not the current build." style={{ fontFamily: FONT, fontSize: 10.5, fontWeight: 600, color: C.warn, background: "rgba(251,191,36,0.10)", border: "1px solid rgba(251,191,36,0.4)", padding: "1px 6px", borderRadius: 4 }}>
+                    Older than current build
+                  </span>
+                )}
+              </span>
+            ) : agentVersion, !fromSnapshot)}
             {row("Created from", inst.snapshotId
-              ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Snapshot <span style={{ fontFamily: MONO }} title={inst.snapshotId}>{midId(inst.snapshotId)}</span><CopyButton value={inst.snapshotId} label={false} /></span>
+              ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Snapshot <span style={{ fontFamily: MONO }} title={inst.snapshotId}>{fromSnapshot?.label ?? midId(inst.snapshotId)}</span><CopyButton value={inst.snapshotId} label={false} /></span>
               : "Template")}
             {row("Model", modelDisplayName(inst.config?.model) + " · GMI_MODEL_ID")}
             {row("IDC", idc)}
@@ -4624,10 +4643,12 @@ function AnalyticsPane({ agent, instances }: { agent: MyAgent; instances: Instan
 function AgentDetailPane({
   agent, instances, image, onProvision, onAction, onOpenDetail, activeInstanceId,
   onPublishListing, onUnpublishListing,
-  onEditTemplate, onDeleteAgent, onDismissSetup, canConvert = false,
+  onEditTemplate, onDeleteAgent, onDismissSetup, canConvert = false, snapshotCount = 0,
 }: {
   agent: MyAgent;
   instances: Instance[];
+  /** Snapshots whose source_template_id is this Agent's Template. */
+  snapshotCount?: number;
   image?: RuntimeImage;
   onPublishListing: (agentId: string) => void;
   onUnpublishListing: (agentId: string) => void;
@@ -4966,6 +4987,7 @@ function AgentDetailPane({
               {instances.filter((i) => i.agentId === agent.id && i.status !== "deleted").length > 0
                 ? " Its running sandboxes are deleted with it, along with their files."
                 : " It has no sandboxes to lose."}
+              {snapshotCount > 0 && ` Its ${snapshotCount} snapshot${snapshotCount === 1 ? " is" : "s are"} not deleted with it.`}
             </div>
           </div>
           <button
@@ -5827,6 +5849,16 @@ export default function Dashboard() {
           You're about to delete the template{" "}
           <span style={{ color: C.fg, fontFamily: MONO }}>{agent.name}</span>.
           This cannot be undone. Existing running sandboxes will not be affected.
+          {(() => {
+            const n = snapshots.filter((x) => x.sourceTemplateId === agent.templateId).length;
+            // OPEN (Ethan): does a snapshot block Template deletion, and can it
+            // still launch once its Template is gone? Copy stays neutral until then.
+            return n > 0 ? (
+              <> Its {n} snapshot{n === 1 ? "" : "s"} {n === 1 ? "is" : "are"} not deleted with it. Delete {n === 1 ? "it" : "them"} first
+              from the Snapshots tab if you don't need {n === 1 ? "it" : "them"} — whether a remaining snapshot can still launch
+              sandboxes after its Agent is gone is still being confirmed.</>
+            ) : null;
+          })()}
         </>
       ),
       confirmLabel: "Delete template",
@@ -6419,6 +6451,12 @@ export default function Dashboard() {
       inst={inst}
       deploymentName={agent?.name ?? ""}
       agentVersion={agentVersionName(inst.agentId, agent?.name)}
+      fromSnapshot={(() => {
+        const snap = inst.snapshotId ? snapshots.find((x) => x.id === inst.snapshotId) : undefined;
+        if (!snap) return undefined;
+        const current = runtimeImages[inst.agentId]?.buildId;
+        return { label: snapshotLabel(snap), buildId: snap.sourceBuildId, outdated: !!current && current !== snap.sourceBuildId };
+      })()}
       execHistory={execHistory[inst.id] ?? []}
       setExecHistory={(fn) => setExecHistory((m) => ({ ...m, [inst.id]: fn(m[inst.id] ?? []) }))}
       endpoints={endpointsForAgent(agent)}
@@ -6664,6 +6702,7 @@ export default function Dashboard() {
             <AgentDetailPane
               agent={selected}
               instances={instances}
+              snapshotCount={snapshots.filter((x) => x.sourceTemplateId === selected.templateId).length}
               image={runtimeImages[selected.id]}
               onPublishListing={openListingForm}
               onUnpublishListing={requestUnpublish}
