@@ -530,12 +530,8 @@ interface Instance {
   // §4.1 — three separate fields, never a tenth state: runtime.state (status),
   // runtime.confirmation_status (unconfirmed) and latest_operation.status.
   latestOperation?: { kind: string; status: "in_progress" | "succeeded" | "failed" | "unknown"; at: string };
-  /**
-   * Prototype-only: which snapshot this sandbox was launched from, so deleting
-   * that snapshot can be refused. Not drawn — whether sandbox detail exposes
-   * this field is still unconfirmed.
-   */
-  fromSnapshotId?: string;
+  /** snapshot_id — the durable snapshot this sandbox was created from; absent for template-created sandboxes. */
+  snapshotId?: string;
 }
 
 const TEMPLATE_DEFAULT_CONFIG: InstanceConfig = {
@@ -649,7 +645,7 @@ const INITIAL_INSTANCES: Instance[] = [
     lifecycleStartedAt: _seedMinsAgo(3),
     unconfirmed: true,
     latestOperation: { kind: "create", status: "unknown", at: _seedMinsAgo(3) },
-    fromSnapshotId: "snap_7c3f9a21b8e4", // keeps that snapshot from being deleted
+    snapshotId: "7c3f9a21-b8e4-4d02-9a61-5e0c7b3f1a84", // launched from hermes-deps-installed — blocks its delete
   },
 ];
 
@@ -777,41 +773,55 @@ function newInstanceId(): string {
   return `inst_${r()}-${r().slice(0, 4)}-${r().slice(0, 4)}-${r().slice(0, 4)}-${r()}${r().slice(0, 4)}`;
 }
 function newSnapshotId(): string {
-  const r = () => Math.random().toString(16).slice(2, 10);
-  return `snap_${r()}${r().slice(0, 4)}`;
+  // snapshot_id is a UUID.
+  const h = (n: number) => Array.from({ length: n }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+  return `${h(8)}-${h(4)}-4${h(3)}-${"89ab"[Math.floor(Math.random() * 4)]}${h(3)}-${h(12)}`;
 }
 
-// ─── Snapshot (test-environment swagger) ────────────────────────────────────
-// A copy of a running sandbox's filesystem. Processes and memory are not kept,
-// and the source keeps running while it is taken. Launching from one is a cold
-// boot: new sandbox ID, CPU / memory / disk / architecture fixed by the snapshot,
-// network and lifecycle filled in again at launch.
+// ─── Snapshot — GET /snapshots/{snapshot_id} (api/v2/ec openapi) ────────────
+// A copy of a running sandbox's filesystem. Processes and memory are not kept.
+// While the provider captures it the source sits in `checkpointing`, then
+// returns to `running`. Launching from one is a cold boot: new sandbox ID,
+// vcpu / ram / disk / architecture inherited, network and lifecycle set again
+// at launch.
 //
-// Only what the swagger states is modelled. It has no actual stored size, no
-// list of dependent sandboxes, no metering, no quota or count limit and no sort
-// order — so none of those are drawn anywhere.
+// Only what the schema has is drawn. It has no stored size, no dependent
+// sandbox list, no metering, no quota and no sort order.
 type SnapshotStatus = "creating" | "ready" | "error" | "deleting" | "delete_failed";
 interface Snapshot {
-  id: string;
-  name?: string;                // optional; several snapshots may all be unnamed
+  id: string;                   // snapshot_id (uuid)
+  name?: string;                // "" / absent when unnamed; cleared when creation fails
   status: SnapshotStatus;
-  sourceSandboxId: string;
-  sourceTemplate: string;
-  cpu: number;
-  memoryGb: number;
-  diskGb: number;               // the inherited disk spec, NOT the stored size
+  sourceSandboxId: string;      // source_sandbox_id
+  sourceTemplateId: string;     // source_template_id (uuid) — Agent ↔ snapshot link
+  sourceBuildId: string;        // source_build_id (uuid)
+  vcpu: number;
+  ramMb: number;                // ram_mb
+  diskMb: number;               // disk_size_mb — the inherited disk size, NOT stored size
   architecture: string;
-  product: string;
-  idc: string;
+  product?: string;             // omitted for custom resources
+  productName?: string;         // product_name
+  idc: string;                  // idc_name
   metadata?: MetaEntry[];
-  errorCode?: string;           // error / delete_failed only
-  errorReason?: string;
+  failureCode?: string;         // failure_code
+  statusReason?: string;        // status_reason
   createdAt: string;
   readyAt?: string;
   updatedAt: string;
+  /**
+   * Prototype-only stand-in for the server's creation lease. A Creating
+   * snapshot that is cancelled stays Deleting — holding its name and blocking
+   * another create from the same sandbox — until this passes. Not in the
+   * response; never drawn.
+   */
+  creationDeadline?: number;
+}
+const gib = (mb: number) => `${+(mb / 1024).toFixed(1)} GiB`;
+function snapshotResources(s: { vcpu: number; ramMb: number; diskMb: number }): string {
+  return `${s.vcpu} vCPU · ${gib(s.ramMb)} · ${gib(s.diskMb)}`;
 }
 
-/** What each status allows — the swagger's transition table, in one place. */
+/** What each status allows — the 2.1 spec's table, in one place. */
 const SNAPSHOT_STATUS_META: Record<SnapshotStatus, { label: string; color: string; pulse?: boolean; hint: string }> = {
   creating:      { label: "Creating",      color: "#fbbf24", pulse: true, hint: "Being created in the background. It can only be cancelled." },
   ready:         { label: "Ready",         color: C.ok,                   hint: "Can launch sandboxes, be renamed, have its metadata edited, or be deleted." },
@@ -823,16 +833,47 @@ function snapshotCanEdit(s: Snapshot): boolean {
   return s.status === "ready" || s.status === "error";
 }
 
+/**
+ * User-facing copy per error code. Codes are the API's; the sentences are
+ * ours until the 2.1 change notes give the final wording.
+ */
+const SNAPSHOT_ERROR_COPY: Record<string, string> = {
+  // POST /snapshots
+  "Resource.AlreadyExists":            "Another snapshot in your organization already uses this name.",
+  "Snapshot.SourceNotRunning":         "The sandbox isn't running, so it can't be snapshotted right now.",
+  "Snapshot.CreateInProgress":         "A snapshot of this sandbox is already being created, or one was just cancelled. Try again once it settles.",
+  "Snapshot.UnsupportedOnProvider":    "Snapshots aren't supported for this sandbox's IDC.",
+  "IDC.UnderMaintenance":              "This IDC is under maintenance. Try again later.",
+  // POST /sandboxes with snapshot_id
+  "Snapshot.NotReady":                 "This snapshot isn't Ready, so it can't launch a sandbox.",
+  // DELETE /snapshots/{id}
+  "Resource.StateConflict":            "This snapshot is still in use, so it can't be deleted.",
+  // failure_code on Error / Delete failed records
+  "Snapshot.ProviderCreateFailed":     "The provider couldn't create the snapshot.",
+  "Snapshot.CreateTimedOut":           "Creating the snapshot took too long and was stopped.",
+  "Snapshot.CreateWorkflowFailed":     "Creating the snapshot failed partway through.",
+  "Snapshot.DeletedDuringCreate":      "The snapshot was deleted while it was being created.",
+  "Snapshot.ProviderDiscoveryAmbiguous": "The provider's result couldn't be confirmed.",
+  "Artifact.HasDependencies":          "Something still depends on this snapshot, so it couldn't be deleted.",
+};
+function snapshotErrorText(code: string): string {
+  return SNAPSHOT_ERROR_COPY[code] ?? code;
+}
+
+const _SNAP_HERMES_TEMPLATE = "0bf9bdf1-3d54-4665-a718-8cce1423ab11";
+const _SNAP_HERMES_BUILD = "6e2d81a4-0c57-4b93-9f1e-3a8b27c4d590";
 const INITIAL_SNAPSHOTS: Snapshot[] = [
   {
-    id: "snap_7c3f9a21b8e4",
+    id: "7c3f9a21-b8e4-4d02-9a61-5e0c7b3f1a84",
     name: "hermes-deps-installed",
     status: "ready",
     sourceSandboxId: "8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36",
-    sourceTemplate: "hermes-v1",
-    cpu: 2, memoryGb: 4, diskGb: 20,
+    sourceTemplateId: _SNAP_HERMES_TEMPLATE,
+    sourceBuildId: _SNAP_HERMES_BUILD,
+    vcpu: 2, ramMb: 4096, diskMb: 20480,
     architecture: "linux/amd64",
-    product: productForTier("container"),
+    product: "gmi.sandbox.small",
+    productName: "Sandbox Small",
     idc: "us-ia-iowa-1",
     metadata: [{ id: "ms1", key: "tenant", value: "acme-corp" }],
     createdAt: _seedDaysAgo(3),
@@ -841,13 +882,15 @@ const INITIAL_SNAPSHOTS: Snapshot[] = [
   },
   {
     // No name — the Console labels it by ID.
-    id: "snap_2b8d47f1c9a0",
+    id: "2b8d47f1-c9a0-4e6b-8d35-1f7a9c2e0b63",
     status: "ready",
     sourceSandboxId: "8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36",
-    sourceTemplate: "hermes-v1",
-    cpu: 2, memoryGb: 4, diskGb: 20,
+    sourceTemplateId: _SNAP_HERMES_TEMPLATE,
+    sourceBuildId: _SNAP_HERMES_BUILD,
+    vcpu: 2, ramMb: 4096, diskMb: 20480,
     architecture: "linux/amd64",
-    product: productForTier("container"),
+    product: "gmi.sandbox.small",
+    productName: "Sandbox Small",
     idc: "us-ia-iowa-1",
     createdAt: _seedDaysAgo(1),
     readyAt: _seedDaysAgo(1),
@@ -855,32 +898,34 @@ const INITIAL_SNAPSHOTS: Snapshot[] = [
   },
   {
     // A failed create keeps an Error record and has its name cleared.
-    id: "snap_e41a0c7d2f95",
+    id: "e41a0c7d-2f95-4b1c-a8e3-7d60b5f9c214",
     status: "error",
     sourceSandboxId: "8b62347b-4c1a-4e9f-a2d7-6f0b1e5a3c36",
-    sourceTemplate: "hermes-v1",
-    cpu: 2, memoryGb: 4, diskGb: 20,
+    sourceTemplateId: _SNAP_HERMES_TEMPLATE,
+    sourceBuildId: _SNAP_HERMES_BUILD,
+    vcpu: 2, ramMb: 4096, diskMb: 20480,
     architecture: "linux/amd64",
-    product: productForTier("container"),
+    product: "gmi.sandbox.small",
+    productName: "Sandbox Small",
     idc: "us-ia-iowa-1",
-    errorCode: "snapshot_capture_failed",
-    errorReason: "The provider timed out while copying the root filesystem.",
+    failureCode: "Snapshot.CreateTimedOut",
+    statusReason: "Provider capture did not finish before the creation deadline.",
     createdAt: _seedMinsAgo(140),
     updatedAt: _seedMinsAgo(132),
   },
   {
     // Source sandbox is long gone; the snapshot outlives it.
-    id: "snap_91d5b3e8a6c2",
+    id: "91d5b3e8-a6c2-4f70-b9d4-0c3e8a1f6b27",
     name: "openclaw-baseline",
     status: "delete_failed",
     sourceSandboxId: "5d0e7a19-3c2b-4f8d-a641-8e9b0c1d2f37",
-    sourceTemplate: "openclaw-v5",
-    cpu: 2, memoryGb: 4, diskGb: 20,
+    sourceTemplateId: "d8772394-1a69-4cfd-8b97-f3c895db9e85",
+    sourceBuildId: "c05f2e91-7b3a-4d68-8e14-9a2b6d0f3c75",
+    vcpu: 2, ramMb: 4096, diskMb: 20480,
     architecture: "linux/amd64",
-    product: productForTier("container"),
-    idc: "us-ia-iowa-1",
-    errorCode: "snapshot_delete_failed",
-    errorReason: "Storage did not confirm the release in time.",
+    idc: "us-ia-iowa-1",                 // custom resources → no product
+    failureCode: "Artifact.HasDependencies",
+    statusReason: "The provider reported a dependent resource on this snapshot.",
     createdAt: _seedDaysAgo(12),
     readyAt: _seedDaysAgo(12),
     updatedAt: _seedMinsAgo(25),
@@ -890,18 +935,19 @@ const INITIAL_SNAPSHOTS: Snapshot[] = [
 function snapshotLabel(s: Snapshot): string {
   return s.name && s.name.trim() ? s.name.trim() : s.id;
 }
-// Name rules: up to 255 characters, case-sensitive, unique across the whole
-// Organization (every IDC). Empty is allowed. A name is held until its
-// snapshot's delete has fully finished, so Deleting rows still count as taken.
+// Name rules: leading/trailing whitespace removed (whitespace-only → empty),
+// up to 255 characters, case-sensitive, unique across the whole Organization
+// (every IDC). Empty names may be shared. A name is held until its snapshot's
+// delete has fully finished, so Deleting / Delete failed rows still hold theirs.
 const SNAPSHOT_NAME_MAX = 255;
 function snapshotNameError(name: string, taken: string[]): string | null {
   const v = name.trim();
   if (!v) return null;
   if (v.length > SNAPSHOT_NAME_MAX) return `Maximum ${SNAPSHOT_NAME_MAX} characters.`;
-  if (taken.includes(v)) return "Another snapshot in your organization already uses this name.";
+  if (taken.includes(v)) return snapshotErrorText("Resource.AlreadyExists");
   return null;
 }
-// Console pre-fill: <template>-<source-sandbox-short-id>-<YYYYMMDD-HHMM>.
+// Console pre-fill: <template-name>-<source-sandbox-short-id>-<YYYYMMDD-HHMM>.
 function snapshotNamePrefill(template: string, sandboxId: string): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
@@ -909,6 +955,15 @@ function snapshotNamePrefill(template: string, sandboxId: string): string {
   const short = `i${sandboxId.replace(/[^a-z0-9]/gi, "").slice(0, 6)}`;
   return `${template}-${short}-${stamp}`;
 }
+/**
+ * Mock stand-in for 422 Snapshot.UnsupportedOnProvider. The Console can't know
+ * ahead of time, so it only surfaces as an error after Create is sent.
+ */
+const SNAPSHOT_UNSUPPORTED_SANDBOXES = ["1e1bd452-9a3c-4b8e-bf21-7d40c9e6095a"];
+/** Mock creation lease: how long a cancelled Creating snapshot keeps blocking. */
+const SNAPSHOT_CREATION_LEASE_MS = 20_000;
+/** Mock provider capture time — the source sits in `checkpointing` for this long. */
+const SNAPSHOT_CHECKPOINT_MS = 3_000;
 
 // ─── Cost estimates (PRD §4.5 metering; exact billing lives in Usage & Billing) ──
 // Mock rates — the reliability of a $/month figure is a Decision needed (review).
@@ -3808,6 +3863,9 @@ function InstanceDrawer({
           <>
             {row("Deployment", deploymentName || "—")}
             {row("Agent Version", agentVersion, true)}
+            {row("Created from", inst.snapshotId
+              ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Snapshot <span style={{ fontFamily: MONO }} title={inst.snapshotId}>{midId(inst.snapshotId)}</span><CopyButton value={inst.snapshotId} label={false} /></span>
+              : "Template")}
             {row("Model", modelDisplayName(inst.config?.model) + " · GMI_MODEL_ID")}
             {row("IDC", idc)}
             {row("Spec", specLabel(inst.specId) === "—" ? product : `${specName(inst.specId)} · ${specLabel(inst.specId)}`)}
@@ -5000,7 +5058,7 @@ function NameField({ value, onChange, error }: { value: string; onChange: (v: st
       <input value={value} onChange={(e) => onChange(e.target.value)} placeholder="leave empty to label by ID" style={{ ...snapInputStyle, borderColor: error ? "rgba(248,113,113,0.55)" : C.border }} />
       {error
         ? <span style={{ ...snapHelpStyle, color: C.err }}>{error}</span>
-        : <span style={snapHelpStyle}>Up to {SNAPSHOT_NAME_MAX} characters · case-sensitive · unique across your organization, in every IDC. Leave it empty and the snapshot shows as its ID.</span>}
+        : <span style={snapHelpStyle}>Up to {SNAPSHOT_NAME_MAX} characters · case-sensitive · unique across your organization, in every IDC. Spaces at either end are removed. Leave it empty and the snapshot shows as its ID.</span>}
     </section>
   );
 }
@@ -5011,20 +5069,22 @@ function NameField({ value, onChange, error }: { value: string; onChange: (v: st
 // refuse — `onCreate` returns that refusal so the form stays open and says why.
 interface SnapshotSource {
   sandboxId: string;
-  running: boolean;
-  template: string;
-  cpu: number; memoryGb: number; diskGb: number;
+  status: TaskStatus;
+  agentName: string;
+  templateName: string;           // for the name pre-fill only
+  vcpu: number; ramMb: number; diskMb: number;
   architecture: string;
   idc: string;
 }
 function CreateSnapshotModal({
-  source, existingNames, creatingForSource, onCancel, onCreate,
+  source, existingNames, blockedByCreate, onCancel, onCreate,
 }: {
   source: SnapshotSource | null;
   existingNames: string[];
-  /** A snapshot of this sandbox is already Creating — the API refuses a second one. */
-  creatingForSource: boolean;
+  /** A snapshot of this sandbox is Creating (or a cancelled one still holds its lease). */
+  blockedByCreate: boolean;
   onCancel: () => void;
+  /** Returns the API error code on refusal, null once accepted. */
   onCreate: (input: { name: string; metadata: MetaEntry[] }) => string | null;
 }) {
   const [name, setName] = useState("");
@@ -5032,25 +5092,27 @@ function CreateSnapshotModal({
   const [serverErr, setServerErr] = useState<string | null>(null);
   useEffect(() => {
     if (source) {
-      setName(snapshotNamePrefill(source.template, source.sandboxId));
+      setName(snapshotNamePrefill(source.templateName, source.sandboxId));
       setMeta([]);
       setServerErr(null);
     }
-  }, [source?.sandboxId, source?.template]);
+  }, [source?.sandboxId, source?.templateName]);
 
   if (!source) return null;
   const nameErr = snapshotNameError(name, existingNames);
-  const blocked = !source.running
-    ? "This sandbox is no longer running. Snapshots can only be created from a running sandbox."
-    : creatingForSource
-      ? "A snapshot of this sandbox is already being created. Wait for it to finish, or cancel it, before creating another."
-      : null;
+  const blocked = source.status === "checkpointing"
+    ? "This sandbox is busy taking a snapshot. Try again once it's back to running."
+    : source.status !== "running"
+      ? snapshotErrorText("Snapshot.SourceNotRunning")
+      : blockedByCreate
+        ? snapshotErrorText("Snapshot.CreateInProgress")
+        : null;
   const canCreate = !nameErr && !blocked;
 
   return (
     <SnapshotModalShell
       title={<>Create Snapshot <V21Badge /></>}
-      subtitle={<>From sandbox <span style={{ fontFamily: MONO }}>{midId(source.sandboxId)}</span>. The sandbox keeps running while the snapshot is taken.</>}
+      subtitle={<>From sandbox <span style={{ fontFamily: MONO }}>{midId(source.sandboxId)}</span> · {source.agentName}. The sandbox shows as checkpointing for a few seconds while the snapshot is captured, then returns to running.</>}
       width={540}
       onClose={onCancel}
       footer={<>
@@ -5059,7 +5121,8 @@ function CreateSnapshotModal({
           disabled={!canCreate}
           onClick={() => {
             if (!canCreate) return;
-            setServerErr(onCreate({ name: name.trim(), metadata: meta.filter((m) => m.key.trim()) }));
+            const code = onCreate({ name: name.trim(), metadata: meta.filter((m) => m.key.trim()) });
+            setServerErr(code ? `${snapshotErrorText(code)} (${code})` : null);
           }}
           style={snapButton("primary", canCreate)}
         >
@@ -5090,8 +5153,8 @@ function CreateSnapshotModal({
         title="Taken from the source sandbox"
         rows={[
           ["Source sandbox", midId(source.sandboxId)],
-          ["Template", source.template],
-          ["CPU · Memory · Disk", `${source.cpu} vCPU · ${source.memoryGb} GB · ${source.diskGb} GB`],
+          ["Agent", source.agentName],
+          ["CPU · Memory · Disk", snapshotResources(source)],
           ["Architecture", source.architecture],
           ["IDC", regionLabel(source.idc)],
         ]}
@@ -5192,15 +5255,14 @@ function LaunchFromSnapshotModal({
     >
       {!canLaunch && (
         <SnapshotErrorBox>
-          Template <span style={{ fontFamily: MONO }}>{snapshot.sourceTemplate}</span> isn't in My Agents any more, so this prototype has nowhere to show the new sandbox.
+          The Agent this snapshot came from isn't in My Agents any more, so this prototype has nowhere to show the new sandbox.
         </SnapshotErrorBox>
       )}
 
       <SnapshotFixedBox
         title="Fixed by the snapshot"
         rows={[
-          ["Template", snapshot.sourceTemplate],
-          ["CPU · Memory · Disk", `${snapshot.cpu} vCPU · ${snapshot.memoryGb} GB · ${snapshot.diskGb} GB`],
+          ["CPU · Memory · Disk", snapshotResources(snapshot)],
           ["Architecture", snapshot.architecture],
           ["IDC", regionLabel(snapshot.idc)],
         ]}
@@ -5295,8 +5357,9 @@ function SnapshotFailure({ s }: { s: Snapshot }) {
   if (s.status !== "error" && s.status !== "delete_failed") return null;
   return (
     <SnapshotErrorBox>
-      <div style={{ fontFamily: MONO, fontSize: 11, color: C.err, marginBottom: 2 }}>{s.errorCode}</div>
-      {s.errorReason}
+      <div style={{ fontFamily: MONO, fontSize: 11, color: C.err, marginBottom: 2 }}>{s.failureCode}</div>
+      {s.failureCode ? snapshotErrorText(s.failureCode) : null}
+      {s.statusReason && <div style={{ color: C.muted, marginTop: 2 }}>{s.statusReason}</div>}
       <div style={{ color: C.muted, marginTop: 4 }}>
         {s.status === "error"
           ? "This snapshot can't launch sandboxes. Delete it, or create a new one from a running sandbox."
@@ -5370,17 +5433,18 @@ function SnapshotDetailsDrawer({
           {section("Source", <>
             {kv("Sandbox", <span style={{ fontFamily: MONO }} title={s.sourceSandboxId}>{midId(s.sourceSandboxId)}</span>, s.sourceSandboxId)}
             {kv("Agent", agentName ?? <span style={{ color: C.muted }}>—</span>)}
-            {kv("Template", <span style={{ fontFamily: MONO }}>{s.sourceTemplate}</span>)}
+            {kv("Template ID", <span style={{ fontFamily: MONO }} title={s.sourceTemplateId}>{midId(s.sourceTemplateId)}</span>, s.sourceTemplateId)}
+            {kv("Build ID", <span style={{ fontFamily: MONO }} title={s.sourceBuildId}>{midId(s.sourceBuildId)}</span>, s.sourceBuildId)}
           </>)}
 
           {section("Resources", <>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {chip(null, `${s.cpu} vCPU`)}
-              {chip(null, `${s.memoryGb} GiB memory`)}
-              {chip(null, `${s.diskGb} GiB disk`)}
+              {chip(null, `${s.vcpu} vCPU`)}
+              {chip(null, `${gib(s.ramMb)} memory`)}
+              {chip(null, `${gib(s.diskMb)} disk`)}
               {chip(null, s.architecture)}
             </div>
-            {kv("Product", <span style={{ fontFamily: MONO, fontSize: 12 }}>{s.product}</span>)}
+            {kv("Product", s.productName ? <span title={s.product}>{s.productName}</span> : <span style={{ color: C.muted }}>Custom resources</span>)}
             <span style={snapHelpStyle}>Sandboxes launched from this snapshot use these resources. They can't be changed.</span>
           </>)}
 
@@ -5414,7 +5478,7 @@ function OrganizationSnapshots({
 }: {
   snapshots: Snapshot[];
   /** Source template → the Agent it belongs to in My Agents, if it still exists. */
-  agentNameFor: (template: string) => string | undefined;
+  agentNameFor: (templateId: string) => string | undefined;
 } & SnapshotActions) {
   const [status, setStatus] = useState<"all" | SnapshotStatus>("all");
   const [nameQ, setNameQ] = useState("");
@@ -5484,7 +5548,7 @@ function OrganizationSnapshots({
         ) : (
           pageRows.map((s, i) => {
             const failed = s.status === "error" || s.status === "delete_failed";
-            const agent = agentNameFor(s.sourceTemplate);
+            const agent = agentNameFor(s.sourceTemplateId);
             const active = s.id === openId;
             return (
               <div
@@ -5498,17 +5562,17 @@ function OrganizationSnapshots({
                 </div>
                 <div style={{ minWidth: 0 }}>
                   <span title={s.sourceSandboxId} style={{ display: "block", fontFamily: MONO, fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{midId(s.sourceSandboxId)}</span>
-                  <span style={{ display: "block", fontSize: 11.5, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent ?? s.sourceTemplate}</span>
+                  <span style={{ display: "block", fontSize: 11.5, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent ?? "Agent removed"}</span>
                 </div>
                 <div style={{ minWidth: 0, fontSize: 12 }}>
-                  <span style={{ display: "block", whiteSpace: "nowrap" }}>{s.cpu} vCPU · {s.memoryGb} GiB · {s.diskGb} GiB</span>
+                  <span style={{ display: "block", whiteSpace: "nowrap" }}>{snapshotResources(s)}</span>
                   <span style={{ display: "block", fontFamily: MONO, fontSize: 10.5, color: C.muted }}>{s.architecture}</span>
                 </div>
                 <div title={regionLabel(s.idc)} style={{ minWidth: 0, color: C.muted, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{REGION_LABELS[s.idc] ?? s.idc}</div>
                 <div style={{ minWidth: 0, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
                   <SnapshotStatusPill status={s.status} />
-                  {failed && s.errorReason && (
-                    <span title={s.errorReason} style={{ maxWidth: "100%", fontSize: 11, color: C.err, lineHeight: "15px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.errorReason}</span>
+                  {failed && s.statusReason && (
+                    <span title={s.statusReason} style={{ maxWidth: "100%", fontSize: 11, color: C.err, lineHeight: "15px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.statusReason}</span>
                   )}
                 </div>
                 <div title={s.createdAt} style={{ color: C.muted, fontSize: 12, whiteSpace: "nowrap" }}>{agoLabel(s.createdAt)}</div>
@@ -5541,7 +5605,7 @@ function OrganizationSnapshots({
       {openSnap && (
         <SnapshotDetailsDrawer
           snapshot={openSnap}
-          agentName={agentNameFor(openSnap.sourceTemplate)}
+          agentName={agentNameFor(openSnap.sourceTemplateId)}
           onPrev={openIdx > 0 ? () => setOpenId(pageRows[openIdx - 1].id) : undefined}
           onNext={openIdx >= 0 && openIdx < pageRows.length - 1 ? () => setOpenId(pageRows[openIdx + 1].id) : undefined}
           onClose={() => setOpenId(null)}
@@ -6183,60 +6247,73 @@ export default function Dashboard() {
         break;
       case "snapshot":
       case "convert":
-        // Opens the Create Snapshot form (name + metadata); the source keeps running.
+        // Opens the Create Snapshot form (name + metadata).
         setSnapshotForInstanceId(id);
         break;
     }
   };
 
-  // ── Snapshot mutations (test-environment swagger) ────────────────────────
+  // ── Snapshot mutations (api/v2/ec openapi) ───────────────────────────────
   const patchSnapshot = (sid: string, patch: Partial<Snapshot>) =>
     setSnapshots((prev) => prev.map((s) => (s.id === sid ? { ...s, ...patch, updatedAt: fmtNow() } : s)));
+  const agentForTemplateId = (templateId: string) => allAgents.find((a) => a.templateId === templateId);
+  /** A snapshot of this sandbox is Creating, or a cancelled one still holds its creation lease. */
+  const snapshotBlocksCreate = (sandboxId: string) =>
+    snapshots.some((s) => s.sourceSandboxId === sandboxId && (
+      s.status === "creating" ||
+      ((s.status === "deleting" || s.status === "delete_failed") && (s.creationDeadline ?? 0) > Date.now())
+    ));
   const snapshotSourceFor = (inst: Instance): SnapshotSource => {
     const agent = allAgents.find((a) => a.id === inst.agentId);
     const spec = SPEC_CATALOG.find((x) => x.id === (inst.specId ?? agentSpecId(agent))) ?? SPEC_CATALOG[1];
     return {
       sandboxId: inst.id,
-      running: inst.status === "running",
-      template: agentVersionName(inst.agentId, agent?.name),
-      cpu: spec.vcpu, memoryGb: spec.ramGb, diskGb: spec.diskGb,
+      status: inst.status,
+      agentName: agent?.name ?? "—",
+      templateName: agentVersionName(inst.agentId, agent?.name),
+      vcpu: spec.vcpu, ramMb: spec.ramGb * 1024, diskMb: spec.diskGb * 1024,
       architecture: runtimeImages[inst.agentId]?.architecture ?? "linux/amd64",
       idc: inst.config?.idc ?? agent?.region ?? "us-ia-iowa-1",
     };
   };
-  /** Returns the server's refusal, or null once the snapshot is accepted. */
+  /** POST /snapshots. Returns the refusal's error code, or null once accepted (201). */
   const createSnapshotFrom = (instId: string, input: { name: string; metadata: MetaEntry[] }): string | null => {
     const inst = instances.find((i) => i.id === instId);
-    if (!inst || inst.status !== "running") return "This sandbox is no longer running. Snapshots can only be created from a running sandbox.";
-    if (snapshots.some((s) => s.sourceSandboxId === instId && s.status === "creating")) {
-      return "A snapshot of this sandbox is already being created.";
-    }
-    if (input.name && snapshots.some((s) => s.name === input.name)) {
-      return "Another snapshot in your organization already uses this name.";
-    }
+    const agent = inst ? allAgents.find((a) => a.id === inst.agentId) : undefined;
+    // `checkpointing` answers SourceNotRunning before the in-progress check does.
+    if (!inst || inst.status !== "running") return "Snapshot.SourceNotRunning";
+    if (snapshotBlocksCreate(instId)) return "Snapshot.CreateInProgress";
+    if (input.name && snapshots.some((s) => s.name === input.name)) return "Resource.AlreadyExists";
+    if (SNAPSHOT_UNSUPPORTED_SANDBOXES.includes(instId)) return "Snapshot.UnsupportedOnProvider";
     const src = snapshotSourceFor(inst);
     const sid = newSnapshotId();
     const now = fmtNow();
+    const specId = inst.specId ?? agentSpecId(agent) ?? "small";
     const snap: Snapshot = {
       id: sid,
       name: input.name || undefined,
       status: "creating",
       sourceSandboxId: inst.id,
-      sourceTemplate: src.template,
-      cpu: src.cpu, memoryGb: src.memoryGb, diskGb: src.diskGb,
+      sourceTemplateId: agent?.templateId ?? "",
+      sourceBuildId: newSnapshotId(),
+      vcpu: src.vcpu, ramMb: src.ramMb, diskMb: src.diskMb,
       architecture: src.architecture,
-      product: productForTier(allAgents.find((a) => a.id === inst.agentId)?.tier),
+      product: `gmi.sandbox.${specId}`,
+      productName: `Sandbox ${specId.replace(/^\w/, (c) => c.toUpperCase())}`,
       idc: src.idc,
       metadata: input.metadata,
       createdAt: now,
       updatedAt: now,
+      creationDeadline: Date.now() + SNAPSHOT_CREATION_LEASE_MS,
     };
     setSnapshots((prev) => [snap, ...prev]);
     setSnapshotForInstanceId(null);
+    // The provider capture holds the source in `checkpointing`, then hands it back.
+    patchInstance(inst.id, { status: "checkpointing" });
+    setTimeout(() => setInstances((prev) => prev.map((i) => (i.id === inst.id && i.status === "checkpointing" ? { ...i, status: "running" } : i))), SNAPSHOT_CHECKPOINT_MS);
     setTopTab("snapshots");
     const t = pushToast("progress", "Snapshot creating — it can be used once it's Ready");
-    // Long enough to see Creating and its Cancel. Only a still-Creating snapshot
-    // turns Ready; a cancelled one is already Deleting by then.
+    // Only a still-Creating snapshot turns Ready; a cancelled one is Deleting by then.
     setTimeout(() => {
       setSnapshots((prev) => prev.map((s) => (s.id === sid && s.status === "creating" ? { ...s, status: "ready", readyAt: fmtNow(), updatedAt: fmtNow() } : s)));
       if (cancelledSnapshots.current.has(sid)) setToasts((p) => p.filter((x) => x.id !== t));
@@ -6244,21 +6321,25 @@ export default function Dashboard() {
     }, 5000);
     return null;
   };
-  // Async delete: Deleting first, gone once finished. Refused — with no list of
-  // which — while any sandbox still depends on the snapshot.
+  // DELETE /snapshots/{id} → 202 deleting, then gone. 409 while a GMI-tracked
+  // sandbox still depends on it — the error names no sandboxes.
   const deleteSnapshot = (snap: Snapshot) => {
-    const inUse = instances.some((i) => i.fromSnapshotId === snap.id && i.status !== "deleted");
+    const inUse = instances.some((i) => i.snapshotId === snap.id && i.status !== "deleted");
     if (inUse) {
-      pushToast("error", "This snapshot is still in use, so it can't be deleted");
+      pushToast("error", snapshotErrorText("Resource.StateConflict"));
       return;
     }
-    if (snap.status === "creating") cancelledSnapshots.current.add(snap.id);
-    patchSnapshot(snap.id, { status: "deleting", errorCode: undefined, errorReason: undefined });
-    const t = pushToast("progress", snap.status === "creating" ? "Cancelling snapshot…" : "Deleting snapshot…");
+    const cancelling = snap.status === "creating";
+    if (cancelling) cancelledSnapshots.current.add(snap.id);
+    patchSnapshot(snap.id, { status: "deleting", failureCode: undefined, statusReason: undefined });
+    const t = pushToast("progress", cancelling ? "Cancelling snapshot…" : "Deleting snapshot…");
+    // A cancelled Creating snapshot can't finish deleting before its creation
+    // deadline — it stays Deleting, holding its name, until then.
+    const wait = cancelling ? Math.max(1500, (snap.creationDeadline ?? 0) - Date.now()) : 1500;
     setTimeout(() => {
       setSnapshots((prev) => prev.filter((s) => s.id !== snap.id));
-      settleToast(t, "success", snap.status === "creating" ? "Snapshot cancelled" : "Snapshot deleted");
-    }, 1500);
+      settleToast(t, "success", cancelling ? "Snapshot cancelled" : "Snapshot deleted");
+    }, wait);
   };
   const confirmDeleteSnapshot = (snap: Snapshot) => {
     const cancel = snap.status === "creating";
@@ -6267,7 +6348,8 @@ export default function Dashboard() {
       body: cancel ? (
         <>
           Snapshot <span style={{ color: C.fg, fontFamily: MONO }}>{snapshotLabel(snap)}</span> is still being created.
-          Stopping deletes it.
+          Stopping deletes it. It shows as Deleting for a short while, and until it's gone its name stays reserved and
+          this sandbox can't start another snapshot.
         </>
       ) : (
         <>
@@ -6286,15 +6368,20 @@ export default function Dashboard() {
     setEditSnapshot(null);
     pushToast("success", "Snapshot updated");
   };
-  const agentForTemplate = (template: string) =>
-    allAgents.find((a) => agentVersionName(a.id, a.name) === template);
+  // POST /sandboxes with snapshot_id. Sizing is inherited; network and lifecycle
+  // come from this request. Snapshot metadata is NOT copied onto the sandbox.
   const launchFromSnapshot = (snapshot: Snapshot, input: SnapshotLaunchInput) => {
-    const agent = agentForTemplate(snapshot.sourceTemplate);
-    if (!agent || snapshot.status !== "ready") return;
+    const current = snapshots.find((s) => s.id === snapshot.id);
+    if (!current || current.status !== "ready") {
+      pushToast("error", snapshotErrorText("Snapshot.NotReady"));
+      return;
+    }
+    const agent = agentForTemplateId(snapshot.sourceTemplateId);
+    if (!agent) return;
     setRestoreSnapshot(null);
     setTopTab("deployments");
     setSelectedId(agent.id);
-    const spec = SPEC_CATALOG.find((x) => x.vcpu === snapshot.cpu && x.ramGb === snapshot.memoryGb && x.diskGb === snapshot.diskGb);
+    const spec = SPEC_CATALOG.find((x) => x.vcpu === snapshot.vcpu && x.ramGb * 1024 === snapshot.ramMb && x.diskGb * 1024 === snapshot.diskMb);
     actuallyProvision(agent.id, {
       ...TEMPLATE_DEFAULT_CONFIG,
       idc: snapshot.idc,
@@ -6303,8 +6390,7 @@ export default function Dashboard() {
       egressControl: input.egressControl,
       egress: input.egress,
       model: FEATURED_MODEL.id,
-      metadata: snapshot.metadata ?? [],
-    }, { fromSnapshotId: snapshot.id });
+    }, { snapshotId: snapshot.id });
     pushToast("success", `Launching a new sandbox from ${snapshotLabel(snapshot)}`);
   };
 
@@ -6456,7 +6542,7 @@ export default function Dashboard() {
           <div style={{ padding: "20px 32px 32px", flex: 1, minHeight: 0 }}>
             <OrganizationSnapshots
               snapshots={snapshots}
-              agentNameFor={(t) => agentForTemplate(t)?.name}
+              agentNameFor={(t) => agentForTemplateId(t)?.name}
               onLaunch={(s) => setRestoreSnapshot(s)}
               onEdit={(s) => setEditSnapshot(s)}
               onDelete={confirmDeleteSnapshot}
@@ -6608,7 +6694,7 @@ export default function Dashboard() {
 
       <LaunchFromSnapshotModal
         snapshot={restoreSnapshot}
-        canLaunch={!!restoreSnapshot && !!agentForTemplate(restoreSnapshot.sourceTemplate)}
+        canLaunch={!!restoreSnapshot && !!agentForTemplateId(restoreSnapshot.sourceTemplateId)}
         onClose={() => setRestoreSnapshot(null)}
         onLaunch={(input) => restoreSnapshot && launchFromSnapshot(restoreSnapshot, input)}
       />
@@ -6626,7 +6712,7 @@ export default function Dashboard() {
           <CreateSnapshotModal
             source={inst ? snapshotSourceFor(inst) : null}
             existingNames={snapshots.map((s) => s.name).filter((n): n is string => !!n)}
-            creatingForSource={!!inst && snapshots.some((s) => s.sourceSandboxId === inst.id && s.status === "creating")}
+            blockedByCreate={!!inst && snapshotBlocksCreate(inst.id)}
             onCancel={() => setSnapshotForInstanceId(null)}
             onCreate={(input) => (snapshotForInstanceId ? createSnapshotFrom(snapshotForInstanceId, input) : null)}
           />
